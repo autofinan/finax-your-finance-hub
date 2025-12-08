@@ -1,0 +1,15 @@
+flask
+gunicorn
+requests
+google-auth==2.23.4  # Versão estável
+google-api-python-client==2.111.0  # Versão compatível
+rsa==4.9
+pytz
+schedule
+matplotlib
+pandas
+twilio
+google-cloud-vision==3.7.2
+openai
+supabase
+python-dotenv
