@@ -38,6 +38,65 @@ export type Database = {
         }
         Relationships: []
       }
+      gastos_recorrentes: {
+        Row: {
+          ativo: boolean | null
+          categoria: string
+          created_at: string | null
+          descricao: string | null
+          dia_mes: number | null
+          dia_semana: string | null
+          id: string
+          num_parcelas: number | null
+          parcela_atual: number | null
+          tipo_recorrencia: string
+          updated_at: string | null
+          usuario_id: string | null
+          valor_parcela: number
+          valor_total: number | null
+        }
+        Insert: {
+          ativo?: boolean | null
+          categoria: string
+          created_at?: string | null
+          descricao?: string | null
+          dia_mes?: number | null
+          dia_semana?: string | null
+          id?: string
+          num_parcelas?: number | null
+          parcela_atual?: number | null
+          tipo_recorrencia: string
+          updated_at?: string | null
+          usuario_id?: string | null
+          valor_parcela: number
+          valor_total?: number | null
+        }
+        Update: {
+          ativo?: boolean | null
+          categoria?: string
+          created_at?: string | null
+          descricao?: string | null
+          dia_mes?: number | null
+          dia_semana?: string | null
+          id?: string
+          num_parcelas?: number | null
+          parcela_atual?: number | null
+          tipo_recorrencia?: string
+          updated_at?: string | null
+          usuario_id?: string | null
+          valor_parcela?: number
+          valor_total?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       historico_conversas: {
         Row: {
           ai_response: string | null
@@ -59,6 +118,77 @@ export type Database = {
           id?: number
           phone_number?: string
           user_message?: string | null
+        }
+        Relationships: []
+      }
+      transacoes: {
+        Row: {
+          categoria: string
+          created_at: string | null
+          data: string
+          id: string
+          observacao: string | null
+          parcela: string | null
+          recorrente: boolean | null
+          tipo: string
+          usuario_id: string | null
+          valor: number
+        }
+        Insert: {
+          categoria: string
+          created_at?: string | null
+          data?: string
+          id?: string
+          observacao?: string | null
+          parcela?: string | null
+          recorrente?: boolean | null
+          tipo: string
+          usuario_id?: string | null
+          valor: number
+        }
+        Update: {
+          categoria?: string
+          created_at?: string | null
+          data?: string
+          id?: string
+          observacao?: string | null
+          parcela?: string | null
+          recorrente?: boolean | null
+          tipo?: string
+          usuario_id?: string | null
+          valor?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      usuarios: {
+        Row: {
+          created_at: string | null
+          id: string
+          nome: string | null
+          phone_number: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          nome?: string | null
+          phone_number: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          nome?: string | null
+          phone_number?: string
+          updated_at?: string | null
         }
         Relationships: []
       }
