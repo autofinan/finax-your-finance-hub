@@ -1,0 +1,227 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+const TWILIO_ACCOUNT_SID = Deno.env.get("TWILIO_ACCOUNT_SID");
+const TWILIO_AUTH_TOKEN = Deno.env.get("TWILIO_AUTH_TOKEN");
+const TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886";
+const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// Extrai entidades financeiras da mensagem usando AI
+async function extractFinancialEntities(message: string): Promise<{
+  valor?: number;
+  categoria?: string;
+  tipo?: "entrada" | "saida";
+  descricao?: string;
+}> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Você é um extrator de entidades financeiras. Analise a mensagem e extraia:
+- valor: número (ex: 150.50)
+- categoria: string (alimentação, transporte, lazer, moradia, saúde, educação, salário, freelance, investimentos, outros)
+- tipo: "entrada" ou "saida"
+- descricao: breve descrição da transação
+
+Responda APENAS com JSON válido. Se não encontrar transação, retorne {}.
+Exemplos:
+"gastei 50 reais no mercado" -> {"valor": 50, "categoria": "alimentação", "tipo": "saida", "descricao": "mercado"}
+"recebi 3000 de salário" -> {"valor": 3000, "categoria": "salário", "tipo": "entrada", "descricao": "salário"}
+"oi" -> {}`
+          },
+          { role: "user", content: message }
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "{}";
+    
+    // Limpa o JSON de possíveis markdown
+    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    return JSON.parse(cleanJson);
+  } catch (error) {
+    console.error("Erro ao extrair entidades:", error);
+    return {};
+  }
+}
+
+// Gera resposta conversacional
+async function generateResponse(userMessage: string, context: string): Promise<string> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Você é o FinBot, um assistente financeiro pessoal amigável via WhatsApp.
+${context}
+Seja breve, use emojis ocasionalmente, e seja útil. Responda em português brasileiro.`
+          },
+          { role: "user", content: userMessage }
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "Desculpe, não consegui processar sua mensagem.";
+  } catch (error) {
+    console.error("Erro ao gerar resposta:", error);
+    return "Ops! Tive um probleminha. Tente novamente em alguns segundos. 🔄";
+  }
+}
+
+// Envia mensagem via Twilio WhatsApp
+async function sendWhatsAppMessage(to: string, body: string): Promise<boolean> {
+  try {
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`)}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        From: TWILIO_WHATSAPP_NUMBER,
+        To: to,
+        Body: body,
+      }),
+    });
+
+    const result = await response.json();
+    console.log("Twilio response:", result);
+    
+    if (!response.ok) {
+      console.error("Twilio error:", result);
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    console.error("Erro ao enviar WhatsApp:", error);
+    return false;
+  }
+}
+
+serve(async (req) => {
+  // CORS preflight
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    // Twilio envia como form-urlencoded
+    const formData = await req.formData();
+    const from = formData.get("From") as string; // whatsapp:+5511999999999
+    const body = formData.get("Body") as string;
+    const phoneNumber = from?.replace("whatsapp:", "") || "";
+
+    console.log(`Mensagem recebida de ${phoneNumber}: ${body}`);
+
+    // 1. Busca ou cria usuário
+    let { data: usuario } = await supabase
+      .from("usuarios")
+      .select("*")
+      .eq("phone_number", phoneNumber)
+      .single();
+
+    if (!usuario) {
+      const { data: newUser } = await supabase
+        .from("usuarios")
+        .insert({ phone_number: phoneNumber })
+        .select()
+        .single();
+      usuario = newUser;
+    }
+
+    // 2. Extrai entidades financeiras
+    const entities = await extractFinancialEntities(body);
+    let context = "";
+
+    // 3. Se encontrou transação, salva no banco
+    if (entities.valor && entities.tipo) {
+      const { error } = await supabase.from("transacoes").insert({
+        usuario_id: usuario?.id,
+        valor: entities.valor,
+        categoria: entities.categoria || "outros",
+        tipo: entities.tipo,
+        observacao: entities.descricao,
+        data: new Date().toISOString().split("T")[0],
+      });
+
+      if (!error) {
+        context = `Transação registrada: ${entities.tipo === "entrada" ? "+" : "-"}R$ ${entities.valor.toFixed(2)} em ${entities.categoria}.`;
+      }
+    }
+
+    // 4. Busca resumo financeiro para contexto
+    const { data: transacoes } = await supabase
+      .from("transacoes")
+      .select("valor, tipo")
+      .eq("usuario_id", usuario?.id)
+      .gte("data", new Date(new Date().setDate(1)).toISOString().split("T")[0]);
+
+    let totalEntradas = 0;
+    let totalSaidas = 0;
+    transacoes?.forEach((t) => {
+      if (t.tipo === "entrada") totalEntradas += t.valor;
+      else totalSaidas += t.valor;
+    });
+
+    context += ` Resumo do mês: Entradas R$ ${totalEntradas.toFixed(2)}, Saídas R$ ${totalSaidas.toFixed(2)}, Saldo R$ ${(totalEntradas - totalSaidas).toFixed(2)}.`;
+
+    // 5. Gera resposta com AI
+    const aiResponse = await generateResponse(body, context);
+
+    // 6. Salva histórico
+    await supabase.from("historico_conversas").insert({
+      phone_number: phoneNumber,
+      user_message: body,
+      ai_response: aiResponse,
+    });
+
+    // 7. Envia resposta via WhatsApp
+    await sendWhatsAppMessage(from, aiResponse);
+
+    // Twilio espera TwiML ou 200 OK
+    return new Response(
+      `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`,
+      {
+        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+      }
+    );
+  } catch (error) {
+    console.error("Webhook error:", error);
+    return new Response(
+      `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`,
+      {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+      }
+    );
+  }
+});
