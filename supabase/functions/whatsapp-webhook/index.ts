@@ -6,12 +6,16 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const TWILIO_ACCOUNT_SID = Deno.env.get("TWILIO_ACCOUNT_SID");
-const TWILIO_AUTH_TOKEN = Deno.env.get("TWILIO_AUTH_TOKEN");
-const TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886";
+// Vonage credentials
+const VONAGE_API_KEY = Deno.env.get("VONAGE_API_KEY");
+const VONAGE_API_SECRET = Deno.env.get("VONAGE_API_SECRET");
+const VONAGE_WHATSAPP_NUMBER = Deno.env.get("VONAGE_WHATSAPP_NUMBER");
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+// Vonage Sandbox endpoint
+const VONAGE_SANDBOX_URL = "https://messages-sandbox.nexmo.com/v1/messages";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -94,35 +98,41 @@ Seja breve, use emojis ocasionalmente, e seja útil. Responda em português bras
   }
 }
 
-// Envia mensagem via Twilio WhatsApp
-async function sendWhatsAppMessage(to: string, body: string): Promise<boolean> {
+// Envia mensagem via Vonage WhatsApp (Sandbox)
+async function sendWhatsAppMessage(to: string, text: string): Promise<boolean> {
   try {
-    const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
+    // Remove o prefixo "whatsapp:" se existir (formato Twilio antigo)
+    const cleanNumber = to.replace("whatsapp:", "");
     
-    const response = await fetch(url, {
+    const credentials = btoa(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`);
+    
+    const response = await fetch(VONAGE_SANDBOX_URL, {
       method: "POST",
       headers: {
-        Authorization: `Basic ${btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`)}`,
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Basic ${credentials}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
       },
-      body: new URLSearchParams({
-        From: TWILIO_WHATSAPP_NUMBER,
-        To: to,
-        Body: body,
+      body: JSON.stringify({
+        from: VONAGE_WHATSAPP_NUMBER,
+        to: cleanNumber,
+        message_type: "text",
+        text: text,
+        channel: "whatsapp"
       }),
     });
 
     const result = await response.json();
-    console.log("Twilio response:", result);
+    console.log("Vonage response:", JSON.stringify(result));
     
     if (!response.ok) {
-      console.error("Twilio error:", result);
+      console.error("Vonage error:", result);
       return false;
     }
     
     return true;
   } catch (error) {
-    console.error("Erro ao enviar WhatsApp:", error);
+    console.error("Erro ao enviar WhatsApp via Vonage:", error);
     return false;
   }
 }
@@ -134,13 +144,37 @@ serve(async (req) => {
   }
 
   try {
-    // Twilio envia como form-urlencoded
-    const formData = await req.formData();
-    const from = formData.get("From") as string; // whatsapp:+5511999999999
-    const body = formData.get("Body") as string;
-    const phoneNumber = from?.replace("whatsapp:", "") || "";
+    // Vonage envia como JSON (diferente do Twilio que usava form-urlencoded)
+    const contentType = req.headers.get("content-type") || "";
+    let from = "";
+    let body = "";
+    
+    if (contentType.includes("application/json")) {
+      // Formato Vonage (JSON)
+      const json = await req.json();
+      console.log("Vonage webhook payload:", JSON.stringify(json));
+      
+      // Vonage Messages API format
+      from = json.from?.number || json.from || "";
+      body = json.text || json.message?.content?.text || "";
+    } else if (contentType.includes("application/x-www-form-urlencoded")) {
+      // Formato Twilio legado (form-urlencoded) - mantido para compatibilidade
+      const formData = await req.formData();
+      from = (formData.get("From") as string)?.replace("whatsapp:", "") || "";
+      body = formData.get("Body") as string || "";
+    }
+
+    const phoneNumber = from;
 
     console.log(`Mensagem recebida de ${phoneNumber}: ${body}`);
+
+    if (!phoneNumber || !body) {
+      console.log("Webhook de status ou mensagem vazia - ignorando");
+      return new Response(JSON.stringify({ status: "ok" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // 1. Busca ou cria usuário
     let { data: usuario } = await supabase
@@ -188,8 +222,8 @@ serve(async (req) => {
     let totalEntradas = 0;
     let totalSaidas = 0;
     transacoes?.forEach((t) => {
-      if (t.tipo === "entrada") totalEntradas += t.valor;
-      else totalSaidas += t.valor;
+      if (t.tipo === "entrada") totalEntradas += Number(t.valor);
+      else totalSaidas += Number(t.valor);
     });
 
     context += ` Resumo do mês: Entradas R$ ${totalEntradas.toFixed(2)}, Saídas R$ ${totalSaidas.toFixed(2)}, Saldo R$ ${(totalEntradas - totalSaidas).toFixed(2)}.`;
@@ -204,23 +238,24 @@ serve(async (req) => {
       ai_response: aiResponse,
     });
 
-    // 7. Envia resposta via WhatsApp
-    await sendWhatsAppMessage(from, aiResponse);
+    // 7. Envia resposta via WhatsApp (Vonage)
+    await sendWhatsAppMessage(phoneNumber, aiResponse);
 
-    // Twilio espera TwiML ou 200 OK
+    // Vonage espera JSON 200 OK (diferente do Twilio que esperava TwiML/XML)
     return new Response(
-      `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`,
+      JSON.stringify({ status: "ok", message_sent: true }),
       {
-        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );
   } catch (error) {
     console.error("Webhook error:", error);
     return new Response(
-      `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`,
+      JSON.stringify({ status: "error", message: error instanceof Error ? error.message : "Unknown error" }),
       {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "text/xml" },
+        status: 200, // Vonage espera 200 mesmo em erros para não reenviar
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );
   }
