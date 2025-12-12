@@ -36,11 +36,45 @@ export function useGastosRecorrentes(usuarioId?: string) {
     }
   };
 
-  const addGasto = async (gasto: Omit<GastoRecorrente, 'id' | 'created_at' | 'updated_at'>) => {
+  const addGasto = async (gasto: {
+    descricao?: string | null;
+    categoria: string;
+    categoria_detalhada?: string | null;
+    tipo_recorrencia: string;
+    valor_parcela: number;
+    valor_total?: number | null;
+    dia_mes?: number | null;
+    dia_semana?: string | null;
+    num_parcelas?: number | null;
+    parcela_atual?: number | null;
+    ativo?: boolean | null;
+    proxima_execucao?: string | null;
+    ultima_execucao?: string | null;
+    origem?: string | null;
+    usuario_id?: string | null;
+  }) => {
     try {
+      const gastoData = {
+        descricao: gasto.descricao || null,
+        categoria: gasto.categoria,
+        categoria_detalhada: gasto.categoria_detalhada || null,
+        tipo_recorrencia: gasto.tipo_recorrencia,
+        valor_parcela: gasto.valor_parcela,
+        valor_total: gasto.valor_total || null,
+        dia_mes: gasto.dia_mes || null,
+        dia_semana: gasto.dia_semana || null,
+        num_parcelas: gasto.num_parcelas || null,
+        parcela_atual: gasto.parcela_atual || 1,
+        ativo: gasto.ativo ?? true,
+        proxima_execucao: gasto.proxima_execucao || null,
+        ultima_execucao: gasto.ultima_execucao || null,
+        origem: gasto.origem || 'manual',
+        usuario_id: gasto.usuario_id || null,
+      };
+
       const { data, error } = await supabase
         .from('gastos_recorrentes')
-        .insert([gasto])
+        .insert([gastoData])
         .select()
         .single();
 

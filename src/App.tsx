@@ -9,6 +9,9 @@ import Recorrentes from "./pages/Recorrentes";
 import Relatorios from "./pages/Relatorios";
 import Chat from "./pages/Chat";
 import Configuracoes from "./pages/Configuracoes";
+import Cartoes from "./pages/Cartoes";
+import Faturas from "./pages/Faturas";
+import Parcelamentos from "./pages/Parcelamentos";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -23,6 +26,9 @@ const App = () => (
           <Route path="/" element={<Index />} />
           <Route path="/transacoes" element={<Transacoes />} />
           <Route path="/recorrentes" element={<Recorrentes />} />
+          <Route path="/cartoes" element={<Cartoes />} />
+          <Route path="/faturas" element={<Faturas />} />
+          <Route path="/parcelamentos" element={<Parcelamentos />} />
           <Route path="/relatorios" element={<Relatorios />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/configuracoes" element={<Configuracoes />} />

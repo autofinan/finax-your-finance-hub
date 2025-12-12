@@ -7,6 +7,9 @@ import {
   Settings,
   TrendingUp,
   Wallet,
+  CreditCard,
+  Receipt,
+  Layers,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +17,9 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/transacoes', icon: ArrowUpDown, label: 'Transações' },
   { to: '/recorrentes', icon: RefreshCcw, label: 'Recorrentes' },
+  { to: '/cartoes', icon: CreditCard, label: 'Cartões' },
+  { to: '/faturas', icon: Receipt, label: 'Faturas' },
+  { to: '/parcelamentos', icon: Layers, label: 'Parcelamentos' },
   { to: '/relatorios', icon: TrendingUp, label: 'Relatórios' },
   { to: '/chat', icon: MessageCircle, label: 'FinBot' },
 ];

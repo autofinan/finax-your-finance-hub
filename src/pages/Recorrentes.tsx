@@ -66,11 +66,9 @@ const Recorrentes = () => {
         categoria,
         tipo_recorrencia: tipoRecorrencia,
         dia_mes: tipoRecorrencia === 'mensal' ? parseInt(diaMes) : null,
-        dia_semana: null,
         num_parcelas: tipoRecorrencia === 'parcelado' ? parseInt(numParcelas || '1') : null,
         parcela_atual: 1,
         ativo: true,
-        usuario_id: null,
       });
       resetForm();
       setFormOpen(false);

@@ -59,10 +59,11 @@ const Index = () => {
     data: string;
   }) => {
     await addTransacao({
-      ...data,
-      usuario_id: null,
-      recorrente: false,
-      parcela: null,
+      tipo: data.tipo,
+      valor: data.valor,
+      categoria: data.categoria,
+      observacao: data.observacao,
+      data: data.data,
     });
   };
 
