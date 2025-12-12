@@ -863,6 +863,32 @@ export type Database = {
           },
         ]
       }
+      vw_resumo_mes_atual: {
+        Row: {
+          mes: string | null
+          saldo_final: number | null
+          total_entradas: number | null
+          total_saidas: number | null
+          total_transacoes: number | null
+          usuario_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       vw_transacoes_mes: {
         Row: {
           mes_inicio: string | null
