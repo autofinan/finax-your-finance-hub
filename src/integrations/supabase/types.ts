@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       cartoes_credito: {
         Row: {
+          ativo: boolean | null
           created_at: string | null
           dia_fechamento: number | null
           dia_vencimento: number | null
@@ -26,6 +27,7 @@ export type Database = {
           usuario_id: string | null
         }
         Insert: {
+          ativo?: boolean | null
           created_at?: string | null
           dia_fechamento?: number | null
           dia_vencimento?: number | null
@@ -36,6 +38,7 @@ export type Database = {
           usuario_id?: string | null
         }
         Update: {
+          ativo?: boolean | null
           created_at?: string | null
           dia_fechamento?: number | null
           dia_vencimento?: number | null
@@ -187,6 +190,7 @@ export type Database = {
           id: string
           mes: number | null
           status: string | null
+          updated_at: string | null
           usuario_id: string | null
           valor_pago: number | null
           valor_total: number | null
@@ -198,6 +202,7 @@ export type Database = {
           id?: string
           mes?: number | null
           status?: string | null
+          updated_at?: string | null
           usuario_id?: string | null
           valor_pago?: number | null
           valor_total?: number | null
@@ -209,6 +214,7 @@ export type Database = {
           id?: string
           mes?: number | null
           status?: string | null
+          updated_at?: string | null
           usuario_id?: string | null
           valor_pago?: number | null
           valor_total?: number | null
@@ -404,29 +410,38 @@ export type Database = {
       }
       perfil_cliente: {
         Row: {
+          alertas_financeiros: Json | null
           atualizado_em: string | null
           id: string
           insights: string | null
+          limites: Json | null
           metas_financeiras: string | null
           preferencia_estilo: string | null
+          preferencias: Json | null
           score_economia: number | null
           usuario_id: string | null
         }
         Insert: {
+          alertas_financeiros?: Json | null
           atualizado_em?: string | null
           id?: string
           insights?: string | null
+          limites?: Json | null
           metas_financeiras?: string | null
           preferencia_estilo?: string | null
+          preferencias?: Json | null
           score_economia?: number | null
           usuario_id?: string | null
         }
         Update: {
+          alertas_financeiros?: Json | null
           atualizado_em?: string | null
           id?: string
           insights?: string | null
+          limites?: Json | null
           metas_financeiras?: string | null
           preferencia_estilo?: string | null
+          preferencias?: Json | null
           score_economia?: number | null
           usuario_id?: string | null
         }
@@ -449,42 +464,57 @@ export type Database = {
       }
       resumo_mensal: {
         Row: {
+          alertas: string | null
           ano: number | null
           atualizado_em: string | null
+          categoria_mais_cara: string | null
           id: string
           mes: number | null
           saldo_final: number | null
           total_cartao: number | null
+          total_entradas: number | null
           total_essenciais: number | null
           total_fixos: number | null
           total_gastos: number | null
           total_lazer: number | null
+          total_parcelado: number | null
+          total_recorrente: number | null
           usuario_id: string | null
         }
         Insert: {
+          alertas?: string | null
           ano?: number | null
           atualizado_em?: string | null
+          categoria_mais_cara?: string | null
           id?: string
           mes?: number | null
           saldo_final?: number | null
           total_cartao?: number | null
+          total_entradas?: number | null
           total_essenciais?: number | null
           total_fixos?: number | null
           total_gastos?: number | null
           total_lazer?: number | null
+          total_parcelado?: number | null
+          total_recorrente?: number | null
           usuario_id?: string | null
         }
         Update: {
+          alertas?: string | null
           ano?: number | null
           atualizado_em?: string | null
+          categoria_mais_cara?: string | null
           id?: string
           mes?: number | null
           saldo_final?: number | null
           total_cartao?: number | null
+          total_entradas?: number | null
           total_essenciais?: number | null
           total_fixos?: number | null
           total_gastos?: number | null
           total_lazer?: number | null
+          total_parcelado?: number | null
+          total_recorrente?: number | null
           usuario_id?: string | null
         }
         Relationships: [
@@ -510,17 +540,23 @@ export type Database = {
           categoria: string
           created_at: string | null
           data: string
+          descricao: string | null
           essencial: boolean | null
           fatura_id: string | null
           hash_unico: string | null
           id: string
+          id_cartao: string | null
+          id_recorrente: string | null
           merchant: string | null
           observacao: string | null
           origem: string | null
           parcela: string | null
+          parcela_atual: number | null
           parcelamento_id: string | null
           recorrente: boolean | null
+          status: string | null
           tipo: string
+          total_parcelas: number | null
           usuario_id: string | null
           valor: number
         }
@@ -529,17 +565,23 @@ export type Database = {
           categoria: string
           created_at?: string | null
           data?: string
+          descricao?: string | null
           essencial?: boolean | null
           fatura_id?: string | null
           hash_unico?: string | null
           id?: string
+          id_cartao?: string | null
+          id_recorrente?: string | null
           merchant?: string | null
           observacao?: string | null
           origem?: string | null
           parcela?: string | null
+          parcela_atual?: number | null
           parcelamento_id?: string | null
           recorrente?: boolean | null
+          status?: string | null
           tipo: string
+          total_parcelas?: number | null
           usuario_id?: string | null
           valor: number
         }
@@ -548,21 +590,48 @@ export type Database = {
           categoria?: string
           created_at?: string | null
           data?: string
+          descricao?: string | null
           essencial?: boolean | null
           fatura_id?: string | null
           hash_unico?: string | null
           id?: string
+          id_cartao?: string | null
+          id_recorrente?: string | null
           merchant?: string | null
           observacao?: string | null
           origem?: string | null
           parcela?: string | null
+          parcela_atual?: number | null
           parcelamento_id?: string | null
           recorrente?: boolean | null
+          status?: string | null
           tipo?: string
+          total_parcelas?: number | null
           usuario_id?: string | null
           valor?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "transacoes_id_cartao_fkey"
+            columns: ["id_cartao"]
+            isOneToOne: false
+            referencedRelation: "cartoes_credito"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transacoes_id_recorrente_fkey"
+            columns: ["id_recorrente"]
+            isOneToOne: false
+            referencedRelation: "gastos_recorrentes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transacoes_id_recorrente_fkey"
+            columns: ["id_recorrente"]
+            isOneToOne: false
+            referencedRelation: "vw_recorrencias_ativas"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -622,10 +691,12 @@ export type Database = {
     Views: {
       vw_dashboard_usuario: {
         Row: {
-          saldo_final: number | null
-          total_cartao_ultimo_mes: number | null
-          total_fixos_ultimo_mes: number | null
-          total_gastos_ultimo_mes: number | null
+          parcelas_ativas: number | null
+          saldo_mes: number | null
+          total_cartao_mes: number | null
+          total_entradas_mes: number | null
+          total_fixos_mes: number | null
+          total_gastos_mes: number | null
           transacoes_no_mes: number | null
           usuario_id: string | null
         }
@@ -635,35 +706,16 @@ export type Database = {
         Row: {
           ano: number | null
           cartao_id: string | null
+          cartao_nome: string | null
           created_at: string | null
+          dia_vencimento: number | null
           id: string | null
           mes: number | null
           status: string | null
+          updated_at: string | null
           usuario_id: string | null
           valor_pago: number | null
           valor_total: number | null
-        }
-        Insert: {
-          ano?: number | null
-          cartao_id?: string | null
-          created_at?: string | null
-          id?: string | null
-          mes?: number | null
-          status?: string | null
-          usuario_id?: string | null
-          valor_pago?: number | null
-          valor_total?: number | null
-        }
-        Update: {
-          ano?: number | null
-          cartao_id?: string | null
-          created_at?: string | null
-          id?: string | null
-          mes?: number | null
-          status?: string | null
-          usuario_id?: string | null
-          valor_pago?: number | null
-          valor_total?: number | null
         }
         Relationships: [
           {
@@ -889,6 +941,31 @@ export type Database = {
           },
         ]
       }
+      vw_transacoes_agrupadas_categoria: {
+        Row: {
+          categoria: string | null
+          mes: string | null
+          quantidade: number | null
+          total: number | null
+          usuario_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       vw_transacoes_mes: {
         Row: {
           mes_inicio: string | null
@@ -917,62 +994,52 @@ export type Database = {
       vw_transacoes_mes_atual: {
         Row: {
           atualizado_em: string | null
+          cartao_nome: string | null
           categoria: string | null
           created_at: string | null
           data: string | null
+          descricao: string | null
           essencial: boolean | null
           fatura_id: string | null
           hash_unico: string | null
           id: string | null
+          id_cartao: string | null
+          id_recorrente: string | null
           merchant: string | null
           observacao: string | null
           origem: string | null
           parcela: string | null
+          parcela_atual: number | null
           parcelamento_id: string | null
           recorrente: boolean | null
+          status: string | null
           tipo: string | null
+          total_parcelas: number | null
           usuario_id: string | null
           valor: number | null
         }
-        Insert: {
-          atualizado_em?: string | null
-          categoria?: string | null
-          created_at?: string | null
-          data?: string | null
-          essencial?: boolean | null
-          fatura_id?: string | null
-          hash_unico?: string | null
-          id?: string | null
-          merchant?: string | null
-          observacao?: string | null
-          origem?: string | null
-          parcela?: string | null
-          parcelamento_id?: string | null
-          recorrente?: boolean | null
-          tipo?: string | null
-          usuario_id?: string | null
-          valor?: number | null
-        }
-        Update: {
-          atualizado_em?: string | null
-          categoria?: string | null
-          created_at?: string | null
-          data?: string | null
-          essencial?: boolean | null
-          fatura_id?: string | null
-          hash_unico?: string | null
-          id?: string | null
-          merchant?: string | null
-          observacao?: string | null
-          origem?: string | null
-          parcela?: string | null
-          parcelamento_id?: string | null
-          recorrente?: boolean | null
-          tipo?: string | null
-          usuario_id?: string | null
-          valor?: number | null
-        }
         Relationships: [
+          {
+            foreignKeyName: "transacoes_id_cartao_fkey"
+            columns: ["id_cartao"]
+            isOneToOne: false
+            referencedRelation: "cartoes_credito"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transacoes_id_recorrente_fkey"
+            columns: ["id_recorrente"]
+            isOneToOne: false
+            referencedRelation: "gastos_recorrentes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transacoes_id_recorrente_fkey"
+            columns: ["id_recorrente"]
+            isOneToOne: false
+            referencedRelation: "vw_recorrencias_ativas"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -1006,19 +1073,53 @@ export type Database = {
         Args: { p_ano: number; p_mes: number; p_user_id: string }
         Returns: undefined
       }
-      rpc_registrar_transacao: {
+      rpc_criar_parcelamento: {
         Args: {
-          p_categoria: string
-          p_data: string
+          p_categoria?: string
+          p_data_primeira_parcela?: string
           p_descricao: string
-          p_tipo: string
+          p_id_cartao?: string
+          p_num_parcelas: number
           p_usuario_id: string
-          p_valor: number
+          p_valor_total: number
         }
-        Returns: {
-          id: string
-        }[]
+        Returns: string
       }
+      rpc_registrar_transacao:
+        | {
+            Args: {
+              p_categoria: string
+              p_data?: string
+              p_descricao?: string
+              p_essencial?: boolean
+              p_id_cartao?: string
+              p_id_recorrente?: string
+              p_origem?: string
+              p_parcela_atual?: number
+              p_parcelamento_id?: string
+              p_status?: string
+              p_tipo: string
+              p_total_parcelas?: number
+              p_usuario_id: string
+              p_valor: number
+            }
+            Returns: {
+              id: string
+            }[]
+          }
+        | {
+            Args: {
+              p_categoria: string
+              p_data: string
+              p_descricao: string
+              p_tipo: string
+              p_usuario_id: string
+              p_valor: number
+            }
+            Returns: {
+              id: string
+            }[]
+          }
     }
     Enums: {
       [_ in never]: never
