@@ -178,6 +178,9 @@ export interface FaturaEmAberto {
   valor_pago: number | null;
   status: string | null;
   created_at: string | null;
+  updated_at: string | null;
+  cartao_nome: string | null;
+  dia_vencimento: number | null;
 }
 
 export interface RecorrenciaAtiva {
