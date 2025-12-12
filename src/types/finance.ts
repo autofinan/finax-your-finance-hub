@@ -138,11 +138,13 @@ export interface HistoricoConversa {
 
 export interface DashboardUsuario {
   usuario_id: string | null;
-  saldo_final: number | null;
-  total_gastos_ultimo_mes: number | null;
-  total_fixos_ultimo_mes: number | null;
-  total_cartao_ultimo_mes: number | null;
+  total_gastos_mes: number | null;
+  total_entradas_mes: number | null;
+  saldo_mes: number | null;
   transacoes_no_mes: number | null;
+  total_fixos_mes: number | null;
+  total_cartao_mes: number | null;
+  parcelas_ativas: number | null;
 }
 
 export interface TransacaoMes {
