@@ -36,11 +36,41 @@ export function useTransacoes(usuarioId?: string) {
     }
   };
 
-  const addTransacao = async (transacao: Omit<Transacao, 'id' | 'created_at'>) => {
+  const addTransacao = async (transacao: {
+    tipo: 'entrada' | 'saida';
+    valor: number;
+    categoria: string;
+    observacao?: string | null;
+    data?: string;
+    usuario_id?: string | null;
+    recorrente?: boolean | null;
+    parcela?: string | null;
+    parcelamento_id?: string | null;
+    fatura_id?: string | null;
+    essencial?: boolean | null;
+    merchant?: string | null;
+    origem?: string | null;
+  }) => {
     try {
+      const transacaoData = {
+        tipo: transacao.tipo,
+        valor: transacao.valor,
+        categoria: transacao.categoria,
+        observacao: transacao.observacao || null,
+        data: transacao.data || new Date().toISOString(),
+        usuario_id: transacao.usuario_id || null,
+        recorrente: transacao.recorrente ?? false,
+        parcela: transacao.parcela || null,
+        parcelamento_id: transacao.parcelamento_id || null,
+        fatura_id: transacao.fatura_id || null,
+        essencial: transacao.essencial ?? false,
+        merchant: transacao.merchant || null,
+        origem: transacao.origem || 'manual',
+      };
+
       const { data, error } = await supabase
         .from('transacoes')
-        .insert([transacao])
+        .insert([transacaoData])
         .select()
         .single();
 

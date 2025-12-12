@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   ArrowUpDown,
-  RefreshCcw,
+  CreditCard,
   MessageCircle,
   TrendingUp,
 } from 'lucide-react';
@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Home' },
   { to: '/transacoes', icon: ArrowUpDown, label: 'Transações' },
-  { to: '/recorrentes', icon: RefreshCcw, label: 'Recorrentes' },
+  { to: '/cartoes', icon: CreditCard, label: 'Cartões' },
   { to: '/relatorios', icon: TrendingUp, label: 'Relatórios' },
   { to: '/chat', icon: MessageCircle, label: 'FinBot' },
 ];
