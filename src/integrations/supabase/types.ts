@@ -1085,41 +1085,27 @@ export type Database = {
         }
         Returns: string
       }
-      rpc_registrar_transacao:
-        | {
-            Args: {
-              p_categoria: string
-              p_data?: string
-              p_descricao?: string
-              p_essencial?: boolean
-              p_id_cartao?: string
-              p_id_recorrente?: string
-              p_origem?: string
-              p_parcela_atual?: number
-              p_parcelamento_id?: string
-              p_status?: string
-              p_tipo: string
-              p_total_parcelas?: number
-              p_usuario_id: string
-              p_valor: number
-            }
-            Returns: {
-              id: string
-            }[]
-          }
-        | {
-            Args: {
-              p_categoria: string
-              p_data: string
-              p_descricao: string
-              p_tipo: string
-              p_usuario_id: string
-              p_valor: number
-            }
-            Returns: {
-              id: string
-            }[]
-          }
+      rpc_registrar_transacao: {
+        Args: {
+          p_categoria: string
+          p_data?: string
+          p_descricao?: string
+          p_essencial?: boolean
+          p_id_cartao?: string
+          p_id_recorrente?: string
+          p_origem?: string
+          p_parcela_atual?: number
+          p_parcelamento_id?: string
+          p_status?: string
+          p_tipo: string
+          p_total_parcelas?: number
+          p_usuario_id: string
+          p_valor: number
+        }
+        Returns: {
+          id: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
