@@ -7,14 +7,14 @@ const corsHeaders = {
 };
 
 // Credentials
-const VONAGE_API_KEY = Deno.env.get("VONAGE_API_KEY");
-const VONAGE_API_SECRET = Deno.env.get("VONAGE_API_SECRET");
-const VONAGE_WHATSAPP_NUMBER = Deno.env.get("VONAGE_WHATSAPP_NUMBER");
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const VONAGE_SANDBOX_URL = "https://messages-sandbox.nexmo.com/v1/messages";
+// WhatsApp Business API (Meta)
+const WHATSAPP_VERIFY_TOKEN = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
+const WHATSAPP_ACCESS_TOKEN = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+const WHATSAPP_PHONE_NUMBER_ID = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -182,34 +182,41 @@ Se é uma consulta, apresente os dados de forma clara e organizada.`
   }
 }
 
-// Envia mensagem via Vonage WhatsApp
+// Envia mensagem via WhatsApp Business API (Meta)
 async function sendWhatsAppMessage(to: string, text: string): Promise<boolean> {
   try {
-    const cleanNumber = to.replace("whatsapp:", "");
-    const credentials = btoa(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`);
+    // Remove formatação extra do número
+    const cleanNumber = to.replace(/\D/g, "");
     
-    const response = await fetch(VONAGE_SANDBOX_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Basic ${credentials}`,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-      },
-      body: JSON.stringify({
-        from: VONAGE_WHATSAPP_NUMBER,
-        to: cleanNumber,
-        message_type: "text",
-        text: text,
-        channel: "whatsapp"
-      }),
-    });
+    console.log(`Enviando mensagem para ${cleanNumber}...`);
+    
+    const response = await fetch(
+      `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: cleanNumber,
+          type: "text",
+          text: { body: text }
+        }),
+      }
+    );
 
     const result = await response.json();
-    console.log("Vonage response:", JSON.stringify(result));
+    console.log("Meta WhatsApp response:", JSON.stringify(result));
+    
+    if (!response.ok) {
+      console.error("Erro na API Meta:", result);
+    }
     
     return response.ok;
   } catch (error) {
-    console.error("Erro ao enviar WhatsApp via Vonage:", error);
+    console.error("Erro ao enviar WhatsApp via Meta:", error);
     return false;
   }
 }
@@ -283,24 +290,63 @@ async function getHistoricoRecente(phoneNumber: string): Promise<string> {
 }
 
 serve(async (req) => {
+  // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  try {
-    const contentType = req.headers.get("content-type") || "";
-    let from = "";
-    let body = "";
+  // ========== VERIFICAÇÃO GET (Meta Webhook Verification) ==========
+  if (req.method === "GET") {
+    const url = new URL(req.url);
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
     
-    if (contentType.includes("application/json")) {
-      const json = await req.json();
-      console.log("Vonage webhook payload:", JSON.stringify(json));
-      from = json.from?.number || json.from || "";
-      body = json.text || json.message?.content?.text || "";
-    } else if (contentType.includes("application/x-www-form-urlencoded")) {
-      const formData = await req.formData();
-      from = (formData.get("From") as string)?.replace("whatsapp:", "") || "";
-      body = formData.get("Body") as string || "";
+    console.log("Verificação webhook recebida:", { mode, token, challenge: challenge?.substring(0, 20) });
+    
+    if (mode === "subscribe" && token === WHATSAPP_VERIFY_TOKEN) {
+      console.log("✅ Webhook verificado com sucesso!");
+      return new Response(challenge, { 
+        status: 200,
+        headers: { "Content-Type": "text/plain" }
+      });
+    }
+    
+    console.log("❌ Verificação falhou - token inválido");
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  // ========== PROCESSAMENTO POST (Mensagens recebidas) ==========
+  try {
+    const json = await req.json();
+    console.log("Webhook payload:", JSON.stringify(json));
+
+    // Formato Meta WhatsApp Business API
+    const entry = json.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    
+    // Ignora notificações que não são mensagens (ex: status updates)
+    if (!value?.messages || value.messages.length === 0) {
+      console.log("Ignorando: não é uma mensagem de usuário (pode ser status update)");
+      return new Response(JSON.stringify({ status: "ok" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const message = value.messages[0];
+    const from = message.from; // Número do usuário
+    const body = message.text?.body || ""; // Texto da mensagem
+    const messageType = message.type;
+
+    // Só processa mensagens de texto por enquanto
+    if (messageType !== "text" || !body) {
+      console.log(`Ignorando mensagem do tipo: ${messageType}`);
+      return new Response(JSON.stringify({ status: "ok" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const phoneNumber = from;
