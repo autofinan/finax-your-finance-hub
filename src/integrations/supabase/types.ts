@@ -1131,14 +1131,24 @@ export type Database = {
         Args: { p_ano?: number; p_mes?: number; p_usuario_id: string }
         Returns: Json
       }
-      fn_relatorio_semanal: {
-        Args: {
-          p_data_fim?: string
-          p_data_inicio?: string
-          p_usuario_id: string
-        }
-        Returns: Json
-      }
+      fn_relatorio_semanal:
+        | {
+            Args: {
+              p_data_fim?: string
+              p_data_inicio?: string
+              p_usuario_id: string
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_data_fim?: string
+              p_data_inicio?: string
+              p_tipo_periodo?: string
+              p_usuario_id: string
+            }
+            Returns: Json
+          }
       fn_update_resumo_mensal: {
         Args: { p_ano: number; p_mes: number; p_user_id: string }
         Returns: undefined

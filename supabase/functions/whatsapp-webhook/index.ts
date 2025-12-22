@@ -478,16 +478,21 @@ Responda de forma natural, amigável e consultiva.`
 // ========== FUNÇÕES PARA RELATÓRIOS USANDO BACKEND ==========
 
 // Busca relatório semanal calculado no backend
-async function getRelatorioSemanal(usuarioId: string): Promise<any> {
+// tipoPeriodo: "semana_atual" (segunda até hoje) ou "semana_passada" (segunda a domingo anterior)
+async function getRelatorioSemanal(usuarioId: string, tipoPeriodo: "semana_atual" | "semana_passada" = "semana_atual"): Promise<any> {
   try {
+    console.log(`📊 Buscando relatório semanal: ${tipoPeriodo} para usuário ${usuarioId}`);
+    
     const { data, error } = await supabase.rpc("fn_relatorio_semanal", { 
-      p_usuario_id: usuarioId 
+      p_usuario_id: usuarioId,
+      p_tipo_periodo: tipoPeriodo
     });
     
     if (error) {
       console.error("Erro ao buscar relatório semanal:", error);
       return null;
     }
+    console.log("📊 Relatório semanal obtido:", JSON.stringify(data));
     return data;
   } catch (error) {
     console.error("Erro no relatório semanal:", error);
@@ -534,20 +539,43 @@ async function getAnaliseConsultiva(usuarioId: string): Promise<any> {
 }
 
 // Detecta tipo de relatório solicitado na mensagem
-function detectarTipoRelatorio(mensagem: string): "semanal" | "mensal" | "hoje" | "resumo" | null {
+interface TipoRelatorioDetectado {
+  tipo: "semanal" | "mensal" | "hoje" | "resumo";
+  periodo: "atual" | "passado";
+}
+
+function detectarTipoRelatorio(mensagem: string): TipoRelatorioDetectado | null {
   const msg = mensagem.toLowerCase();
   
-  if (msg.includes("semana") || msg.includes("semanal") || msg.includes("últimos 7 dias") || msg.includes("essa semana")) {
-    return "semanal";
+  // Detecta relatório semanal
+  if (msg.includes("semana") || msg.includes("semanal") || msg.includes("últimos 7 dias") || 
+      msg.includes("essa semana") || msg.includes("desta semana") || msg.includes("essa semana") ||
+      msg.includes("relatório da semana") || msg.includes("relatorio da semana")) {
+    
+    // Verifica se é semana passada
+    if (msg.includes("passada") || msg.includes("anterior") || msg.includes("última semana") ||
+        msg.includes("ultima semana") || msg.includes("semana passada")) {
+      return { tipo: "semanal", periodo: "passado" };
+    }
+    // Default: semana atual (dessa semana)
+    return { tipo: "semanal", periodo: "atual" };
   }
-  if (msg.includes("mês") || msg.includes("mensal") || msg.includes("esse mês") || msg.includes("mês passado")) {
-    return "mensal";
+  
+  // Detecta relatório mensal
+  if (msg.includes("mês") || msg.includes("mensal") || msg.includes("esse mês") || 
+      msg.includes("mes") || msg.includes("esse mes")) {
+    if (msg.includes("passado") || msg.includes("anterior")) {
+      return { tipo: "mensal", periodo: "passado" };
+    }
+    return { tipo: "mensal", periodo: "atual" };
   }
+  
   if (msg.includes("hoje") || msg.includes("dia")) {
-    return "hoje";
+    return { tipo: "hoje", periodo: "atual" };
   }
+  
   if (msg.includes("resumo") || msg.includes("balanço") || msg.includes("como estou") || msg.includes("situação")) {
-    return "resumo";
+    return { tipo: "resumo", periodo: "atual" };
   }
   
   return null;
@@ -1486,14 +1514,16 @@ serve(async (req) => {
             // Detecta tipo de relatório solicitado
             const tipoRelatorio = detectarTipoRelatorio(messageText);
             
-            if (tipoRelatorio === "semanal") {
+            if (tipoRelatorio && tipoRelatorio.tipo === "semanal") {
               // Relatório semanal calculado no backend
-              const relatorioSemanal = await getRelatorioSemanal(usuarioId);
+              const tipoPeriodo = tipoRelatorio.periodo === "passado" ? "semana_passada" : "semana_atual";
+              const relatorioSemanal = await getRelatorioSemanal(usuarioId, tipoPeriodo);
               
               if (relatorioSemanal && relatorioSemanal.totais) {
                 const totais = relatorioSemanal.totais;
                 const comparativo = relatorioSemanal.comparativo;
                 const categorias = relatorioSemanal.categorias || [];
+                const periodo = relatorioSemanal.periodo;
                 
                 let categoriasTexto = "";
                 if (categorias.length > 0) {
@@ -1509,7 +1539,10 @@ serve(async (req) => {
                     ? `📉 Gastos ${Math.abs(comparativo.variacao_gastos_percentual).toFixed(1)}% MENORES que semana anterior`
                     : `➡️ Gastos estáveis em relação à semana anterior`;
                 
-                contextoDados = `📅 *Relatório Semanal* (${relatorioSemanal.periodo.inicio} a ${relatorioSemanal.periodo.fim})\n\n` +
+                const tituloSemana = tipoPeriodo === "semana_atual" ? "Semana Atual" : "Semana Passada";
+                
+                contextoDados = `📅 *Relatório ${tituloSemana}*\n` +
+                  `📆 Período: ${periodo.inicio} a ${periodo.fim}\n\n` +
                   `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
                   `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
                   `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n\n` +
@@ -1521,7 +1554,7 @@ serve(async (req) => {
                 contextoDados = `Sem dados suficientes para relatório semanal.\n\n` +
                   `Resumo do mês: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
               }
-            } else if (tipoRelatorio === "mensal") {
+            } else if (tipoRelatorio && tipoRelatorio.tipo === "mensal") {
               // Relatório mensal calculado no backend
               const relatorioMensal = await getRelatorioMensal(usuarioId);
               
@@ -1612,30 +1645,120 @@ serve(async (req) => {
           }
 
           case "consultar_detalhes": {
-            const resumo = await getResumoMes(usuarioId);
+            // PRIMEIRO: Verifica se pediu relatório semanal/mensal
+            const tipoRelatorioDetalhes = detectarTipoRelatorio(messageText);
             
-            if (resumo.transacoes.length > 0) {
-              const transacoesFormatadas = resumo.transacoes
-                .slice(0, 15)
-                .map(t => {
-                  const data = new Date(t.data).toLocaleDateString("pt-BR");
-                  const sinal = t.tipo === "entrada" ? "+" : "-";
-                  const desc = t.descricao || t.observacao || t.categoria;
-                  const parcela = t.parcela ? ` (${t.parcela})` : "";
-                  return `• ${data}: ${sinal}R$ ${Number(t.valor).toFixed(2)} - ${desc}${parcela}`;
-                }).join("\n");
-
-              contextoDados = `📋 Suas transações do mês:\n\n${transacoesFormatadas}\n\n` +
-                `═══════════════════════════════\n` +
-                `📊 *TOTAIS PRÉ-CALCULADOS:*\n` +
-                `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
-                `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
-                `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*\n` +
-                `═══════════════════════════════\n` +
-                `Total: ${resumo.transacoes.length} transações\n\n` +
-                `⚠️ NÃO RECALCULE ESTES VALORES`;
+            if (tipoRelatorioDetalhes && tipoRelatorioDetalhes.tipo === "semanal") {
+              // Relatório semanal solicitado
+              const tipoPeriodo = tipoRelatorioDetalhes.periodo === "passado" ? "semana_passada" : "semana_atual";
+              console.log(`📊 Detectado pedido de relatório semanal (${tipoPeriodo}) em consultar_detalhes`);
+              
+              const relatorioSemanal = await getRelatorioSemanal(usuarioId, tipoPeriodo);
+              
+              if (relatorioSemanal && relatorioSemanal.totais) {
+                const totais = relatorioSemanal.totais;
+                const comparativo = relatorioSemanal.comparativo;
+                const categorias = relatorioSemanal.categorias || [];
+                const periodo = relatorioSemanal.periodo;
+                
+                let categoriasTexto = "";
+                if (categorias.length > 0) {
+                  categoriasTexto = "\n\n📊 Categorias:\n" + 
+                    categorias.slice(0, 5).map((c: any) => 
+                      `• ${c.categoria}: R$ ${Number(c.total).toFixed(2)}`
+                    ).join("\n");
+                }
+                
+                const variacaoTexto = comparativo.variacao_gastos_percentual > 0 
+                  ? `📈 Gastos ${comparativo.variacao_gastos_percentual.toFixed(1)}% MAIORES que semana anterior`
+                  : comparativo.variacao_gastos_percentual < 0
+                    ? `📉 Gastos ${Math.abs(comparativo.variacao_gastos_percentual).toFixed(1)}% MENORES que semana anterior`
+                    : `➡️ Gastos estáveis em relação à semana anterior`;
+                
+                const tituloSemana = tipoPeriodo === "semana_atual" ? "Semana Atual" : "Semana Passada";
+                
+                contextoDados = `📅 *Relatório ${tituloSemana}*\n` +
+                  `📆 Período: ${periodo.inicio} a ${periodo.fim}\n\n` +
+                  `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
+                  `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
+                  `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n\n` +
+                  `${variacaoTexto}` +
+                  categoriasTexto +
+                  `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
+              } else {
+                const resumo = await getResumoMes(usuarioId);
+                contextoDados = `Sem dados suficientes para relatório semanal.\n\n` +
+                  `Resumo do mês: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
+              }
+            } else if (tipoRelatorioDetalhes && tipoRelatorioDetalhes.tipo === "mensal") {
+              // Relatório mensal solicitado
+              console.log(`📊 Detectado pedido de relatório mensal em consultar_detalhes`);
+              
+              const relatorioMensal = await getRelatorioMensal(usuarioId);
+              
+              if (relatorioMensal && relatorioMensal.totais) {
+                const periodo = relatorioMensal.periodo;
+                const totais = relatorioMensal.totais;
+                const categorias = relatorioMensal.categorias || [];
+                const maioresGastos = relatorioMensal.maiores_gastos || [];
+                
+                let categoriasTexto = "";
+                if (categorias.length > 0) {
+                  categoriasTexto = "\n\n📊 Por categoria:\n" + 
+                    categorias.slice(0, 5).map((c: any) => 
+                      `• ${c.categoria}: R$ ${Number(c.total).toFixed(2)} (${c.percentual}%)`
+                    ).join("\n");
+                }
+                
+                let maioresTexto = "";
+                if (maioresGastos.length > 0) {
+                  maioresTexto = "\n\n💰 Maiores gastos:\n" + 
+                    maioresGastos.slice(0, 3).map((g: any) => 
+                      `• ${g.descricao}: R$ ${Number(g.valor).toFixed(2)}`
+                    ).join("\n");
+                }
+                
+                contextoDados = `📅 *Relatório de ${periodo.nome_mes}/${periodo.ano}*\n\n` +
+                  `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
+                  `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
+                  `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n` +
+                  `📊 Média diária: R$ ${Number(totais.media_diaria).toFixed(2)}\n` +
+                  `🔁 Despesas fixas: R$ ${Number(totais.despesas_fixas).toFixed(2)}` +
+                  categoriasTexto +
+                  maioresTexto +
+                  `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
+              } else {
+                const resumo = await getResumoMes(usuarioId);
+                contextoDados = `Sem dados suficientes para relatório mensal.\n\n` +
+                  `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
+              }
             } else {
-              contextoDados = "Você ainda não tem transações registradas este mês.";
+              // Detalhes das transações do mês (comportamento original)
+              const resumo = await getResumoMes(usuarioId);
+              
+              if (resumo.transacoes.length > 0) {
+                const transacoesFormatadas = resumo.transacoes
+                  .slice(0, 15)
+                  .map(t => {
+                    const data = new Date(t.data).toLocaleDateString("pt-BR");
+                    const sinal = t.tipo === "entrada" ? "+" : "-";
+                    const desc = t.descricao || t.observacao || t.categoria;
+                    const parcela = t.parcela ? ` (${t.parcela})` : "";
+                    return `• ${data}: ${sinal}R$ ${Number(t.valor).toFixed(2)} - ${desc}${parcela}`;
+                  }).join("\n");
+
+                contextoDados = `📋 Suas transações do mês:\n\n${transacoesFormatadas}\n\n` +
+                  `═══════════════════════════════\n` +
+                  `📊 *TOTAIS PRÉ-CALCULADOS:*\n` +
+                  `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
+                  `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
+                  `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*\n` +
+                  `═══════════════════════════════\n` +
+                  `Total: ${resumo.transacoes.length} transações\n\n` +
+                  `⚠️ NÃO RECALCULE ESTES VALORES`;
+              } else {
+                contextoDados = "Você ainda não tem transações registradas este mês.";
+              }
             }
             break;
           }
