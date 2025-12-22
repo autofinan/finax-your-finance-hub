@@ -653,11 +653,14 @@ export type Database = {
           ativo: boolean | null
           created_at: string | null
           id: string
+          limite_mensagens_dia: number | null
           limite_transacoes_mes: number | null
+          mensagens_hoje: number | null
           nome: string | null
           phone_number: string
           plano: string | null
           saldo_mensal: number | null
+          ultima_mensagem_data: string | null
           ultimo_resumo: string | null
           updated_at: string | null
         }
@@ -665,11 +668,14 @@ export type Database = {
           ativo?: boolean | null
           created_at?: string | null
           id?: string
+          limite_mensagens_dia?: number | null
           limite_transacoes_mes?: number | null
+          mensagens_hoje?: number | null
           nome?: string | null
           phone_number: string
           plano?: string | null
           saldo_mensal?: number | null
+          ultima_mensagem_data?: string | null
           ultimo_resumo?: string | null
           updated_at?: string | null
         }
@@ -677,11 +683,14 @@ export type Database = {
           ativo?: boolean | null
           created_at?: string | null
           id?: string
+          limite_mensagens_dia?: number | null
           limite_transacoes_mes?: number | null
+          mensagens_hoje?: number | null
           nome?: string | null
           phone_number?: string
           plano?: string | null
           saldo_mensal?: number | null
+          ultima_mensagem_data?: string | null
           ultimo_resumo?: string | null
           updated_at?: string | null
         }
