@@ -5,3 +5,9 @@ verify_jwt = false
 
 [functions.whatsapp-webhook]
 verify_jwt = false
+
+[functions.enviar-relatorio-semanal]
+verify_jwt = false
+
+[functions.enviar-relatorio-mensal]
+verify_jwt = false

@@ -377,74 +377,90 @@ async function generateResponse(
         messages: [
           {
             role: "system",
-            content: `You are Finax, a personal finance assistant operating via WhatsApp.
+            content: `Você é o Finax, um assistente financeiro pessoal via WhatsApp.
 
-CRITICAL SCOPE RULE (NON-NEGOTIABLE):
-You are NOT a general-purpose AI.
-Your ONLY allowed domain is PERSONAL FINANCE.
+═══════════════════════════════════════════════════════════
+📌 ESCOPO PERMITIDO (APENAS FINANÇAS PESSOAIS)
+═══════════════════════════════════════════════════════════
 
-You are allowed to:
-- Register expenses and income
-- Understand natural language descriptions of money movements
-- Handle recurring expenses and installments
-- Provide financial summaries and reports
-- Help users understand their financial situation
-- Give practical tips about budgeting and money organization
-- Explain how Finax works
+VOCÊ PODE:
+✅ Registrar gastos e entradas
+✅ Entender descrições naturais de movimentações financeiras
+✅ Gerenciar gastos recorrentes e parcelamentos
+✅ Fornecer resumos e relatórios financeiros
+✅ Ajudar a entender a situação financeira
+✅ Dar dicas práticas sobre orçamento e organização
+✅ Explicar como o Finax funciona
 
-You are NOT allowed to:
-- Answer general knowledge questions
-- Engage in casual conversation unrelated to finance
-- Talk about politics, news, entertainment, recipes, jokes, or personal topics
-- Act as a generic assistant or chatbot
+VOCÊ NÃO PODE:
+❌ Responder perguntas de conhecimento geral
+❌ Conversar sobre temas não relacionados a finanças
+❌ Falar sobre política, notícias, entretenimento, receitas, piadas
+❌ Atuar como assistente genérico
 
-If a user message is OUTSIDE the finance domain:
-- Politely refuse
-- Explain that you are focused on financial organization
-- Redirect the user back to a finance-related action
-
-IMPORTANT:
-- You must ALWAYS understand the user's message, even if it is informal or ambiguous.
-- Do NOT rely on rigid patterns or keywords.
-- Use reasoning and context to determine intent.
-- If a message can reasonably relate to finances, treat it as finance.
-- When in doubt, ask a clarifying question related to finances.
-- ALWAYS respond in Portuguese (Brazilian).
-
-REFUSAL TEMPLATE (use when message is outside finance domain):
+Se a mensagem estiver FORA do domínio financeiro:
 "Meu foco é te ajudar a organizar suas finanças 💰
 Posso registrar gastos, mostrar resumos ou ajudar com orçamento.
 O que você gostaria de fazer?"
 
-ABSOLUTE RULE:
-You must NEVER calculate financial totals.
-All monetary calculations are provided by the system and are always correct.
-Just format and present the data provided.
+═══════════════════════════════════════════════════════════
+🚨 REGRA CRÍTICA: A IA NÃO CALCULA
+═══════════════════════════════════════════════════════════
 
-FORMATTING RULES:
-- Be friendly, use emojis sparingly (1-2 per message)
-- Format responses with line breaks for readability
-- Be concise but informative
-- Use natural language, like a helpful friend
-- Use blank lines to separate sections
-- List items with • or -
-- Highlight important values with *bold*
+🚫 NUNCA calcule valores financeiros
+🚫 NUNCA some, subtraia, tire médias ou percentuais
+🚫 NUNCA refaça cálculos que já foram fornecidos
+✅ Todos os valores numéricos são PRÉ-CALCULADOS pelo sistema
+✅ Apenas APRESENTE e INTERPRETE os dados fornecidos
+✅ Confie 100% nos números que receber
 
-PLAN & ACTIVATION RULES:
-- Finax has only ONE paid plan: PRO
-- New users get 7 days FREE TRIAL with FULL access
-- During trial: NEVER mention "free", "limit", or "restriction" - treat user as premium
-- After trial expires: user can only VIEW summaries, NOT register new transactions
-- PRO activation is done via a unique code sent by the user
-- When user sends what looks like an activation code, the system handles it automatically
-- You should NOT try to validate codes yourself
+═══════════════════════════════════════════════════════════
+💬 COMPORTAMENTO CONSULTIVO
+═══════════════════════════════════════════════════════════
 
-${acaoRealizada ? `ACTION PERFORMED:\n${acaoRealizada}\n` : ""}
+Você é um CONSULTOR FINANCEIRO PESSOAL, não um robô.
 
-${context ? `FINANCIAL CONTEXT (pre-calculated - DO NOT recalculate):\n${context}` : ""}
+VOCÊ PODE:
+• Analisar padrões de gastos
+• Apontar excessos com linguagem leve
+• Sugerir ajustes simples
+• Alertar riscos financeiros com cuidado
 
-Respond naturally and helpfully. If a transaction was registered, confirm with details.
-If it's a query, present the data clearly and organized.`
+VOCÊ NÃO PODE:
+• Julgar o usuário
+• Usar tom agressivo ou crítico
+• Dar conselhos técnicos ou complexos
+• Fazer previsões absolutas (use "tende a", "pode indicar")
+
+═══════════════════════════════════════════════════════════
+📝 FORMATO DAS MENSAGENS (WHATSAPP)
+═══════════════════════════════════════════════════════════
+
+• Mensagens CURTAS e escaneáveis
+• Emojis com MODERAÇÃO (2-3 no máximo)
+• Blocos bem separados com linhas em branco
+• Clareza > texto longo
+• Linguagem simples para público geral
+• Destaque valores importantes com *negrito*
+• Use • ou - para listas
+
+═══════════════════════════════════════════════════════════
+📋 PLANOS E ATIVAÇÃO
+═══════════════════════════════════════════════════════════
+
+• Finax tem APENAS UM plano pago: PRO
+• Novos usuários: 7 dias de TESTE GRATUITO COMPLETO
+• Durante trial: NUNCA mencione "free", "limite" ou "restrição"
+• Trate usuário em trial como cliente premium
+• Após trial expirar: usuário só pode VER resumos, não registrar
+• Ativação PRO é via código único enviado pelo usuário
+• NÃO tente validar códigos - o sistema faz isso automaticamente
+
+${acaoRealizada ? `\n═══════════════════════════════════════════════════════════\n✅ AÇÃO REALIZADA\n═══════════════════════════════════════════════════════════\n${acaoRealizada}\n` : ""}
+
+${context ? `\n═══════════════════════════════════════════════════════════\n📊 CONTEXTO FINANCEIRO (PRÉ-CALCULADO - NÃO RECALCULE)\n═══════════════════════════════════════════════════════════\n${context}` : ""}
+
+Responda de forma natural, amigável e consultiva.`
           },
           { role: "user", content: userMessage }
         ],
@@ -457,6 +473,84 @@ If it's a query, present the data clearly and organized.`
     console.error("Erro ao gerar resposta:", error);
     return "Ops! Tive um probleminha. Tente novamente em alguns segundos. 🔄";
   }
+}
+
+// ========== FUNÇÕES PARA RELATÓRIOS USANDO BACKEND ==========
+
+// Busca relatório semanal calculado no backend
+async function getRelatorioSemanal(usuarioId: string): Promise<any> {
+  try {
+    const { data, error } = await supabase.rpc("fn_relatorio_semanal", { 
+      p_usuario_id: usuarioId 
+    });
+    
+    if (error) {
+      console.error("Erro ao buscar relatório semanal:", error);
+      return null;
+    }
+    return data;
+  } catch (error) {
+    console.error("Erro no relatório semanal:", error);
+    return null;
+  }
+}
+
+// Busca relatório mensal calculado no backend
+async function getRelatorioMensal(usuarioId: string, mes?: number, ano?: number): Promise<any> {
+  try {
+    const params: any = { p_usuario_id: usuarioId };
+    if (mes) params.p_mes = mes;
+    if (ano) params.p_ano = ano;
+    
+    const { data, error } = await supabase.rpc("fn_relatorio_mensal", params);
+    
+    if (error) {
+      console.error("Erro ao buscar relatório mensal:", error);
+      return null;
+    }
+    return data;
+  } catch (error) {
+    console.error("Erro no relatório mensal:", error);
+    return null;
+  }
+}
+
+// Busca análise consultiva do backend
+async function getAnaliseConsultiva(usuarioId: string): Promise<any> {
+  try {
+    const { data, error } = await supabase.rpc("fn_analise_consultiva", { 
+      p_usuario_id: usuarioId 
+    });
+    
+    if (error) {
+      console.error("Erro ao buscar análise consultiva:", error);
+      return null;
+    }
+    return data;
+  } catch (error) {
+    console.error("Erro na análise consultiva:", error);
+    return null;
+  }
+}
+
+// Detecta tipo de relatório solicitado na mensagem
+function detectarTipoRelatorio(mensagem: string): "semanal" | "mensal" | "hoje" | "resumo" | null {
+  const msg = mensagem.toLowerCase();
+  
+  if (msg.includes("semana") || msg.includes("semanal") || msg.includes("últimos 7 dias") || msg.includes("essa semana")) {
+    return "semanal";
+  }
+  if (msg.includes("mês") || msg.includes("mensal") || msg.includes("esse mês") || msg.includes("mês passado")) {
+    return "mensal";
+  }
+  if (msg.includes("hoje") || msg.includes("dia")) {
+    return "hoje";
+  }
+  if (msg.includes("resumo") || msg.includes("balanço") || msg.includes("como estou") || msg.includes("situação")) {
+    return "resumo";
+  }
+  
+  return null;
 }
 
 // ========== MODELO DE PLANOS: TRIAL → EXPIRED → PRO ==========
@@ -1389,27 +1483,107 @@ serve(async (req) => {
           }
 
           case "consultar_resumo": {
-            const resumo = await getResumoMes(usuarioId);
+            // Detecta tipo de relatório solicitado
+            const tipoRelatorio = detectarTipoRelatorio(messageText);
             
-            let categoriasTexto = "";
-            const categoriasOrdenadas = Object.entries(resumo.porCategoria)
-              .sort(([,a], [,b]) => b - a)
-              .slice(0, 5);
-            
-            if (categoriasOrdenadas.length > 0) {
-              categoriasTexto = "\n\n📊 Maiores gastos por categoria:\n" +
-                categoriasOrdenadas.map(([cat, val]) => 
-                  `• ${cat}: R$ ${val.toFixed(2)}`
-                ).join("\n");
-            }
+            if (tipoRelatorio === "semanal") {
+              // Relatório semanal calculado no backend
+              const relatorioSemanal = await getRelatorioSemanal(usuarioId);
+              
+              if (relatorioSemanal && relatorioSemanal.totais) {
+                const totais = relatorioSemanal.totais;
+                const comparativo = relatorioSemanal.comparativo;
+                const categorias = relatorioSemanal.categorias || [];
+                
+                let categoriasTexto = "";
+                if (categorias.length > 0) {
+                  categoriasTexto = "\n\n📊 Categorias:\n" + 
+                    categorias.slice(0, 5).map((c: any) => 
+                      `• ${c.categoria}: R$ ${Number(c.total).toFixed(2)}`
+                    ).join("\n");
+                }
+                
+                const variacaoTexto = comparativo.variacao_gastos_percentual > 0 
+                  ? `📈 Gastos ${comparativo.variacao_gastos_percentual.toFixed(1)}% MAIORES que semana anterior`
+                  : comparativo.variacao_gastos_percentual < 0
+                    ? `📉 Gastos ${Math.abs(comparativo.variacao_gastos_percentual).toFixed(1)}% MENORES que semana anterior`
+                    : `➡️ Gastos estáveis em relação à semana anterior`;
+                
+                contextoDados = `📅 *Relatório Semanal* (${relatorioSemanal.periodo.inicio} a ${relatorioSemanal.periodo.fim})\n\n` +
+                  `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
+                  `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
+                  `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n\n` +
+                  `${variacaoTexto}` +
+                  categoriasTexto +
+                  `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
+              } else {
+                const resumo = await getResumoMes(usuarioId);
+                contextoDados = `Sem dados suficientes para relatório semanal.\n\n` +
+                  `Resumo do mês: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
+              }
+            } else if (tipoRelatorio === "mensal") {
+              // Relatório mensal calculado no backend
+              const relatorioMensal = await getRelatorioMensal(usuarioId);
+              
+              if (relatorioMensal && relatorioMensal.totais) {
+                const periodo = relatorioMensal.periodo;
+                const totais = relatorioMensal.totais;
+                const categorias = relatorioMensal.categorias || [];
+                const maioresGastos = relatorioMensal.maiores_gastos || [];
+                
+                let categoriasTexto = "";
+                if (categorias.length > 0) {
+                  categoriasTexto = "\n\n📊 Por categoria:\n" + 
+                    categorias.slice(0, 5).map((c: any) => 
+                      `• ${c.categoria}: R$ ${Number(c.total).toFixed(2)} (${c.percentual}%)`
+                    ).join("\n");
+                }
+                
+                let maioresTexto = "";
+                if (maioresGastos.length > 0) {
+                  maioresTexto = "\n\n💰 Maiores gastos:\n" + 
+                    maioresGastos.slice(0, 3).map((g: any) => 
+                      `• ${g.descricao}: R$ ${Number(g.valor).toFixed(2)}`
+                    ).join("\n");
+                }
+                
+                contextoDados = `📅 *Relatório de ${periodo.nome_mes}/${periodo.ano}*\n\n` +
+                  `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
+                  `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
+                  `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n` +
+                  `📊 Média diária: R$ ${Number(totais.media_diaria).toFixed(2)}\n` +
+                  `🔁 Despesas fixas: R$ ${Number(totais.despesas_fixas).toFixed(2)}` +
+                  categoriasTexto +
+                  maioresTexto +
+                  `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
+              } else {
+                const resumo = await getResumoMes(usuarioId);
+                contextoDados = `Sem dados suficientes para relatório mensal detalhado.\n\n` +
+                  `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
+              }
+            } else {
+              // Resumo padrão do mês atual
+              const resumo = await getResumoMes(usuarioId);
+              
+              let categoriasTexto = "";
+              const categoriasOrdenadas = Object.entries(resumo.porCategoria)
+                .sort(([,a], [,b]) => b - a)
+                .slice(0, 5);
+              
+              if (categoriasOrdenadas.length > 0) {
+                categoriasTexto = "\n\n📊 Maiores gastos por categoria:\n" +
+                  categoriasOrdenadas.map(([cat, val]) => 
+                    `• ${cat}: R$ ${val.toFixed(2)}`
+                  ).join("\n");
+              }
 
-            // TOTAIS PRÉ-CALCULADOS - a IA NÃO deve recalcular
-            contextoDados = `📅 Resumo do mês atual:\n\n` +
-              `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
-              `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
-              `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*` +
-              categoriasTexto +
-              `\n\n⚠️ IMPORTANTE: Estes valores são EXATOS e pré-calculados. NÃO recalcule.`;
+              contextoDados = `📅 Resumo do mês atual:\n\n` +
+                `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
+                `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
+                `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*` +
+                categoriasTexto +
+                `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
+            }
             break;
           }
 
@@ -1426,9 +1600,10 @@ serve(async (req) => {
                 }).join("\n");
 
                 contextoDados = `📊 Gastos em ${intent.categoria_consulta} este mês:\n\n` +
-                  `💰 Total: R$ ${total.toFixed(2)}\n` +
+                  `💰 Total: *R$ ${total.toFixed(2)}*\n` +
                   `📝 ${transacoes.length} transação(ões)\n\n` +
-                  `Detalhes:\n${listaTransacoes}`;
+                  `Detalhes:\n${listaTransacoes}\n\n` +
+                  `⚠️ TOTAL PRÉ-CALCULADO - NÃO RECALCULE`;
               } else {
                 contextoDados = `Você não teve gastos em ${intent.categoria_consulta} este mês.`;
               }
@@ -1450,15 +1625,15 @@ serve(async (req) => {
                   return `• ${data}: ${sinal}R$ ${Number(t.valor).toFixed(2)} - ${desc}${parcela}`;
                 }).join("\n");
 
-              // TOTAIS PRÉ-CALCULADOS
               contextoDados = `📋 Suas transações do mês:\n\n${transacoesFormatadas}\n\n` +
                 `═══════════════════════════════\n` +
-                `📊 *TOTAIS (pré-calculados - não recalcule):*\n` +
+                `📊 *TOTAIS PRÉ-CALCULADOS:*\n` +
                 `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
                 `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
                 `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*\n` +
                 `═══════════════════════════════\n` +
-                `Total: ${resumo.transacoes.length} transações`;
+                `Total: ${resumo.transacoes.length} transações\n\n` +
+                `⚠️ NÃO RECALCULE ESTES VALORES`;
             } else {
               contextoDados = "Você ainda não tem transações registradas este mês.";
             }
@@ -1469,9 +1644,28 @@ serve(async (req) => {
           case "ajuda":
           case "outro":
           default: {
+            // Para saudações e ajuda, busca análise consultiva se disponível
+            const analise = await getAnaliseConsultiva(usuarioId);
             const resumo = await getResumoMes(usuarioId);
+            
+            let alertaConsultivo = "";
+            if (analise && analise.gerar_alerta && analise.alertas?.length > 0) {
+              const alerta = analise.alertas[0];
+              alertaConsultivo = `\n\n💡 Insight: ${alerta.mensagem}`;
+              
+              // Salva que enviou alerta consultivo
+              await supabase.from("historico_conversas").insert({
+                phone_number: phoneNumber,
+                user_id: usuarioId,
+                user_message: "[ANÁLISE CONSULTIVA]",
+                ai_response: alerta.mensagem,
+                tipo: "alerta_consultivo"
+              });
+            }
+            
             contextoDados = `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, ` +
-              `Saídas R$ ${resumo.totalSaidas.toFixed(2)}, Saldo R$ ${resumo.saldo.toFixed(2)}`;
+              `Saídas R$ ${resumo.totalSaidas.toFixed(2)}, Saldo R$ ${resumo.saldo.toFixed(2)}` +
+              alertaConsultivo;
             break;
           }
         }
