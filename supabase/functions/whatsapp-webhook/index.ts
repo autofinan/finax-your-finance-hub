@@ -142,6 +142,31 @@ async function limparFluxoAtivo(phoneNumber: string): Promise<void> {
 
 // Extrai dados adicionais de uma mensagem de resposta
 async function extractDadosResposta(message: string, dadosFaltantes: string[]): Promise<Partial<ExtractedIntent>> {
+  // Otimização: Se é uma resposta curta e simples (apenas número), tentar extrair direto
+  const msgTrim = message.trim();
+  
+  // Se a mensagem é apenas um número e estamos esperando dia_mes
+  if (dadosFaltantes.includes("dia_mes") && /^\d{1,2}$/.test(msgTrim)) {
+    const dia = parseInt(msgTrim, 10);
+    if (dia >= 1 && dia <= 31) {
+      console.log(`Extração direta: dia_mes = ${dia}`);
+      return { dia_mes: dia };
+    }
+  }
+  
+  // Se a mensagem é um valor monetário e estamos esperando valor
+  if (dadosFaltantes.includes("valor")) {
+    const matchValor = msgTrim.match(/(?:R\$\s*)?(\d+(?:[.,]\d{1,2})?)/);
+    if (matchValor) {
+      const valor = parseFloat(matchValor[1].replace(",", "."));
+      if (valor > 0) {
+        console.log(`Extração direta: valor = ${valor}`);
+        return { valor };
+      }
+    }
+  }
+  
+  // Fallback: usar IA para extrair dados mais complexos
   try {
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -159,12 +184,16 @@ Extraia APENAS os seguintes dados da mensagem: ${dadosFaltantes.join(", ")}
 
 REGRAS:
 - valor: números como "59,90", "R$ 100", "50 reais" → converter para number
-- dia_mes: números de 1 a 31
+- dia_mes: números de 1 a 31 (quando for resposta a "qual dia do mês")
 - categoria: alimentação, transporte, lazer, moradia, saúde, educação, compras, tecnologia, assinaturas, outros
 - descricao: texto descritivo do gasto
 - tipo_recorrencia: "mensal", "semanal", "anual"
 
-Responda APENAS com JSON válido com os campos encontrados:
+IMPORTANTE: 
+- Se a mensagem for APENAS um número (ex: "10", "15"), e dia_mes estiver nos dados faltantes, interprete como dia_mes
+- Se a mensagem for um valor monetário (ex: "59,90", "R$ 100"), e valor estiver nos dados faltantes, interprete como valor
+
+Responda APENAS com JSON válido:
 {
   "valor": number ou null,
   "dia_mes": number ou null,
@@ -181,7 +210,7 @@ Responda APENAS com JSON válido com os campos encontrados:
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || "{}";
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    console.log("Dados extraídos da resposta:", cleanJson);
+    console.log("Dados extraídos da resposta (via IA):", cleanJson);
     return JSON.parse(cleanJson);
   } catch (error) {
     console.error("Erro ao extrair dados da resposta:", error);
@@ -706,17 +735,19 @@ serve(async (req) => {
       
       if (fluxoAtivo.intent === "criar_recorrente") {
         // Verifica se tem todos os dados necessários para criar recorrente
-        const temValor = dadosMesclados.valor !== null && dadosMesclados.valor !== undefined;
-        const temDiaMes = dadosMesclados.dia_mes !== null && dadosMesclados.dia_mes !== undefined;
+        const temValor = dadosMesclados.valor !== null && dadosMesclados.valor !== undefined && Number(dadosMesclados.valor) > 0;
+        const temDiaMes = dadosMesclados.dia_mes !== null && dadosMesclados.dia_mes !== undefined && Number(dadosMesclados.dia_mes) > 0;
         
-        if (temValor) {
-          // FIX 1: CRIAR GASTO RECORRENTE COM SUCESSO
+        console.log(`Continuação fluxo - temValor: ${temValor} (${dadosMesclados.valor}), temDiaMes: ${temDiaMes} (${dadosMesclados.dia_mes})`);
+        
+        if (temValor && temDiaMes) {
+          // FIX 1: CRIAR GASTO RECORRENTE COM SUCESSO - TEM TODOS OS DADOS
           const { error } = await supabase.from("gastos_recorrentes").insert({
             usuario_id: usuarioId,
             valor_parcela: dadosMesclados.valor,
             categoria: dadosMesclados.categoria || "assinaturas",
             tipo_recorrencia: dadosMesclados.tipo_recorrencia || "mensal",
-            dia_mes: dadosMesclados.dia_mes || new Date().getDate(),
+            dia_mes: dadosMesclados.dia_mes,
             descricao: dadosMesclados.descricao,
             ativo: true,
             proxima_execucao: null,
@@ -725,33 +756,50 @@ serve(async (req) => {
 
           if (!error) {
             await limparFluxoAtivo(phoneNumber);
-            const diaTexto = dadosMesclados.dia_mes ? `todo dia ${dadosMesclados.dia_mes}` : "mensalmente";
             acaoRealizada = `✅ Gasto recorrente cadastrado com sucesso!\n\n` +
               `🔄 ${dadosMesclados.descricao || dadosMesclados.categoria || "Gasto recorrente"}\n` +
-              `💰 R$ ${Number(dadosMesclados.valor).toFixed(2)} ${diaTexto}\n\n` +
+              `💰 R$ ${Number(dadosMesclados.valor).toFixed(2)} todo dia ${dadosMesclados.dia_mes}\n\n` +
               `Vou registrar automaticamente quando a data chegar.`;
-            console.log("✅ Gasto recorrente criado com sucesso!");
+            console.log("✅ Gasto recorrente criado com sucesso via continuação de fluxo!");
           } else {
             console.error("Erro ao criar gasto recorrente:", error);
             acaoRealizada = "❌ Erro ao criar o gasto recorrente. Tente novamente.";
             await limparFluxoAtivo(phoneNumber);
           }
-        } else {
-          // Ainda faltam dados - perguntar novamente
-          let pergunta = "";
-          if (!temValor) {
-            pergunta = "Qual o valor do gasto recorrente? (ex: 59,90)";
-          }
+        } else if (temValor && !temDiaMes) {
+          // Tem valor mas ainda falta dia do mês
+          const pergunta = `Qual o *dia do mês* que você costuma fazer esse pagamento de R$ ${Number(dadosMesclados.valor).toFixed(2)}?`;
           
           const aiResponse = await generateResponse(messageText, "", pergunta);
           
-          // Salva estado atualizado
           await salvarFluxoAtivo(
             phoneNumber,
             usuarioId,
             "criar_recorrente",
             dadosMesclados,
-            dadosAindaFaltantes,
+            ["dia_mes"],
+            messageText,
+            aiResponse
+          );
+          
+          await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
+          
+          return new Response(
+            JSON.stringify({ status: "ok", message_sent: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        } else {
+          // Falta valor - perguntar novamente
+          const pergunta = "Qual o valor do gasto recorrente? (ex: 59,90)";
+          
+          const aiResponse = await generateResponse(messageText, "", pergunta);
+          
+          await salvarFluxoAtivo(
+            phoneNumber,
+            usuarioId,
+            "criar_recorrente",
+            dadosMesclados,
+            ["valor"],
             messageText,
             aiResponse
           );
@@ -885,16 +933,19 @@ serve(async (req) => {
 
           case "criar_recorrente": {
             // FIX 1 & 4: Verificar se tem todos os dados necessários
-            const temValor = intent.valor !== null && intent.valor !== undefined;
+            const temValor = intent.valor !== null && intent.valor !== undefined && intent.valor > 0;
+            const temDiaMes = intent.dia_mes !== null && intent.dia_mes !== undefined && intent.dia_mes > 0;
             
-            if (temValor) {
-              // Tem todos os dados - criar direto
+            console.log(`criar_recorrente - temValor: ${temValor} (${intent.valor}), temDiaMes: ${temDiaMes} (${intent.dia_mes})`);
+            
+            if (temValor && temDiaMes) {
+              // Tem TODOS os dados - criar direto
               const { error } = await supabase.from("gastos_recorrentes").insert({
                 usuario_id: usuarioId,
                 valor_parcela: intent.valor,
                 categoria: intent.categoria || "assinaturas",
                 tipo_recorrencia: intent.tipo_recorrencia || "mensal",
-                dia_mes: intent.dia_mes || new Date().getDate(),
+                dia_mes: intent.dia_mes,
                 descricao: intent.descricao,
                 ativo: true,
                 proxima_execucao: null,
@@ -902,25 +953,49 @@ serve(async (req) => {
               });
 
               if (!error) {
-                const diaTexto = intent.dia_mes ? `todo dia ${intent.dia_mes}` : "mensalmente";
                 acaoRealizada = `✅ Gasto recorrente cadastrado!\n\n` +
                   `🔄 ${intent.descricao || intent.categoria}\n` +
-                  `💰 R$ ${Number(intent.valor).toFixed(2)} ${diaTexto}\n\n` +
+                  `💰 R$ ${Number(intent.valor).toFixed(2)} todo dia ${intent.dia_mes}\n\n` +
                   `Vou registrar automaticamente quando a data chegar.`;
                 console.log("✅ Gasto recorrente criado com sucesso (fluxo direto)!");
               } else {
                 console.error("Erro ao criar gasto recorrente:", error);
+                acaoRealizada = "❌ Erro ao criar o gasto recorrente. Tente novamente.";
               }
-            } else {
-              // Faltam dados - iniciar fluxo multi-mensagem
-              const dadosFaltantes: string[] = [];
-              if (!temValor) dadosFaltantes.push("valor");
+            } else if (temValor && !temDiaMes) {
+              // Tem valor mas falta dia - perguntar dia do mês
+              const pergunta = `Entendido! 💻 Para eu registrar este gasto recorrente de R$ ${Number(intent.valor).toFixed(2)}, preciso de mais informações:\n\nQual o *dia do mês* que você costuma fazer esse pagamento?`;
               
+              const aiResponse = await generateResponse(messageText, "", pergunta);
+              
+              // Salva estado do fluxo COM O VALOR já coletado
+              await salvarFluxoAtivo(
+                phoneNumber,
+                usuarioId,
+                "criar_recorrente",
+                {
+                  valor: intent.valor,  // CRÍTICO: Salvar o valor!
+                  categoria: intent.categoria,
+                  descricao: intent.descricao,
+                  tipo_recorrencia: intent.tipo_recorrencia || "mensal"
+                },
+                ["dia_mes"],  // Dados faltantes: apenas dia_mes
+                messageText,
+                aiResponse
+              );
+              
+              await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
+              
+              return new Response(
+                JSON.stringify({ status: "ok", message_sent: true }),
+                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+              );
+            } else {
+              // Falta valor - perguntar valor
               const pergunta = "Para cadastrar esse gasto recorrente, preciso saber o valor. Quanto você paga? (ex: 59,90)";
               
               const aiResponse = await generateResponse(messageText, "", pergunta);
               
-              // Salva estado do fluxo
               await salvarFluxoAtivo(
                 phoneNumber,
                 usuarioId,
@@ -931,7 +1006,7 @@ serve(async (req) => {
                   tipo_recorrencia: intent.tipo_recorrencia,
                   dia_mes: intent.dia_mes
                 },
-                dadosFaltantes,
+                ["valor"],
                 messageText,
                 aiResponse
               );
