@@ -142,28 +142,38 @@ async function limparFluxoAtivo(phoneNumber: string): Promise<void> {
 
 // Extrai dados adicionais de uma mensagem de resposta
 async function extractDadosResposta(message: string, dadosFaltantes: string[]): Promise<Partial<ExtractedIntent>> {
-  // Otimização: Se é uma resposta curta e simples (apenas número), tentar extrair direto
-  const msgTrim = message.trim();
+  const msgTrim = message.trim().toLowerCase();
+  const resultado: Partial<ExtractedIntent> = {};
   
-  // Se a mensagem é apenas um número e estamos esperando dia_mes
-  if (dadosFaltantes.includes("dia_mes") && /^\d{1,2}$/.test(msgTrim)) {
-    const dia = parseInt(msgTrim, 10);
-    if (dia >= 1 && dia <= 31) {
-      console.log(`Extração direta: dia_mes = ${dia}`);
-      return { dia_mes: dia };
+  // CORREÇÃO 2: Regex melhorado para detectar "dia X", "no dia X", "todo dia X"
+  if (dadosFaltantes.includes("dia_mes")) {
+    // Padrões: "10", "dia 10", "no dia 10", "todo dia 10", "dia: 10"
+    const matchDia = msgTrim.match(/^(?:no\s+)?(?:todo\s+)?(?:dia[:\s]*)?(\d{1,2})$/i);
+    if (matchDia) {
+      const dia = parseInt(matchDia[1], 10);
+      if (dia >= 1 && dia <= 31) {
+        console.log(`✅ Extração direta: dia_mes = ${dia}`);
+        resultado.dia_mes = dia;
+      }
     }
   }
   
   // Se a mensagem é um valor monetário e estamos esperando valor
-  if (dadosFaltantes.includes("valor")) {
+  if (dadosFaltantes.includes("valor") && !resultado.dia_mes) {
     const matchValor = msgTrim.match(/(?:R\$\s*)?(\d+(?:[.,]\d{1,2})?)/);
     if (matchValor) {
       const valor = parseFloat(matchValor[1].replace(",", "."));
       if (valor > 0) {
-        console.log(`Extração direta: valor = ${valor}`);
-        return { valor };
+        console.log(`✅ Extração direta: valor = ${valor}`);
+        resultado.valor = valor;
       }
     }
+  }
+  
+  // Se já conseguiu extrair algo diretamente, retorna SEM nulls
+  if (Object.keys(resultado).length > 0) {
+    console.log("Retornando dados extraídos diretamente (sem nulls):", JSON.stringify(resultado));
+    return resultado;
   }
   
   // Fallback: usar IA para extrair dados mais complexos
@@ -179,28 +189,25 @@ async function extractDadosResposta(message: string, dadosFaltantes: string[]): 
         messages: [
           {
             role: "system",
+            // CORREÇÃO 3: Prompt ajustado para NÃO retornar nulls
             content: `Você é um extrator de dados. O usuário está respondendo uma pergunta sobre dados financeiros.
 Extraia APENAS os seguintes dados da mensagem: ${dadosFaltantes.join(", ")}
 
 REGRAS:
 - valor: números como "59,90", "R$ 100", "50 reais" → converter para number
-- dia_mes: números de 1 a 31 (quando for resposta a "qual dia do mês")
+- dia_mes: números de 1 a 31 (quando for resposta a "qual dia do mês"). Ex: "dia 10", "no dia 15", "10"
 - categoria: alimentação, transporte, lazer, moradia, saúde, educação, compras, tecnologia, assinaturas, outros
 - descricao: texto descritivo do gasto
 - tipo_recorrencia: "mensal", "semanal", "anual"
 
 IMPORTANTE: 
 - Se a mensagem for APENAS um número (ex: "10", "15"), e dia_mes estiver nos dados faltantes, interprete como dia_mes
-- Se a mensagem for um valor monetário (ex: "59,90", "R$ 100"), e valor estiver nos dados faltantes, interprete como valor
+- Se a mensagem for "dia X" ou "no dia X", extraia X como dia_mes
+- Se a mensagem for um valor monetário, e valor estiver nos dados faltantes, interprete como valor
 
-Responda APENAS com JSON válido:
-{
-  "valor": number ou null,
-  "dia_mes": number ou null,
-  "categoria": "string" ou null,
-  "descricao": "string" ou null,
-  "tipo_recorrencia": "string" ou null
-}`
+RESPONDA APENAS COM JSON VÁLIDO contendo SOMENTE os campos que você conseguiu extrair.
+NÃO inclua campos com valor null. Exemplo correto: {"dia_mes": 10}
+Exemplo ERRADO: {"dia_mes": 10, "valor": null, "categoria": null}`
           },
           { role: "user", content: message }
         ],
@@ -211,7 +218,17 @@ Responda APENAS com JSON válido:
     const content = data.choices?.[0]?.message?.content || "{}";
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
     console.log("Dados extraídos da resposta (via IA):", cleanJson);
-    return JSON.parse(cleanJson);
+    
+    // CORREÇÃO 3: Filtrar nulls da resposta da IA também
+    const parsed = JSON.parse(cleanJson);
+    const filtrado: Partial<ExtractedIntent> = {};
+    Object.entries(parsed).forEach(([key, value]) => {
+      if (value !== null && value !== undefined) {
+        (filtrado as any)[key] = value;
+      }
+    });
+    console.log("Dados filtrados (sem nulls):", JSON.stringify(filtrado));
+    return filtrado;
   } catch (error) {
     console.error("Erro ao extrair dados da resposta:", error);
     return {};
@@ -723,8 +740,14 @@ serve(async (req) => {
       // Extrai dados da resposta do usuário
       const novosDados = await extractDadosResposta(messageText, fluxoAtivo.dados_faltantes);
       
-      // Mescla dados coletados anteriormente com os novos
-      const dadosMesclados = { ...fluxoAtivo.dados_coletados, ...novosDados };
+      // CORREÇÃO 1: Mescla dados SEM sobrescrever com null/undefined
+      const dadosMesclados = { ...fluxoAtivo.dados_coletados };
+      Object.entries(novosDados).forEach(([key, value]) => {
+        if (value !== null && value !== undefined) {
+          (dadosMesclados as any)[key] = value;
+        }
+      });
+      console.log("✅ Dados mesclados (preservando contexto):", JSON.stringify(dadosMesclados));
       console.log("Dados mesclados:", JSON.stringify(dadosMesclados));
       
       // Atualiza lista de dados faltantes
