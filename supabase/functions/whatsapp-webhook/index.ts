@@ -430,6 +430,15 @@ FORMATTING RULES:
 - List items with • or -
 - Highlight important values with *bold*
 
+PLAN & ACTIVATION RULES:
+- Finax has only ONE paid plan: PRO
+- New users get 7 days FREE TRIAL with FULL access
+- During trial: NEVER mention "free", "limit", or "restriction" - treat user as premium
+- After trial expires: user can only VIEW summaries, NOT register new transactions
+- PRO activation is done via a unique code sent by the user
+- When user sends what looks like an activation code, the system handles it automatically
+- You should NOT try to validate codes yourself
+
 ${acaoRealizada ? `ACTION PERFORMED:\n${acaoRealizada}\n` : ""}
 
 ${context ? `FINANCIAL CONTEXT (pre-calculated - DO NOT recalculate):\n${context}` : ""}
@@ -450,55 +459,134 @@ If it's a query, present the data clearly and organized.`
   }
 }
 
-// Verificar limites do plano free
-async function verificarLimitePlano(usuarioId: string): Promise<{ permitido: boolean; mensagem?: string }> {
+// ========== MODELO DE PLANOS: TRIAL → EXPIRED → PRO ==========
+// Status possíveis: trial (7 dias), expired, pro
+
+interface StatusPlano {
+  status: "trial" | "expired" | "pro";
+  permitido: boolean;
+  diasRestantes?: number;
+  mensagem?: string;
+  bloqueiaEscrita: boolean;  // true = só consultas permitidas
+}
+
+async function verificarStatusPlano(usuarioId: string): Promise<StatusPlano> {
   try {
     const { data: usuario } = await supabase
       .from("usuarios")
-      .select("plano, mensagens_hoje, ultima_mensagem_data, limite_mensagens_dia")
+      .select("plano, trial_inicio, trial_fim")
       .eq("id", usuarioId)
       .single();
     
-    if (!usuario) return { permitido: true };
-    
-    // Plano pago = sem limites
-    if (usuario.plano && usuario.plano !== "free") {
-      return { permitido: true };
+    if (!usuario) {
+      return { status: "trial", permitido: true, bloqueiaEscrita: false };
     }
     
-    const hoje = new Date().toISOString().split("T")[0];
-    const ultimaData = usuario.ultima_mensagem_data;
+    const plano = usuario.plano || "trial";
+    const agora = new Date();
     
-    // Reset contador se é um novo dia
-    if (ultimaData !== hoje) {
-      await supabase.from("usuarios").update({
-        mensagens_hoje: 1,
-        ultima_mensagem_data: hoje
-      }).eq("id", usuarioId);
-      return { permitido: true };
+    // Plano Pro ativo = acesso total
+    if (plano === "pro") {
+      return { status: "pro", permitido: true, bloqueiaEscrita: false };
     }
     
-    // Verificar limite
-    const limite = usuario.limite_mensagens_dia || 20;
-    if ((usuario.mensagens_hoje || 0) >= limite) {
-      return {
-        permitido: false,
-        mensagem: `Você atingiu o limite de ${limite} mensagens do plano gratuito hoje! 🔒\n\n` +
-          `Amanhã seu limite será renovado.\n\n` +
-          `Para uso ilimitado, faça upgrade para o plano Premium! ⭐`
+    // Verifica se está no período de trial
+    const trialFim = usuario.trial_fim ? new Date(usuario.trial_fim) : null;
+    
+    if (trialFim) {
+      const diasRestantes = Math.ceil((trialFim.getTime() - agora.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (diasRestantes > 0) {
+        // Trial ainda ativo
+        return { 
+          status: "trial", 
+          permitido: true, 
+          diasRestantes,
+          bloqueiaEscrita: false 
+        };
+      } else {
+        // Trial expirado - atualiza status se necessário
+        if (plano !== "expired") {
+          await supabase.from("usuarios").update({ plano: "expired" }).eq("id", usuarioId);
+        }
+        
+        return { 
+          status: "expired", 
+          permitido: true,  // Permite consultas
+          bloqueiaEscrita: true,  // Bloqueia registros
+          mensagem: `Seu período de teste do Finax Pro terminou 😔\n\n` +
+            `Você ainda pode consultar seus resumos, mas para registrar novos gastos, ` +
+            `ative sua assinatura no site e envie o código de ativação aqui no WhatsApp.`
+        };
+      }
+    }
+    
+    // Fallback: considera como trial ativo
+    return { status: "trial", permitido: true, bloqueiaEscrita: false };
+  } catch (error) {
+    console.error("Erro ao verificar status do plano:", error);
+    return { status: "trial", permitido: true, bloqueiaEscrita: false };
+  }
+}
+
+// ========== VALIDAÇÃO DE CÓDIGO DE ATIVAÇÃO PRO ==========
+async function validarCodigoAtivacao(codigo: string, usuarioId: string): Promise<{ valido: boolean; mensagem: string }> {
+  try {
+    console.log(`🔑 Tentando validar código: ${codigo} para usuário: ${usuarioId}`);
+    
+    const { data, error } = await supabase.rpc("validar_codigo_ativacao", {
+      p_codigo: codigo,
+      p_usuario_id: usuarioId
+    });
+    
+    if (error) {
+      console.error("Erro ao validar código:", error);
+      return { 
+        valido: false, 
+        mensagem: "Ocorreu um erro ao validar o código. Tente novamente." 
       };
     }
     
-    // Incrementar contador
-    await supabase.from("usuarios").update({
-      mensagens_hoje: (usuario.mensagens_hoje || 0) + 1
-    }).eq("id", usuarioId);
-    
-    return { permitido: true };
+    if (data?.valido) {
+      return { 
+        valido: true, 
+        mensagem: "🎉 Perfeito! Seu Finax Pro foi ativado com sucesso.\n\n" +
+          "Agora você tem acesso ilimitado a todas as funcionalidades!" 
+      };
+    } else {
+      const erro = data?.erro;
+      let msg = "Esse código não é válido ou já foi utilizado 😕\n\n" +
+        "Por favor, verifique no site ou gere um novo código.";
+      
+      if (erro === "codigo_expirado") {
+        msg = "Esse código expirou 😕\n\nPor favor, gere um novo código no site.";
+      } else if (erro === "codigo_usado") {
+        msg = "Esse código já foi utilizado 😕\n\nCada código só pode ser usado uma vez.";
+      }
+      
+      return { valido: false, mensagem: msg };
+    }
   } catch (error) {
-    console.error("Erro ao verificar limite:", error);
-    return { permitido: true }; // Em caso de erro, permite
+    console.error("Erro na validação:", error);
+    return { 
+      valido: false, 
+      mensagem: "Ocorreu um erro ao validar o código. Tente novamente." 
+    };
   }
+}
+
+// Detecta se a mensagem parece um código de ativação
+function pareceCodigoAtivacao(mensagem: string): boolean {
+  const msg = mensagem.trim().toUpperCase();
+  // Padrões comuns de código: FINAX-XXXX, PRO-XXXX, códigos alfanuméricos de 6-20 chars
+  const padroes = [
+    /^FINAX-[A-Z0-9]{4,10}$/,
+    /^PRO-[A-Z0-9]{4,10}$/,
+    /^[A-Z0-9]{6,12}$/,  // Código simples alfanumérico
+    /^[A-Z]{2,4}-[A-Z0-9]{4,8}$/  // Padrão PREFIX-CODE
+  ];
+  
+  return padroes.some(p => p.test(msg));
 }
 
 // Envia mensagem via WhatsApp Business API (Meta)
@@ -842,13 +930,26 @@ serve(async (req) => {
 
     const usuarioId = usuario?.id;
 
-    // ========== VERIFICAR LIMITES DO PLANO FREE ==========
-    const limiteCheck = await verificarLimitePlano(usuarioId);
-    if (!limiteCheck.permitido) {
-      console.log("🚫 Usuário atingiu limite do plano free");
-      await sendWhatsAppMessage(phoneNumber, limiteCheck.mensagem!, messageSource);
+    // ========== VERIFICAR STATUS DO PLANO (TRIAL/EXPIRED/PRO) ==========
+    const statusPlano = await verificarStatusPlano(usuarioId);
+    console.log(`📋 Status do plano: ${statusPlano.status}, bloqueiaEscrita: ${statusPlano.bloqueiaEscrita}`);
+    
+    // ========== VERIFICAR SE MENSAGEM É CÓDIGO DE ATIVAÇÃO ==========
+    if (pareceCodigoAtivacao(messageText)) {
+      console.log("🔑 Detectado possível código de ativação");
+      const resultado = await validarCodigoAtivacao(messageText.trim(), usuarioId);
+      await sendWhatsAppMessage(phoneNumber, resultado.mensagem, messageSource);
+      
+      await supabase.from("historico_conversas").insert({
+        phone_number: phoneNumber,
+        user_id: usuarioId,
+        user_message: messageText,
+        ai_response: resultado.mensagem,
+        tipo: resultado.valido ? "ativacao_pro" : "codigo_invalido"
+      });
+      
       return new Response(
-        JSON.stringify({ status: "ok", message: "rate_limited" }),
+        JSON.stringify({ status: "ok", activation_result: resultado.valido }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -1037,6 +1138,16 @@ serve(async (req) => {
       if (gastosDetectados.length > 1) {
         console.log(`🔢 Detectados ${gastosDetectados.length} gastos na mensagem`);
         
+        // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
+        if (statusPlano.bloqueiaEscrita) {
+          console.log("🚫 Usuário com trial expirado tentando registrar gastos");
+          await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
+          return new Response(
+            JSON.stringify({ status: "ok", message: "trial_expired" }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
         const resultado = await processarMultiplosGastos(gastosDetectados, usuarioId, historicoRecente);
         
         if (resultado.sucesso > 0) {
@@ -1053,6 +1164,16 @@ serve(async (req) => {
         // Processa baseado no intent
         switch (intent.intent) {
           case "registrar_gasto": {
+            // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
+            if (statusPlano.bloqueiaEscrita) {
+              console.log("🚫 Usuário com trial expirado tentando registrar gasto");
+              await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
+              return new Response(
+                JSON.stringify({ status: "ok", message: "trial_expired" }),
+                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+              );
+            }
+            
             if (intent.valor) {
               const { error } = await supabase.from("transacoes").insert({
                 usuario_id: usuarioId,
@@ -1073,6 +1194,16 @@ serve(async (req) => {
           }
 
           case "registrar_entrada": {
+            // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
+            if (statusPlano.bloqueiaEscrita) {
+              console.log("🚫 Usuário com trial expirado tentando registrar entrada");
+              await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
+              return new Response(
+                JSON.stringify({ status: "ok", message: "trial_expired" }),
+                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+              );
+            }
+            
             if (intent.valor) {
               const { error } = await supabase.from("transacoes").insert({
                 usuario_id: usuarioId,
@@ -1093,6 +1224,16 @@ serve(async (req) => {
           }
 
           case "criar_parcelamento": {
+            // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
+            if (statusPlano.bloqueiaEscrita) {
+              console.log("🚫 Usuário com trial expirado tentando criar parcelamento");
+              await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
+              return new Response(
+                JSON.stringify({ status: "ok", message: "trial_expired" }),
+                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+              );
+            }
+            
             if (intent.valor && intent.parcelas && intent.parcelas > 1) {
               const valorParcela = intent.valor / intent.parcelas;
               
@@ -1147,7 +1288,18 @@ serve(async (req) => {
           }
 
           case "criar_recorrente": {
+            // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
+            if (statusPlano.bloqueiaEscrita) {
+              console.log("🚫 Usuário com trial expirado tentando criar recorrente");
+              await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
+              return new Response(
+                JSON.stringify({ status: "ok", message: "trial_expired" }),
+                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+              );
+            }
+            
             console.log(`criar_recorrente - temValor: ${intent.valor !== null && intent.valor !== undefined} (${intent.valor}), temDiaMes: ${intent.dia_mes !== null && intent.dia_mes !== undefined} (${intent.dia_mes})`);
+
             
             // Verifica se tem todos os dados necessários
             const temValor = intent.valor !== null && intent.valor !== undefined && Number(intent.valor) > 0;

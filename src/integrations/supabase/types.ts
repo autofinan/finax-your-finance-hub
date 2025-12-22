@@ -107,6 +107,51 @@ export type Database = {
           },
         ]
       }
+      codigos_ativacao: {
+        Row: {
+          codigo: string
+          criado_em: string | null
+          id: string
+          usado: boolean | null
+          usado_em: string | null
+          usuario_id: string | null
+          valido_ate: string
+        }
+        Insert: {
+          codigo: string
+          criado_em?: string | null
+          id?: string
+          usado?: boolean | null
+          usado_em?: string | null
+          usuario_id?: string | null
+          valido_ate: string
+        }
+        Update: {
+          codigo?: string
+          criado_em?: string | null
+          id?: string
+          usado?: boolean | null
+          usado_em?: string | null
+          usuario_id?: string | null
+          valido_ate?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "codigos_ativacao_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "codigos_ativacao_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       employees: {
         Row: {
           created_at: string | null
@@ -653,14 +698,13 @@ export type Database = {
           ativo: boolean | null
           created_at: string | null
           id: string
-          limite_mensagens_dia: number | null
           limite_transacoes_mes: number | null
-          mensagens_hoje: number | null
           nome: string | null
           phone_number: string
           plano: string | null
           saldo_mensal: number | null
-          ultima_mensagem_data: string | null
+          trial_fim: string | null
+          trial_inicio: string | null
           ultimo_resumo: string | null
           updated_at: string | null
         }
@@ -668,14 +712,13 @@ export type Database = {
           ativo?: boolean | null
           created_at?: string | null
           id?: string
-          limite_mensagens_dia?: number | null
           limite_transacoes_mes?: number | null
-          mensagens_hoje?: number | null
           nome?: string | null
           phone_number: string
           plano?: string | null
           saldo_mensal?: number | null
-          ultima_mensagem_data?: string | null
+          trial_fim?: string | null
+          trial_inicio?: string | null
           ultimo_resumo?: string | null
           updated_at?: string | null
         }
@@ -683,14 +726,13 @@ export type Database = {
           ativo?: boolean | null
           created_at?: string | null
           id?: string
-          limite_mensagens_dia?: number | null
           limite_transacoes_mes?: number | null
-          mensagens_hoje?: number | null
           nome?: string | null
           phone_number?: string
           plano?: string | null
           saldo_mensal?: number | null
-          ultima_mensagem_data?: string | null
+          trial_fim?: string | null
+          trial_inicio?: string | null
           ultimo_resumo?: string | null
           updated_at?: string | null
         }
@@ -1114,6 +1156,10 @@ export type Database = {
         Returns: {
           id: string
         }[]
+      }
+      validar_codigo_ativacao: {
+        Args: { p_codigo: string; p_usuario_id: string }
+        Returns: Json
       }
     }
     Enums: {
