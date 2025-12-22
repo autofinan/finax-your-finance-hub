@@ -705,6 +705,8 @@ export type Database = {
           saldo_mensal: number | null
           trial_fim: string | null
           trial_inicio: string | null
+          ultimo_relatorio_mensal: string | null
+          ultimo_relatorio_semanal: string | null
           ultimo_resumo: string | null
           updated_at: string | null
         }
@@ -719,6 +721,8 @@ export type Database = {
           saldo_mensal?: number | null
           trial_fim?: string | null
           trial_inicio?: string | null
+          ultimo_relatorio_mensal?: string | null
+          ultimo_relatorio_semanal?: string | null
           ultimo_resumo?: string | null
           updated_at?: string | null
         }
@@ -733,6 +737,8 @@ export type Database = {
           saldo_mensal?: number | null
           trial_fim?: string | null
           trial_inicio?: string | null
+          ultimo_relatorio_mensal?: string | null
+          ultimo_relatorio_semanal?: string | null
           ultimo_resumo?: string | null
           updated_at?: string | null
         }
@@ -1113,6 +1119,7 @@ export type Database = {
         Args: { p_usuario: string }
         Returns: undefined
       }
+      fn_analise_consultiva: { Args: { p_usuario_id: string }; Returns: Json }
       fn_close_card_faturas: { Args: never; Returns: undefined }
       fn_daily_jobs: { Args: never; Returns: undefined }
       fn_generate_parcelas: {
@@ -1120,6 +1127,18 @@ export type Database = {
         Returns: undefined
       }
       fn_process_recorrentes: { Args: never; Returns: undefined }
+      fn_relatorio_mensal: {
+        Args: { p_ano?: number; p_mes?: number; p_usuario_id: string }
+        Returns: Json
+      }
+      fn_relatorio_semanal: {
+        Args: {
+          p_data_fim?: string
+          p_data_inicio?: string
+          p_usuario_id: string
+        }
+        Returns: Json
+      }
       fn_update_resumo_mensal: {
         Args: { p_ano: number; p_mes: number; p_user_id: string }
         Returns: undefined
