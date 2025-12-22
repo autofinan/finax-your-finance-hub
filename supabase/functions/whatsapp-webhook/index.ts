@@ -16,7 +16,15 @@ const WHATSAPP_VERIFY_TOKEN = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
 const WHATSAPP_ACCESS_TOKEN = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
 const WHATSAPP_PHONE_NUMBER_ID = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
 
+// Vonage (Sandbox)
+const VONAGE_API_KEY = Deno.env.get("VONAGE_API_KEY");
+const VONAGE_API_SECRET = Deno.env.get("VONAGE_API_SECRET");
+const VONAGE_WHATSAPP_NUMBER = Deno.env.get("VONAGE_WHATSAPP_NUMBER");
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// Tipo de origem da mensagem
+type MessageSource = "meta" | "vonage";
 
 // Tipos de intent que a IA pode detectar
 interface ExtractedIntent {
@@ -183,12 +191,10 @@ Se é uma consulta, apresente os dados de forma clara e organizada.`
 }
 
 // Envia mensagem via WhatsApp Business API (Meta)
-async function sendWhatsAppMessage(to: string, text: string): Promise<boolean> {
+async function sendWhatsAppMeta(to: string, text: string): Promise<boolean> {
   try {
-    // Remove formatação extra do número
     const cleanNumber = to.replace(/\D/g, "");
-    
-    console.log(`Enviando mensagem para ${cleanNumber}...`);
+    console.log(`[Meta] Enviando mensagem para ${cleanNumber}...`);
     
     const response = await fetch(
       `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
@@ -208,17 +214,60 @@ async function sendWhatsAppMessage(to: string, text: string): Promise<boolean> {
     );
 
     const result = await response.json();
-    console.log("Meta WhatsApp response:", JSON.stringify(result));
+    console.log("[Meta] Response:", JSON.stringify(result));
     
     if (!response.ok) {
-      console.error("Erro na API Meta:", result);
+      console.error("[Meta] Erro na API:", result);
     }
     
     return response.ok;
   } catch (error) {
-    console.error("Erro ao enviar WhatsApp via Meta:", error);
+    console.error("[Meta] Erro ao enviar:", error);
     return false;
   }
+}
+
+// Envia mensagem via Vonage (Sandbox)
+async function sendWhatsAppVonage(to: string, text: string): Promise<boolean> {
+  try {
+    const cleanNumber = to.replace(/\D/g, "");
+    console.log(`[Vonage] Enviando mensagem para ${cleanNumber}...`);
+    
+    const response = await fetch("https://messages-sandbox.nexmo.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${btoa(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`)}`,
+      },
+      body: JSON.stringify({
+        from: VONAGE_WHATSAPP_NUMBER,
+        to: cleanNumber,
+        message_type: "text",
+        text: text,
+        channel: "whatsapp",
+      }),
+    });
+
+    const result = await response.json();
+    console.log("[Vonage] Response:", JSON.stringify(result));
+
+    if (!response.ok) {
+      console.error("[Vonage] Erro na API:", result);
+    }
+
+    return response.ok;
+  } catch (error) {
+    console.error("[Vonage] Erro ao enviar:", error);
+    return false;
+  }
+}
+
+// Envia mensagem usando a origem correta
+async function sendWhatsAppMessage(to: string, text: string, source: MessageSource): Promise<boolean> {
+  if (source === "vonage") {
+    return sendWhatsAppVonage(to, text);
+  }
+  return sendWhatsAppMeta(to, text);
 }
 
 // Busca resumo financeiro do mês
@@ -321,38 +370,69 @@ serve(async (req) => {
     const json = await req.json();
     console.log("Webhook payload:", JSON.stringify(json));
 
-    // Formato Meta WhatsApp Business API
-    const entry = json.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
+    let phoneNumber: string;
+    let messageText: string;
+    let messageSource: MessageSource;
+
+    // ========== DETECTAR ORIGEM: VONAGE ou META ==========
     
-    // Ignora notificações que não são mensagens (ex: status updates)
-    if (!value?.messages || value.messages.length === 0) {
-      console.log("Ignorando: não é uma mensagem de usuário (pode ser status update)");
-      return new Response(JSON.stringify({ status: "ok" }), {
+    // Formato Vonage: { from, to, text, channel, message_type, ... }
+    if (json.channel === "whatsapp" && json.from && json.text !== undefined) {
+      console.log("📱 Detectado formato VONAGE");
+      messageSource = "vonage";
+      phoneNumber = json.from;
+      messageText = json.text || "";
+      
+      // Ignora se não for mensagem de texto
+      if (json.message_type !== "text" || !messageText) {
+        console.log(`Ignorando mensagem Vonage do tipo: ${json.message_type}`);
+        return new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+    // Formato Meta: { entry: [{ changes: [{ value: { messages: [...] } }] }] }
+    else if (json.entry?.[0]?.changes?.[0]?.value) {
+      console.log("📱 Detectado formato META");
+      messageSource = "meta";
+      
+      const value = json.entry[0].changes[0].value;
+      
+      // Ignora notificações que não são mensagens (ex: status updates)
+      if (!value.messages || value.messages.length === 0) {
+        console.log("Ignorando: não é uma mensagem de usuário (pode ser status update)");
+        return new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const message = value.messages[0];
+      phoneNumber = message.from;
+      messageText = message.text?.body || "";
+      
+      // Só processa mensagens de texto
+      if (message.type !== "text" || !messageText) {
+        console.log(`Ignorando mensagem Meta do tipo: ${message.type}`);
+        return new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+    // Formato desconhecido
+    else {
+      console.log("❌ Formato de mensagem não reconhecido");
+      return new Response(JSON.stringify({ status: "ok", message: "Unknown format" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const message = value.messages[0];
-    const from = message.from; // Número do usuário
-    const body = message.text?.body || ""; // Texto da mensagem
-    const messageType = message.type;
+    console.log(`[${messageSource.toUpperCase()}] Mensagem de ${phoneNumber}: ${messageText}`);
 
-    // Só processa mensagens de texto por enquanto
-    if (messageType !== "text" || !body) {
-      console.log(`Ignorando mensagem do tipo: ${messageType}`);
-      return new Response(JSON.stringify({ status: "ok" }), {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const phoneNumber = from;
-    console.log(`Mensagem recebida de ${phoneNumber}: ${body}`);
-
-    if (!phoneNumber || !body) {
+    if (!phoneNumber || !messageText) {
       return new Response(JSON.stringify({ status: "ok" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -381,7 +461,7 @@ serve(async (req) => {
     const historicoRecente = await getHistoricoRecente(phoneNumber);
 
     // 3. Extrai intent e entidades
-    const intent = await extractIntent(body, historicoRecente);
+    const intent = await extractIntent(messageText, historicoRecente);
     console.log("Intent detectado:", JSON.stringify(intent));
 
     let acaoRealizada = "";
@@ -596,19 +676,19 @@ serve(async (req) => {
       ? `${acaoRealizada}\n\n${contextoDados}`.trim() 
       : "";
     
-    const aiResponse = await generateResponse(body, contextoCompleto, acaoRealizada);
+    const aiResponse = await generateResponse(messageText, contextoCompleto, acaoRealizada);
 
     // 6. Salva histórico
     await supabase.from("historico_conversas").insert({
       phone_number: phoneNumber,
       user_id: usuarioId,
-      user_message: body,
+      user_message: messageText,
       ai_response: aiResponse,
       tipo: intent.intent
     });
 
-    // 7. Envia resposta via WhatsApp
-    await sendWhatsAppMessage(phoneNumber, aiResponse);
+    // 7. Envia resposta via WhatsApp (usando a mesma origem que recebeu)
+    await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
 
     return new Response(
       JSON.stringify({ status: "ok", message_sent: true }),
