@@ -377,26 +377,65 @@ async function generateResponse(
         messages: [
           {
             role: "system",
-            content: `Você é o Finax, um assistente financeiro pessoal amigável e inteligente via WhatsApp.
+            content: `You are Finax, a personal finance assistant operating via WhatsApp.
 
-PERSONALIDADE:
-- Seja amigável, use emojis com moderação (1-2 por mensagem)
-- Formate bem suas respostas com quebras de linha para facilitar leitura
-- Seja conciso mas informativo
-- Use linguagem natural, como se fosse um amigo ajudando
+CRITICAL SCOPE RULE (NON-NEGOTIABLE):
+You are NOT a general-purpose AI.
+Your ONLY allowed domain is PERSONAL FINANCE.
 
-FORMATO DAS RESPOSTAS:
-- Use linhas em branco para separar seções
-- Liste itens com • ou -
-- Destaque valores importantes com **negrito**
-- Nunca envie tudo em um único parágrafo corrido
+You are allowed to:
+- Register expenses and income
+- Understand natural language descriptions of money movements
+- Handle recurring expenses and installments
+- Provide financial summaries and reports
+- Help users understand their financial situation
+- Give practical tips about budgeting and money organization
+- Explain how Finax works
 
-${acaoRealizada ? `AÇÃO REALIZADA:\n${acaoRealizada}\n` : ""}
+You are NOT allowed to:
+- Answer general knowledge questions
+- Engage in casual conversation unrelated to finance
+- Talk about politics, news, entertainment, recipes, jokes, or personal topics
+- Act as a generic assistant or chatbot
 
-${context ? `CONTEXTO FINANCEIRO:\n${context}` : ""}
+If a user message is OUTSIDE the finance domain:
+- Politely refuse
+- Explain that you are focused on financial organization
+- Redirect the user back to a finance-related action
 
-Responda de forma natural e útil. Se uma transação foi registrada, confirme com detalhes.
-Se é uma consulta, apresente os dados de forma clara e organizada.`
+IMPORTANT:
+- You must ALWAYS understand the user's message, even if it is informal or ambiguous.
+- Do NOT rely on rigid patterns or keywords.
+- Use reasoning and context to determine intent.
+- If a message can reasonably relate to finances, treat it as finance.
+- When in doubt, ask a clarifying question related to finances.
+- ALWAYS respond in Portuguese (Brazilian).
+
+REFUSAL TEMPLATE (use when message is outside finance domain):
+"Meu foco é te ajudar a organizar suas finanças 💰
+Posso registrar gastos, mostrar resumos ou ajudar com orçamento.
+O que você gostaria de fazer?"
+
+ABSOLUTE RULE:
+You must NEVER calculate financial totals.
+All monetary calculations are provided by the system and are always correct.
+Just format and present the data provided.
+
+FORMATTING RULES:
+- Be friendly, use emojis sparingly (1-2 per message)
+- Format responses with line breaks for readability
+- Be concise but informative
+- Use natural language, like a helpful friend
+- Use blank lines to separate sections
+- List items with • or -
+- Highlight important values with *bold*
+
+${acaoRealizada ? `ACTION PERFORMED:\n${acaoRealizada}\n` : ""}
+
+${context ? `FINANCIAL CONTEXT (pre-calculated - DO NOT recalculate):\n${context}` : ""}
+
+Respond naturally and helpfully. If a transaction was registered, confirm with details.
+If it's a query, present the data clearly and organized.`
           },
           { role: "user", content: userMessage }
         ],
@@ -408,6 +447,57 @@ Se é uma consulta, apresente os dados de forma clara e organizada.`
   } catch (error) {
     console.error("Erro ao gerar resposta:", error);
     return "Ops! Tive um probleminha. Tente novamente em alguns segundos. 🔄";
+  }
+}
+
+// Verificar limites do plano free
+async function verificarLimitePlano(usuarioId: string): Promise<{ permitido: boolean; mensagem?: string }> {
+  try {
+    const { data: usuario } = await supabase
+      .from("usuarios")
+      .select("plano, mensagens_hoje, ultima_mensagem_data, limite_mensagens_dia")
+      .eq("id", usuarioId)
+      .single();
+    
+    if (!usuario) return { permitido: true };
+    
+    // Plano pago = sem limites
+    if (usuario.plano && usuario.plano !== "free") {
+      return { permitido: true };
+    }
+    
+    const hoje = new Date().toISOString().split("T")[0];
+    const ultimaData = usuario.ultima_mensagem_data;
+    
+    // Reset contador se é um novo dia
+    if (ultimaData !== hoje) {
+      await supabase.from("usuarios").update({
+        mensagens_hoje: 1,
+        ultima_mensagem_data: hoje
+      }).eq("id", usuarioId);
+      return { permitido: true };
+    }
+    
+    // Verificar limite
+    const limite = usuario.limite_mensagens_dia || 20;
+    if ((usuario.mensagens_hoje || 0) >= limite) {
+      return {
+        permitido: false,
+        mensagem: `Você atingiu o limite de ${limite} mensagens do plano gratuito hoje! 🔒\n\n` +
+          `Amanhã seu limite será renovado.\n\n` +
+          `Para uso ilimitado, faça upgrade para o plano Premium! ⭐`
+      };
+    }
+    
+    // Incrementar contador
+    await supabase.from("usuarios").update({
+      mensagens_hoje: (usuario.mensagens_hoje || 0) + 1
+    }).eq("id", usuarioId);
+    
+    return { permitido: true };
+  } catch (error) {
+    console.error("Erro ao verificar limite:", error);
+    return { permitido: true }; // Em caso de erro, permite
   }
 }
 
@@ -751,6 +841,17 @@ serve(async (req) => {
     }
 
     const usuarioId = usuario?.id;
+
+    // ========== VERIFICAR LIMITES DO PLANO FREE ==========
+    const limiteCheck = await verificarLimitePlano(usuarioId);
+    if (!limiteCheck.permitido) {
+      console.log("🚫 Usuário atingiu limite do plano free");
+      await sendWhatsAppMessage(phoneNumber, limiteCheck.mensagem!, messageSource);
+      return new Response(
+        JSON.stringify({ status: "ok", message: "rate_limited" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // 2. Busca histórico recente para contexto
     const historicoRecente = await getHistoricoRecente(phoneNumber);
@@ -1150,11 +1251,13 @@ serve(async (req) => {
                 ).join("\n");
             }
 
+            // TOTAIS PRÉ-CALCULADOS - a IA NÃO deve recalcular
             contextoDados = `📅 Resumo do mês atual:\n\n` +
-              `💵 Entradas: R$ ${resumo.totalEntradas.toFixed(2)}\n` +
-              `💸 Saídas: R$ ${resumo.totalSaidas.toFixed(2)}\n` +
-              `📈 Saldo: R$ ${resumo.saldo.toFixed(2)}` +
-              categoriasTexto;
+              `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
+              `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
+              `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*` +
+              categoriasTexto +
+              `\n\n⚠️ IMPORTANTE: Estes valores são EXATOS e pré-calculados. NÃO recalcule.`;
             break;
           }
 
@@ -1195,7 +1298,14 @@ serve(async (req) => {
                   return `• ${data}: ${sinal}R$ ${Number(t.valor).toFixed(2)} - ${desc}${parcela}`;
                 }).join("\n");
 
+              // TOTAIS PRÉ-CALCULADOS
               contextoDados = `📋 Suas transações do mês:\n\n${transacoesFormatadas}\n\n` +
+                `═══════════════════════════════\n` +
+                `📊 *TOTAIS (pré-calculados - não recalcule):*\n` +
+                `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
+                `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
+                `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*\n` +
+                `═══════════════════════════════\n` +
                 `Total: ${resumo.transacoes.length} transações`;
             } else {
               contextoDados = "Você ainda não tem transações registradas este mês.";
