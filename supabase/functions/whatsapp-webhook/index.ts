@@ -58,15 +58,25 @@ interface ExtractedIntent {
   categoria_consulta?: string;
 }
 
-// Interface para fluxo ativo (estado persistente)
+// Interface ATUALIZADA para fluxo ativo com ultima_pergunta
 interface FluxoAtivo {
   intent: string;
   dados_coletados: Partial<ExtractedIntent>;
   dados_faltantes: string[];
+  ultima_pergunta: string;  // NOVO: Contexto da última pergunta
   created_at: string;
 }
 
-// ========== FIX 1 & 4: FUNÇÕES DE CONTROLE DE ESTADO ==========
+// Interface para resposta da IA cognitiva
+interface InterpretacaoIA {
+  campo?: string;
+  valor?: any;
+  confianca: number;
+  intencao: "continuar_fluxo" | "cancelar" | "novo_comando" | "indefinida";
+  mensagem_clarificacao?: string;
+}
+
+// ========== FUNÇÕES DE CONTROLE DE ESTADO ==========
 
 // Busca fluxo ativo para o usuário
 async function getFluxoAtivo(phoneNumber: string): Promise<FluxoAtivo | null> {
@@ -88,7 +98,7 @@ async function getFluxoAtivo(phoneNumber: string): Promise<FluxoAtivo | null> {
     const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
     
     if (diffMinutos > 10) {
-      console.log("Fluxo ativo expirado (mais de 10 min)");
+      console.log("⏰ Fluxo ativo expirado (mais de 10 min)");
       return null;
     }
 
@@ -99,7 +109,7 @@ async function getFluxoAtivo(phoneNumber: string): Promise<FluxoAtivo | null> {
   }
 }
 
-// Salva fluxo ativo para continuar depois
+// Salva fluxo ativo ATUALIZADO com ultima_pergunta
 async function salvarFluxoAtivo(
   phoneNumber: string, 
   userId: string,
@@ -107,12 +117,14 @@ async function salvarFluxoAtivo(
   dadosColetados: Partial<ExtractedIntent>,
   dadosFaltantes: string[],
   mensagemUsuario: string,
-  respostaBot: string
+  respostaBot: string,
+  ultimaPergunta: string  // NOVO parâmetro
 ): Promise<void> {
   const fluxo: FluxoAtivo = {
     intent: intentOriginal,
     dados_coletados: dadosColetados,
     dados_faltantes: dadosFaltantes,
+    ultima_pergunta: ultimaPergunta,  // NOVO
     created_at: new Date().toISOString()
   };
 
@@ -125,59 +137,112 @@ async function salvarFluxoAtivo(
     resumo: JSON.stringify(fluxo)
   });
 
-  console.log("Fluxo ativo salvo:", JSON.stringify(fluxo));
+  console.log("💾 Fluxo ativo salvo:", JSON.stringify(fluxo));
 }
 
 // Limpa fluxo ativo após conclusão
 async function limparFluxoAtivo(phoneNumber: string): Promise<void> {
-  // Marca fluxos ativos como concluídos
   await supabase
     .from("historico_conversas")
     .update({ tipo: "fluxo_concluido" })
     .eq("phone_number", phoneNumber)
     .like("tipo", "fluxo_ativo_%");
     
-  console.log("Fluxo ativo limpo para:", phoneNumber);
+  console.log("🧹 Fluxo ativo limpo para:", phoneNumber);
 }
 
-// Extrai dados adicionais de uma mensagem de resposta
-async function extractDadosResposta(message: string, dadosFaltantes: string[]): Promise<Partial<ExtractedIntent>> {
-  const msgTrim = message.trim().toLowerCase();
-  const resultado: Partial<ExtractedIntent> = {};
+// ========== NOVA FUNÇÃO: IA COMO ORQUESTRADORA COGNITIVA ==========
+// Substitui extractDadosResposta - agora a IA interpreta com CONTEXTO COMPLETO
+async function interpretarRespostaComContexto(
+  mensagemUsuario: string, 
+  fluxoAtivo: FluxoAtivo
+): Promise<InterpretacaoIA> {
+  console.log("🧠 Interpretando resposta com contexto completo...");
+  console.log(`   Fluxo: ${fluxoAtivo.intent}`);
+  console.log(`   Dados coletados: ${JSON.stringify(fluxoAtivo.dados_coletados)}`);
+  console.log(`   Dados faltantes: ${fluxoAtivo.dados_faltantes.join(", ")}`);
+  console.log(`   Última pergunta: ${fluxoAtivo.ultima_pergunta}`);
+  console.log(`   Mensagem do usuário: ${mensagemUsuario}`);
   
-  // CORREÇÃO 2: Regex melhorado para detectar "dia X", "no dia X", "todo dia X"
-  if (dadosFaltantes.includes("dia_mes")) {
-    // Padrões: "10", "dia 10", "no dia 10", "todo dia 10", "dia: 10"
-    const matchDia = msgTrim.match(/^(?:no\s+)?(?:todo\s+)?(?:dia[:\s]*)?(\d{1,2})$/i);
-    if (matchDia) {
-      const dia = parseInt(matchDia[1], 10);
-      if (dia >= 1 && dia <= 31) {
-        console.log(`✅ Extração direta: dia_mes = ${dia}`);
-        resultado.dia_mes = dia;
-      }
-    }
-  }
-  
-  // Se a mensagem é um valor monetário e estamos esperando valor
-  if (dadosFaltantes.includes("valor") && !resultado.dia_mes) {
-    const matchValor = msgTrim.match(/(?:R\$\s*)?(\d+(?:[.,]\d{1,2})?)/);
-    if (matchValor) {
-      const valor = parseFloat(matchValor[1].replace(",", "."));
-      if (valor > 0) {
-        console.log(`✅ Extração direta: valor = ${valor}`);
-        resultado.valor = valor;
-      }
-    }
-  }
-  
-  // Se já conseguiu extrair algo diretamente, retorna SEM nulls
-  if (Object.keys(resultado).length > 0) {
-    console.log("Retornando dados extraídos diretamente (sem nulls):", JSON.stringify(resultado));
-    return resultado;
-  }
-  
-  // Fallback: usar IA para extrair dados mais complexos
   try {
+    // Prompt dinâmico com CONTEXTO COMPLETO - IA como intérprete cognitivo
+    const prompt = `Você é um assistente financeiro conversacional INTELIGENTE chamado Finax.
+Sua tarefa é INTERPRETAR a resposta do usuário no contexto da conversa ativa.
+
+═══════════════════════════════════════════════════════════
+CONTEXTO DO FLUXO ATIVO
+═══════════════════════════════════════════════════════════
+Fluxo em andamento: ${fluxoAtivo.intent}
+Dados já coletados: ${JSON.stringify(fluxoAtivo.dados_coletados, null, 2)}
+Dados que ainda precisamos: ${fluxoAtivo.dados_faltantes.join(", ")}
+
+═══════════════════════════════════════════════════════════
+ÚLTIMA PERGUNTA FEITA AO USUÁRIO
+═══════════════════════════════════════════════════════════
+"${fluxoAtivo.ultima_pergunta}"
+
+═══════════════════════════════════════════════════════════
+MENSAGEM DO USUÁRIO (resposta à pergunta acima)
+═══════════════════════════════════════════════════════════
+"${mensagemUsuario}"
+
+═══════════════════════════════════════════════════════════
+REGRAS DE INTERPRETAÇÃO
+═══════════════════════════════════════════════════════════
+
+1. NÚMEROS POR EXTENSO - Converta para valor numérico:
+   - "dez" → 10
+   - "vinte" → 20
+   - "vinte e três" → 23
+   - "trinta e um" → 31
+   - "quinze" → 15
+   - "acho que vinte e três" → 23
+
+2. PADRÕES DE DIA DO MÊS:
+   - "dia 10" → dia_mes: 10
+   - "no dia 15" → dia_mes: 15
+   - "acho que dia vinte e três" → dia_mes: 23
+   - "todo dia 5" → dia_mes: 5
+   - "23" (número puro) → dia_mes: 23
+
+3. VALORES MONETÁRIOS:
+   - "59,90" → valor: 59.90
+   - "R$ 100" → valor: 100
+   - "cem reais" → valor: 100
+   - "cinquenta e nove e noventa" → valor: 59.90
+
+4. INTENÇÕES ESPECIAIS:
+   - "cancelar", "cancela", "parar", "deixa pra lá", "esquece" → intencao: "cancelar"
+   - Se o usuário menciona algo COMPLETAMENTE diferente (ex: "gastei 50 no mercado") → intencao: "novo_comando"
+   - Se a mensagem responde à pergunta → intencao: "continuar_fluxo"
+   - Se não faz sentido → intencao: "indefinida"
+
+5. REGRA CRÍTICA:
+   - Interprete a mensagem COMO RESPOSTA À PERGUNTA, não como comando novo
+   - Se a pergunta era "qual dia do mês?" e o usuário disse "vinte e três", isso É o dia 23
+   - Não peça confirmação, apenas extraia o valor
+
+═══════════════════════════════════════════════════════════
+FORMATO DE RESPOSTA (JSON OBRIGATÓRIO)
+═══════════════════════════════════════════════════════════
+{
+  "campo": "dia_mes",           // ou "valor", "descricao", etc. - qual dado foi informado
+  "valor": 23,                  // o valor extraído/convertido
+  "confianca": 0.95,            // 0 a 1, quão certo você está
+  "intencao": "continuar_fluxo" // "continuar_fluxo", "cancelar", "novo_comando" ou "indefinida"
+}
+
+Se intencao for "indefinida", adicione:
+{
+  "campo": null,
+  "valor": null,
+  "confianca": 0.2,
+  "intencao": "indefinida",
+  "mensagem_clarificacao": "Não entendi sua resposta. Você pode me dizer o dia do mês? Por exemplo: 10, dia 15, ou vinte e três."
+}
+
+RESPONDA APENAS COM O JSON, SEM EXPLICAÇÕES.`;
+
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -187,51 +252,30 @@ async function extractDadosResposta(message: string, dadosFaltantes: string[]): 
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          {
-            role: "system",
-            // CORREÇÃO 3: Prompt ajustado para NÃO retornar nulls
-            content: `Você é um extrator de dados. O usuário está respondendo uma pergunta sobre dados financeiros.
-Extraia APENAS os seguintes dados da mensagem: ${dadosFaltantes.join(", ")}
-
-REGRAS:
-- valor: números como "59,90", "R$ 100", "50 reais" → converter para number
-- dia_mes: números de 1 a 31 (quando for resposta a "qual dia do mês"). Ex: "dia 10", "no dia 15", "10"
-- categoria: alimentação, transporte, lazer, moradia, saúde, educação, compras, tecnologia, assinaturas, outros
-- descricao: texto descritivo do gasto
-- tipo_recorrencia: "mensal", "semanal", "anual"
-
-IMPORTANTE: 
-- Se a mensagem for APENAS um número (ex: "10", "15"), e dia_mes estiver nos dados faltantes, interprete como dia_mes
-- Se a mensagem for "dia X" ou "no dia X", extraia X como dia_mes
-- Se a mensagem for um valor monetário, e valor estiver nos dados faltantes, interprete como valor
-
-RESPONDA APENAS COM JSON VÁLIDO contendo SOMENTE os campos que você conseguiu extrair.
-NÃO inclua campos com valor null. Exemplo correto: {"dia_mes": 10}
-Exemplo ERRADO: {"dia_mes": 10, "valor": null, "categoria": null}`
-          },
-          { role: "user", content: message }
+          { role: "system", content: prompt },
+          { role: "user", content: mensagemUsuario }
         ],
       }),
     });
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "{}";
-    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    console.log("Dados extraídos da resposta (via IA):", cleanJson);
+    const content = data.choices?.[0]?.message?.content || '{"intencao": "indefinida", "confianca": 0}';
     
-    // CORREÇÃO 3: Filtrar nulls da resposta da IA também
-    const parsed = JSON.parse(cleanJson);
-    const filtrado: Partial<ExtractedIntent> = {};
-    Object.entries(parsed).forEach(([key, value]) => {
-      if (value !== null && value !== undefined) {
-        (filtrado as any)[key] = value;
-      }
-    });
-    console.log("Dados filtrados (sem nulls):", JSON.stringify(filtrado));
-    return filtrado;
+    // Limpa markdown do JSON
+    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    console.log("🧠 Interpretação da IA (raw):", cleanJson);
+    
+    const interpretacao: InterpretacaoIA = JSON.parse(cleanJson);
+    console.log("🧠 Interpretação processada:", JSON.stringify(interpretacao));
+    
+    return interpretacao;
   } catch (error) {
-    console.error("Erro ao extrair dados da resposta:", error);
-    return {};
+    console.error("❌ Erro ao interpretar resposta:", error);
+    return {
+      confianca: 0,
+      intencao: "indefinida",
+      mensagem_clarificacao: "Desculpe, não consegui processar sua resposta. Pode tentar novamente?"
+    };
   }
 }
 
@@ -447,17 +491,15 @@ async function sendWhatsAppMessage(to: string, text: string, source: MessageSour
   return sendWhatsAppMeta(to, text);
 }
 
-// ========== FIX 2: RESUMO MENSAL FILTRADO ==========
-// Busca resumo financeiro do mês (APENAS transações do mês atual, não futuras)
+// Busca resumo financeiro do mês
 async function getResumoMes(usuarioId: string) {
   const inicioMes = new Date();
   inicioMes.setDate(1);
   inicioMes.setHours(0, 0, 0, 0);
   
-  // FIX 2: Calcular fim do mês atual para não incluir parcelas futuras
   const fimMes = new Date(inicioMes);
   fimMes.setMonth(fimMes.getMonth() + 1);
-  fimMes.setDate(0); // Último dia do mês atual
+  fimMes.setDate(0);
   fimMes.setHours(23, 59, 59, 999);
   
   const { data: transacoes } = await supabase
@@ -465,7 +507,7 @@ async function getResumoMes(usuarioId: string) {
     .select("valor, tipo, categoria, observacao, descricao, data, parcela")
     .eq("usuario_id", usuarioId)
     .gte("data", inicioMes.toISOString())
-    .lte("data", fimMes.toISOString()); // FIX 2: Filtro superior
+    .lte("data", fimMes.toISOString());
 
   let totalEntradas = 0;
   let totalSaidas = 0;
@@ -496,7 +538,6 @@ async function getTransacoesPorCategoria(usuarioId: string, categoria: string, p
   inicioMes.setDate(1);
   inicioMes.setHours(0, 0, 0, 0);
   
-  // FIX 2: Também aplicar filtro de fim de mês aqui
   const fimMes = new Date(inicioMes);
   fimMes.setMonth(fimMes.getMonth() + 1);
   fimMes.setDate(0);
@@ -520,7 +561,7 @@ async function getHistoricoRecente(phoneNumber: string): Promise<string> {
     .from("historico_conversas")
     .select("user_message, ai_response")
     .eq("phone_number", phoneNumber)
-    .not("tipo", "like", "fluxo_ativo_%") // Ignora fluxos ativos no histórico
+    .not("tipo", "like", "fluxo_ativo_%")
     .order("created_at", { ascending: false })
     .limit(3);
 
@@ -531,12 +572,9 @@ async function getHistoricoRecente(phoneNumber: string): Promise<string> {
   ).join("\n\n");
 }
 
-// ========== FIX 3: DETECTAR E PROCESSAR MÚLTIPLOS GASTOS ==========
+// Detectar múltiplos gastos
 function detectarMultiplosGastos(mensagem: string): string[] {
-  // Divide por quebras de linha
   const linhas = mensagem.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  
-  // Padrões que indicam um gasto
   const padraoGasto = /(?:gast[ei|ou]|pagu[ei|ou]|compr[ei|ou]|compra|gasto|pagamento)\s*(?:de\s*)?(?:R\$\s*)?\d+(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?\s*(?:reais?|R\$)?\s*(?:em|no|na|de|com)/i;
   
   const gastosDetectados: string[] = [];
@@ -547,9 +585,7 @@ function detectarMultiplosGastos(mensagem: string): string[] {
     }
   }
   
-  // Se não detectou múltiplos por linha, tenta detectar padrões consecutivos na mesma linha
   if (gastosDetectados.length <= 1 && linhas.length === 1) {
-    // Tenta separar por "e" ou "," quando há múltiplos valores
     const padraoMultiplo = /(?:gast[ei|ou]|pagu[ei|ou])\s*(?:R\$\s*)?\d+(?:[.,]\d{2})?\s*(?:em|no|na|de|com)\s*\w+/gi;
     const matches = mensagem.match(padraoMultiplo);
     if (matches && matches.length > 1) {
@@ -568,7 +604,6 @@ async function processarMultiplosGastos(
   const resultados: { sucesso: number; detalhes: string[] } = { sucesso: 0, detalhes: [] };
   const transacoesParaInserir: any[] = [];
   
-  // Primeiro, extrai todos os intents
   for (const linha of linhas) {
     const intent = await extractIntent(linha, historicoRecente);
     console.log(`Processando linha: "${linha}" -> intent: ${JSON.stringify(intent)}`);
@@ -588,7 +623,6 @@ async function processarMultiplosGastos(
     }
   }
   
-  // FIX 3: Insere todos de uma vez (atomicidade)
   if (transacoesParaInserir.length > 0) {
     const { error } = await supabase.from("transacoes").insert(transacoesParaInserir);
     
@@ -643,14 +677,12 @@ serve(async (req) => {
 
     // ========== DETECTAR ORIGEM: VONAGE ou META ==========
     
-    // Formato Vonage: { from, to, text, channel, message_type, ... }
     if (json.channel === "whatsapp" && json.from && json.text !== undefined) {
       console.log("📱 Detectado formato VONAGE");
       messageSource = "vonage";
       phoneNumber = json.from;
       messageText = json.text || "";
       
-      // Ignora se não for mensagem de texto
       if (json.message_type !== "text" || !messageText) {
         console.log(`Ignorando mensagem Vonage do tipo: ${json.message_type}`);
         return new Response(JSON.stringify({ status: "ok" }), {
@@ -659,14 +691,12 @@ serve(async (req) => {
         });
       }
     }
-    // Formato Meta: { entry: [{ changes: [{ value: { messages: [...] } }] }] }
     else if (json.entry?.[0]?.changes?.[0]?.value) {
       console.log("📱 Detectado formato META");
       messageSource = "meta";
       
       const value = json.entry[0].changes[0].value;
       
-      // Ignora notificações que não são mensagens (ex: status updates)
       if (!value.messages || value.messages.length === 0) {
         console.log("Ignorando: não é uma mensagem de usuário (pode ser status update)");
         return new Response(JSON.stringify({ status: "ok" }), {
@@ -679,7 +709,6 @@ serve(async (req) => {
       phoneNumber = message.from;
       messageText = message.text?.body || "";
       
-      // Só processa mensagens de texto
       if (message.type !== "text" || !messageText) {
         console.log(`Ignorando mensagem Meta do tipo: ${message.type}`);
         return new Response(JSON.stringify({ status: "ok" }), {
@@ -688,7 +717,6 @@ serve(async (req) => {
         });
       }
     }
-    // Formato desconhecido
     else {
       console.log("❌ Formato de mensagem não reconhecido");
       return new Response(JSON.stringify({ status: "ok", message: "Unknown format" }), {
@@ -731,112 +759,178 @@ serve(async (req) => {
     let contextoDados = "";
     let intent: ExtractedIntent = { intent: "outro" };
 
-    // ========== FIX 1 & 4: VERIFICAR FLUXO ATIVO ==========
+    // ========== NOVA LÓGICA: VERIFICAR FLUXO ATIVO COM IA COGNITIVA ==========
     const fluxoAtivo = await getFluxoAtivo(phoneNumber);
     
     if (fluxoAtivo) {
       console.log("🔄 Fluxo ativo encontrado:", JSON.stringify(fluxoAtivo));
       
-      // Extrai dados da resposta do usuário
-      const novosDados = await extractDadosResposta(messageText, fluxoAtivo.dados_faltantes);
+      // NOVA ARQUITETURA: Usar IA como orquestradora cognitiva
+      const interpretacao = await interpretarRespostaComContexto(messageText, fluxoAtivo);
       
-      // CORREÇÃO 1: Mescla dados SEM sobrescrever com null/undefined
-      const dadosMesclados = { ...fluxoAtivo.dados_coletados };
-      Object.entries(novosDados).forEach(([key, value]) => {
-        if (value !== null && value !== undefined) {
-          (dadosMesclados as any)[key] = value;
+      console.log("🧠 Resultado da interpretação:", JSON.stringify(interpretacao));
+      
+      // ========== PROCESSAMENTO BASEADO NA INTENÇÃO ==========
+      
+      if (interpretacao.intencao === "cancelar") {
+        // Usuário quer cancelar o fluxo
+        console.log("❌ Usuário cancelou o fluxo");
+        await limparFluxoAtivo(phoneNumber);
+        
+        const resposta = "Ok, cancelei a operação! 👍 Como posso te ajudar?";
+        await sendWhatsAppMessage(phoneNumber, resposta, messageSource);
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: messageText,
+          ai_response: resposta,
+          tipo: "fluxo_cancelado"
+        });
+        
+        return new Response(
+          JSON.stringify({ status: "ok", message_sent: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      if (interpretacao.intencao === "novo_comando") {
+        // Usuário quer fazer algo diferente - limpa fluxo e processa normalmente
+        console.log("🔀 Usuário iniciou novo comando - limpando fluxo antigo");
+        await limparFluxoAtivo(phoneNumber);
+        // Continua para o fluxo normal abaixo (extractIntent)
+      }
+      
+      else if (interpretacao.intencao === "continuar_fluxo") {
+        // FLUXO PRINCIPAL: Continuar com os dados interpretados
+        console.log("✅ Continuando fluxo com dados interpretados");
+        
+        // Mescla dados SEM sobrescrever com null/undefined
+        const dadosMesclados = { ...fluxoAtivo.dados_coletados };
+        if (interpretacao.campo && interpretacao.valor !== null && interpretacao.valor !== undefined) {
+          (dadosMesclados as any)[interpretacao.campo] = interpretacao.valor;
+          console.log(`✅ Adicionado ${interpretacao.campo}: ${interpretacao.valor}`);
         }
-      });
-      console.log("✅ Dados mesclados (preservando contexto):", JSON.stringify(dadosMesclados));
-      console.log("Dados mesclados:", JSON.stringify(dadosMesclados));
-      
-      // Atualiza lista de dados faltantes
-      const dadosAindaFaltantes = fluxoAtivo.dados_faltantes.filter(campo => {
-        const valor = dadosMesclados[campo as keyof ExtractedIntent];
-        return valor === null || valor === undefined;
-      });
-      
-      if (fluxoAtivo.intent === "criar_recorrente") {
-        // Verifica se tem todos os dados necessários para criar recorrente
-        const temValor = dadosMesclados.valor !== null && dadosMesclados.valor !== undefined && Number(dadosMesclados.valor) > 0;
-        const temDiaMes = dadosMesclados.dia_mes !== null && dadosMesclados.dia_mes !== undefined && Number(dadosMesclados.dia_mes) > 0;
+        console.log("📦 Dados mesclados:", JSON.stringify(dadosMesclados));
         
-        console.log(`Continuação fluxo - temValor: ${temValor} (${dadosMesclados.valor}), temDiaMes: ${temDiaMes} (${dadosMesclados.dia_mes})`);
+        // Atualiza lista de dados faltantes
+        const dadosAindaFaltantes = fluxoAtivo.dados_faltantes.filter(campo => {
+          const valor = dadosMesclados[campo as keyof ExtractedIntent];
+          return valor === null || valor === undefined;
+        });
+        console.log("📋 Dados ainda faltantes:", dadosAindaFaltantes);
         
-        if (temValor && temDiaMes) {
-          // FIX 1: CRIAR GASTO RECORRENTE COM SUCESSO - TEM TODOS OS DADOS
-          const { error } = await supabase.from("gastos_recorrentes").insert({
-            usuario_id: usuarioId,
-            valor_parcela: dadosMesclados.valor,
-            categoria: dadosMesclados.categoria || "assinaturas",
-            tipo_recorrencia: dadosMesclados.tipo_recorrencia || "mensal",
-            dia_mes: dadosMesclados.dia_mes,
-            descricao: dadosMesclados.descricao,
-            ativo: true,
-            proxima_execucao: null,
-            origem: "whatsapp"
-          });
+        if (fluxoAtivo.intent === "criar_recorrente") {
+          const temValor = dadosMesclados.valor !== null && dadosMesclados.valor !== undefined && Number(dadosMesclados.valor) > 0;
+          const temDiaMes = dadosMesclados.dia_mes !== null && dadosMesclados.dia_mes !== undefined && Number(dadosMesclados.dia_mes) > 0;
+          
+          console.log(`📊 Estado: temValor=${temValor} (${dadosMesclados.valor}), temDiaMes=${temDiaMes} (${dadosMesclados.dia_mes})`);
+          
+          if (temValor && temDiaMes) {
+            // SUCESSO: Tem todos os dados para criar recorrente
+            console.log("🎉 Todos os dados coletados - criando gasto recorrente!");
+            
+            const { error } = await supabase.from("gastos_recorrentes").insert({
+              usuario_id: usuarioId,
+              valor_parcela: dadosMesclados.valor,
+              categoria: dadosMesclados.categoria || "assinaturas",
+              tipo_recorrencia: "Mensal", // Maiúsculo para passar no check constraint
+              dia_mes: dadosMesclados.dia_mes,
+              descricao: dadosMesclados.descricao,
+              ativo: true,
+              proxima_execucao: null,
+              origem: "whatsapp"
+            });
 
-          if (!error) {
-            await limparFluxoAtivo(phoneNumber);
-            acaoRealizada = `✅ Gasto recorrente cadastrado com sucesso!\n\n` +
-              `🔄 ${dadosMesclados.descricao || dadosMesclados.categoria || "Gasto recorrente"}\n` +
-              `💰 R$ ${Number(dadosMesclados.valor).toFixed(2)} todo dia ${dadosMesclados.dia_mes}\n\n` +
-              `Vou registrar automaticamente quando a data chegar.`;
-            console.log("✅ Gasto recorrente criado com sucesso via continuação de fluxo!");
+            if (!error) {
+              await limparFluxoAtivo(phoneNumber);
+              acaoRealizada = `✅ Gasto recorrente cadastrado com sucesso!\n\n` +
+                `🔄 ${dadosMesclados.descricao || dadosMesclados.categoria || "Gasto recorrente"}\n` +
+                `💰 R$ ${Number(dadosMesclados.valor).toFixed(2)} todo dia ${dadosMesclados.dia_mes}\n\n` +
+                `Vou registrar automaticamente quando a data chegar.`;
+              console.log("✅ Gasto recorrente criado com sucesso!");
+            } else {
+              console.error("❌ Erro ao criar gasto recorrente:", error);
+              acaoRealizada = "❌ Erro ao criar o gasto recorrente. Tente novamente.";
+              await limparFluxoAtivo(phoneNumber);
+            }
+          } else if (temValor && !temDiaMes) {
+            // Tem valor mas falta dia do mês
+            const pergunta = `Qual o *dia do mês* que você costuma fazer esse pagamento de R$ ${Number(dadosMesclados.valor).toFixed(2)}? 📅`;
+            
+            const aiResponse = await generateResponse(messageText, "", pergunta);
+            
+            await salvarFluxoAtivo(
+              phoneNumber,
+              usuarioId,
+              "criar_recorrente",
+              dadosMesclados,
+              ["dia_mes"],
+              messageText,
+              aiResponse,
+              pergunta  // NOVO: Salva a pergunta para contexto
+            );
+            
+            await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
+            
+            return new Response(
+              JSON.stringify({ status: "ok", message_sent: true }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
           } else {
-            console.error("Erro ao criar gasto recorrente:", error);
-            acaoRealizada = "❌ Erro ao criar o gasto recorrente. Tente novamente.";
-            await limparFluxoAtivo(phoneNumber);
+            // Falta valor
+            const pergunta = "Qual o valor do gasto recorrente? 💰 (ex: 59,90)";
+            
+            const aiResponse = await generateResponse(messageText, "", pergunta);
+            
+            await salvarFluxoAtivo(
+              phoneNumber,
+              usuarioId,
+              "criar_recorrente",
+              dadosMesclados,
+              ["valor"],
+              messageText,
+              aiResponse,
+              pergunta
+            );
+            
+            await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
+            
+            return new Response(
+              JSON.stringify({ status: "ok", message_sent: true }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
           }
-        } else if (temValor && !temDiaMes) {
-          // Tem valor mas ainda falta dia do mês
-          const pergunta = `Qual o *dia do mês* que você costuma fazer esse pagamento de R$ ${Number(dadosMesclados.valor).toFixed(2)}?`;
-          
-          const aiResponse = await generateResponse(messageText, "", pergunta);
-          
-          await salvarFluxoAtivo(
-            phoneNumber,
-            usuarioId,
-            "criar_recorrente",
-            dadosMesclados,
-            ["dia_mes"],
-            messageText,
-            aiResponse
-          );
-          
-          await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
-          
-          return new Response(
-            JSON.stringify({ status: "ok", message_sent: true }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        } else {
-          // Falta valor - perguntar novamente
-          const pergunta = "Qual o valor do gasto recorrente? (ex: 59,90)";
-          
-          const aiResponse = await generateResponse(messageText, "", pergunta);
-          
-          await salvarFluxoAtivo(
-            phoneNumber,
-            usuarioId,
-            "criar_recorrente",
-            dadosMesclados,
-            ["valor"],
-            messageText,
-            aiResponse
-          );
-          
-          await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
-          
-          return new Response(
-            JSON.stringify({ status: "ok", message_sent: true }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
         }
       }
-    } else {
-      // ========== FIX 3: VERIFICAR MÚLTIPLOS GASTOS ==========
+      
+      else if (interpretacao.intencao === "indefinida") {
+        // REGRA CRÍTICA: NÃO dispara fallback genérico - pede clarificação
+        console.log("❓ Intenção indefinida - pedindo clarificação (SEM fallback genérico)");
+        
+        const mensagemClarificacao = interpretacao.mensagem_clarificacao || 
+          `Desculpe, não entendi sua resposta. ${fluxoAtivo.ultima_pergunta || "Pode tentar de outra forma?"}`;
+        
+        await sendWhatsAppMessage(phoneNumber, mensagemClarificacao, messageSource);
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: messageText,
+          ai_response: mensagemClarificacao,
+          tipo: "clarificacao_fluxo"
+        });
+        
+        return new Response(
+          JSON.stringify({ status: "ok", message_sent: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+    
+    // ========== FLUXO NORMAL (SEM fluxo ativo ou após novo_comando) ==========
+    if (!fluxoAtivo || (fluxoAtivo && acaoRealizada === "")) {
+      // Verificar múltiplos gastos
       const gastosDetectados = detectarMultiplosGastos(messageText);
       
       if (gastosDetectados.length > 1) {
@@ -855,7 +949,7 @@ serve(async (req) => {
         intent = await extractIntent(messageText, historicoRecente);
         console.log("Intent detectado:", JSON.stringify(intent));
 
-        // 4. Processa baseado no intent
+        // Processa baseado no intent
         switch (intent.intent) {
           case "registrar_gasto": {
             if (intent.valor) {
@@ -901,7 +995,6 @@ serve(async (req) => {
             if (intent.valor && intent.parcelas && intent.parcelas > 1) {
               const valorParcela = intent.valor / intent.parcelas;
               
-              // Cria o parcelamento
               const { data: parcelamento, error: errParc } = await supabase
                 .from("parcelamentos")
                 .insert({
@@ -917,7 +1010,6 @@ serve(async (req) => {
                 .single();
 
               if (!errParc && parcelamento) {
-                // Cria as transações para cada parcela
                 const hoje = new Date();
                 const transacoesParcelas = [];
                 
@@ -947,27 +1039,26 @@ serve(async (req) => {
                 acaoRealizada = `✅ Parcelamento criado!\n\n` +
                   `📦 ${intent.descricao || "Compra"}\n` +
                   `💰 Valor total: R$ ${intent.valor.toFixed(2)}\n` +
-                  `📅 ${intent.parcelas}x de R$ ${valorParcela.toFixed(2)}\n\n` +
-                  `A primeira parcela já foi registrada neste mês. As próximas serão lançadas automaticamente.`;
+                  `📅 ${intent.parcelas}x de R$ ${valorParcela.toFixed(2)}`;
               }
             }
             break;
           }
 
           case "criar_recorrente": {
-            // FIX 1 & 4: Verificar se tem todos os dados necessários
-            const temValor = intent.valor !== null && intent.valor !== undefined && intent.valor > 0;
-            const temDiaMes = intent.dia_mes !== null && intent.dia_mes !== undefined && intent.dia_mes > 0;
+            console.log(`criar_recorrente - temValor: ${intent.valor !== null && intent.valor !== undefined} (${intent.valor}), temDiaMes: ${intent.dia_mes !== null && intent.dia_mes !== undefined} (${intent.dia_mes})`);
             
-            console.log(`criar_recorrente - temValor: ${temValor} (${intent.valor}), temDiaMes: ${temDiaMes} (${intent.dia_mes})`);
+            // Verifica se tem todos os dados necessários
+            const temValor = intent.valor !== null && intent.valor !== undefined && Number(intent.valor) > 0;
+            const temDiaMes = intent.dia_mes !== null && intent.dia_mes !== undefined && Number(intent.dia_mes) > 0;
             
             if (temValor && temDiaMes) {
-              // Tem TODOS os dados - criar direto
+              // Tem todos os dados - cria imediatamente
               const { error } = await supabase.from("gastos_recorrentes").insert({
                 usuario_id: usuarioId,
                 valor_parcela: intent.valor,
                 categoria: intent.categoria || "assinaturas",
-                tipo_recorrencia: intent.tipo_recorrencia || "mensal",
+                tipo_recorrencia: "Mensal",
                 dia_mes: intent.dia_mes,
                 descricao: intent.descricao,
                 ativo: true,
@@ -977,34 +1068,33 @@ serve(async (req) => {
 
               if (!error) {
                 acaoRealizada = `✅ Gasto recorrente cadastrado!\n\n` +
-                  `🔄 ${intent.descricao || intent.categoria}\n` +
+                  `🔄 ${intent.descricao || intent.categoria || "Gasto recorrente"}\n` +
                   `💰 R$ ${Number(intent.valor).toFixed(2)} todo dia ${intent.dia_mes}\n\n` +
                   `Vou registrar automaticamente quando a data chegar.`;
-                console.log("✅ Gasto recorrente criado com sucesso (fluxo direto)!");
               } else {
                 console.error("Erro ao criar gasto recorrente:", error);
                 acaoRealizada = "❌ Erro ao criar o gasto recorrente. Tente novamente.";
               }
             } else if (temValor && !temDiaMes) {
-              // Tem valor mas falta dia - perguntar dia do mês
-              const pergunta = `Entendido! 💻 Para eu registrar este gasto recorrente de R$ ${Number(intent.valor).toFixed(2)}, preciso de mais informações:\n\nQual o *dia do mês* que você costuma fazer esse pagamento?`;
+              // Tem valor mas falta dia - pergunta e salva fluxo
+              const pergunta = `Qual o *dia do mês* que você costuma fazer esse pagamento de R$ ${Number(intent.valor).toFixed(2)}? 📅`;
               
               const aiResponse = await generateResponse(messageText, "", pergunta);
               
-              // Salva estado do fluxo COM O VALOR já coletado
               await salvarFluxoAtivo(
                 phoneNumber,
                 usuarioId,
                 "criar_recorrente",
                 {
-                  valor: intent.valor,  // CRÍTICO: Salvar o valor!
+                  valor: intent.valor,
                   categoria: intent.categoria,
                   descricao: intent.descricao,
                   tipo_recorrencia: intent.tipo_recorrencia || "mensal"
                 },
-                ["dia_mes"],  // Dados faltantes: apenas dia_mes
+                ["dia_mes"],
                 messageText,
-                aiResponse
+                aiResponse,
+                pergunta
               );
               
               await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
@@ -1014,8 +1104,8 @@ serve(async (req) => {
                 { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
               );
             } else {
-              // Falta valor - perguntar valor
-              const pergunta = "Para cadastrar esse gasto recorrente, preciso saber o valor. Quanto você paga? (ex: 59,90)";
+              // Falta valor - pergunta
+              const pergunta = "Para cadastrar esse gasto recorrente, preciso saber o valor. Quanto você paga? 💰 (ex: 59,90)";
               
               const aiResponse = await generateResponse(messageText, "", pergunta);
               
@@ -1031,7 +1121,8 @@ serve(async (req) => {
                 },
                 ["valor"],
                 messageText,
-                aiResponse
+                aiResponse,
+                pergunta
               );
               
               await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
@@ -1116,7 +1207,6 @@ serve(async (req) => {
           case "ajuda":
           case "outro":
           default: {
-            // Apenas busca contexto para a resposta
             const resumo = await getResumoMes(usuarioId);
             contextoDados = `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, ` +
               `Saídas R$ ${resumo.totalSaidas.toFixed(2)}, Saldo R$ ${resumo.saldo.toFixed(2)}`;
@@ -1126,14 +1216,14 @@ serve(async (req) => {
       }
     }
 
-    // 5. Gera resposta com AI
+    // Gera resposta com AI
     const contextoCompleto = contextoDados || acaoRealizada 
       ? `${acaoRealizada}\n\n${contextoDados}`.trim() 
       : "";
     
     const aiResponse = await generateResponse(messageText, contextoCompleto, acaoRealizada);
 
-    // 6. Salva histórico
+    // Salva histórico
     await supabase.from("historico_conversas").insert({
       phone_number: phoneNumber,
       user_id: usuarioId,
@@ -1142,7 +1232,7 @@ serve(async (req) => {
       tipo: intent.intent
     });
 
-    // 7. Envia resposta via WhatsApp (usando a mesma origem que recebeu)
+    // Envia resposta via WhatsApp
     await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
 
     return new Response(
