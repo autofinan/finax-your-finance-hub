@@ -730,6 +730,7 @@ export type Database = {
           id: string
           limite_transacoes_mes: number | null
           nome: string | null
+          onboarding_status: string | null
           phone_number: string
           plano: string | null
           saldo_mensal: number | null
@@ -746,6 +747,7 @@ export type Database = {
           id?: string
           limite_transacoes_mes?: number | null
           nome?: string | null
+          onboarding_status?: string | null
           phone_number: string
           plano?: string | null
           saldo_mensal?: number | null
@@ -762,6 +764,7 @@ export type Database = {
           id?: string
           limite_transacoes_mes?: number | null
           nome?: string | null
+          onboarding_status?: string | null
           phone_number?: string
           plano?: string | null
           saldo_mensal?: number | null

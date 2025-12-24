@@ -954,6 +954,79 @@ async function verificarSeNovoUsuario(phoneNumber: string): Promise<boolean> {
   return count === 0;
 }
 
+// Verifica status do onboarding do usuário
+async function getOnboardingStatus(usuarioId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from("usuarios")
+    .select("onboarding_status")
+    .eq("id", usuarioId)
+    .single();
+  
+  return data?.onboarding_status || null;
+}
+
+// Atualiza status do onboarding
+async function setOnboardingStatus(usuarioId: string, status: "iniciado" | "concluido"): Promise<void> {
+  await supabase
+    .from("usuarios")
+    .update({ onboarding_status: status })
+    .eq("id", usuarioId);
+  
+  console.log(`📋 Onboarding status atualizado para: ${status}`);
+}
+
+// Onboarding CONTEXTUAL (para quando usuário demonstra intenção de centralizar)
+async function enviarOnboardingContextual(
+  phoneNumber: string, 
+  messageSource: MessageSource,
+  usuarioId: string,
+  nomeUsuario: string
+): Promise<void> {
+  const primeiroNome = nomeUsuario.split(" ")[0];
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  
+  // Marca como iniciado ANTES de enviar
+  await setOnboardingStatus(usuarioId, "iniciado");
+  
+  const msg1 = `Perfeito, ${primeiroNome}! 🎯
+
+Se a ideia é centralizar tudo aqui, eu consigo te ajudar a organizar cartões, bancos, gastos e recorrências em um só lugar.
+
+Vou te guiar passo a passo — nada é registrado sem sua confirmação.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
+  await delay(2500);
+  
+  const msg2 = `💡 *Dica importante*
+
+Fixa o Finax no WhatsApp pra não perder seus registros no dia a dia.
+
+Assim seu controle financeiro fica sempre a um toque. 📌`;
+
+  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
+  await delay(2000);
+  
+  const msg3 = `Vamos começar? 🚀
+
+Quais bancos ou cartões você usa hoje?
+
+Pode me contar naturalmente, tipo:
+_"Uso Nubank e Itaú"_ ou _"Tenho dois cartões"_`;
+
+  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
+  
+  // Salva no histórico
+  await supabase.from("historico_conversas").insert({
+    phone_number: phoneNumber,
+    user_id: usuarioId,
+    user_message: "[INTENT: iniciar_organizacao]",
+    ai_response: "[ONBOARDING CONTEXTUAL ENVIADO]",
+    tipo: "onboarding_contextual"
+  });
+  
+  console.log(`✅ Onboarding contextual enviado para ${phoneNumber}`);
+}
+
 // Onboarding para novos usuários
 async function enviarOnboarding(
   phoneNumber: string, 
@@ -1857,6 +1930,27 @@ serve(async (req) => {
         
         contextoDados = `🗑️ *Qual transação você quer apagar?*\n\n${listaOpcoes}\n\n` +
           `Responde com o número ou me descreve melhor.`;
+        break;
+      }
+
+      case "iniciar_organizacao": {
+        // 🎯 ONBOARDING CONTEXTUAL: Detectou intenção de centralizar
+        const onboardingStatus = await getOnboardingStatus(usuarioId);
+        
+        // Só dispara se ainda não concluiu onboarding
+        if (onboardingStatus !== "concluido") {
+          console.log(`🎯 [ONBOARDING] Intent iniciar_organizacao detectado, status atual: ${onboardingStatus}`);
+          
+          await enviarOnboardingContextual(phoneNumber, messageSource, usuarioId, usuario?.nome || "amigo(a)");
+          
+          return new Response(
+            JSON.stringify({ status: "ok", onboarding_contextual: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        // Se já concluiu, apenas responde normalmente
+        contextoDados = "Você já está com o Finax configurado! Como posso te ajudar hoje?";
         break;
       }
 
