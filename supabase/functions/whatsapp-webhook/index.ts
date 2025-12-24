@@ -222,10 +222,22 @@ async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
   }
 }
 
-// Transcreve áudio usando Lovable AI (Gemini com suporte a áudio)
-async function transcreverAudio(audioBase64: string, mimeType: string): Promise<string | null> {
+// Transcreve e interpreta áudio usando Lovable AI (Gemini com suporte a áudio)
+interface TranscricaoAudio {
+  transcricao: string;
+  tipo: "financeiro" | "nao_financeiro" | "ambiguo";
+  interpretacao?: {
+    tipo_operacao?: "gasto" | "receita" | "parcelamento" | "recorrente" | "consulta";
+    valor?: number;
+    descricao?: string;
+    categoria?: string;
+    forma_pagamento?: string;
+  };
+}
+
+async function transcreverAudio(audioBase64: string, mimeType: string): Promise<TranscricaoAudio | null> {
   try {
-    console.log("🎤 Transcrevendo áudio via Lovable AI...");
+    console.log("🎤 Transcrevendo e interpretando áudio via Lovable AI...");
     
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -237,11 +249,48 @@ async function transcreverAudio(audioBase64: string, mimeType: string): Promise<
         model: "google/gemini-2.5-flash",
         messages: [
           {
+            role: "system",
+            content: `Você é um assistente de transcrição para o Finax, um app de finanças pessoais via WhatsApp.
+            
+Sua tarefa é:
+1. Transcrever o áudio em português brasileiro
+2. Identificar se o conteúdo é relacionado a finanças pessoais
+3. Se for financeiro, extrair as informações relevantes
+
+TIPOS DE MENSAGENS FINANCEIRAS:
+- Registro de gasto: "gastei 50 no mercado", "comprei açaí de 25 reais", "paguei 100 de luz"
+- Registro de receita: "recebi 1500 hoje", "entrou meu salário de 3000"
+- Parcelamento: "comprei TV de 2000 em 10x"
+- Consulta: "quanto gastei esse mês", "meu resumo", "gastos com alimentação"
+
+NÚMEROS POR EXTENSO:
+- "vinte e cinco" = 25
+- "cem reais" = 100
+- "mil e quinhentos" = 1500
+
+REGRAS:
+- Foque em identificar VALOR e DESCRIÇÃO do gasto/receita
+- Se o áudio for uma receita de comida, vídeo aleatório, ou conteúdo não financeiro, marque como "nao_financeiro"
+- Se parecer que a pessoa está tentando registrar algo mas não ficou claro, marque como "ambiguo"`
+          },
+          {
             role: "user",
             content: [
               {
                 type: "text",
-                text: "Transcreva este áudio para texto em português. Retorne APENAS a transcrição, sem explicações adicionais."
+                text: `Transcreva e interprete este áudio. Responda APENAS com JSON válido:
+
+{
+  "transcricao": "texto transcrito do áudio",
+  "tipo": "financeiro" | "nao_financeiro" | "ambiguo",
+  "interpretacao": {
+    "tipo_operacao": "gasto" | "receita" | "parcelamento" | "recorrente" | "consulta" ou null,
+    "valor": número ou null,
+    "descricao": "o que foi comprado/recebido" ou null,
+    "categoria": "alimentação" | "transporte" | "lazer" | "saúde" | "moradia" | "outros" ou null,
+    "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null
+  }
+}`
               },
               {
                 type: "audio",
@@ -262,10 +311,31 @@ async function transcreverAudio(audioBase64: string, mimeType: string): Promise<
     }
 
     const data = await response.json();
-    const transcricao = data.choices?.[0]?.message?.content?.trim();
+    const content = data.choices?.[0]?.message?.content?.trim();
     
-    console.log(`📝 Transcrição: "${transcricao}"`);
-    return transcricao;
+    console.log(`📝 Resposta da IA: "${content}"`);
+    
+    // Parse do JSON
+    try {
+      // Remove possíveis marcadores de código
+      const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const resultado = JSON.parse(jsonStr) as TranscricaoAudio;
+      
+      console.log(`📝 Transcrição: "${resultado.transcricao}"`);
+      console.log(`📝 Tipo: ${resultado.tipo}`);
+      if (resultado.interpretacao) {
+        console.log(`📝 Interpretação:`, JSON.stringify(resultado.interpretacao));
+      }
+      
+      return resultado;
+    } catch (parseError) {
+      // Se não conseguir parsear, retorna como transcrição simples não financeira
+      console.log("⚠️ Não conseguiu parsear resposta, usando como texto simples");
+      return {
+        transcricao: content,
+        tipo: "ambiguo"
+      };
+    }
   } catch (error) {
     console.error("Erro ao transcrever áudio:", error);
     return null;
@@ -377,20 +447,22 @@ async function salvarFluxoConfirmacaoMidia(
   tipo: "audio" | "imagem",
   dadosExtraidos: Partial<ExtractedIntent>,
   dadosFaltantes: string[],
-  imagemTipo?: "comprovante" | "fatura" | "extrato" | "outro"
+  imagemTipo?: "comprovante" | "fatura" | "extrato" | "outro",
+  mensagemOriginal?: string
 ): Promise<void> {
   const fluxo: FluxoConfirmacaoMidia = {
     tipo,
     dados_extraidos: dadosExtraidos,
     dados_faltantes: dadosFaltantes,
     imagem_tipo: imagemTipo,
+    mensagem_original: mensagemOriginal,
     created_at: new Date().toISOString()
   };
 
   await supabase.from("historico_conversas").insert({
     phone_number: phoneNumber,
     user_id: userId,
-    user_message: `[${tipo.toUpperCase()} RECEBIDO]`,
+    user_message: `[${tipo.toUpperCase()} RECEBIDO]${mensagemOriginal ? `: ${mensagemOriginal}` : ''}`,
     ai_response: "[AGUARDANDO CONFIRMAÇÃO]",
     tipo: `fluxo_confirmacao_${tipo}`,
     resumo: JSON.stringify(fluxo)
@@ -1836,10 +1908,10 @@ serve(async (req) => {
         );
       }
       
-      // 2. Transcreve o áudio
-      const transcricao = await transcreverAudio(audioBase64, mediaMimeType);
+      // 2. Transcreve e interpreta o áudio
+      const resultadoAudio = await transcreverAudio(audioBase64, mediaMimeType);
       
-      if (!transcricao) {
+      if (!resultadoAudio) {
         await sendWhatsAppMessage(phoneNumber, 
           "Não consegui entender o áudio 😕\nPode tentar falar mais devagar ou escrever?", 
           messageSource
@@ -1850,16 +1922,145 @@ serve(async (req) => {
         );
       }
       
-      // Usa a transcrição como texto da mensagem
-      messageText = transcricao;
-      console.log(`📝 Áudio transcrito: "${messageText}"`);
+      console.log(`📝 Áudio transcrito: "${resultadoAudio.transcricao}"`);
+      console.log(`📝 Tipo detectado: ${resultadoAudio.tipo}`);
+      
+      // Se o áudio não é financeiro, informa o usuário
+      if (resultadoAudio.tipo === "nao_financeiro") {
+        await sendWhatsAppMessage(phoneNumber, 
+          "Hmm, esse áudio parece não ser sobre finanças 🤔\n\n" +
+          "Eu sou focado em te ajudar com dinheiro! 💰\n" +
+          "Quer registrar um gasto, ver seu resumo ou organizar algo?", 
+          messageSource
+        );
+        
+        // Registra no histórico
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: `[ÁUDIO NÃO FINANCEIRO] ${resultadoAudio.transcricao}`,
+          ai_response: "Áudio detectado como não financeiro",
+          tipo: "audio_nao_financeiro"
+        });
+        
+        return new Response(
+          JSON.stringify({ status: "ok", audio_type: "nao_financeiro" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // Se temos interpretação financeira direta, processa imediatamente
+      if (resultadoAudio.tipo === "financeiro" && resultadoAudio.interpretacao) {
+        const interp = resultadoAudio.interpretacao;
+        
+        // Cria dados para confirmação
+        const dadosExtraidos: Partial<ExtractedIntent> = {
+          intent: interp.tipo_operacao === "receita" ? "registrar_entrada" : "registrar_gasto",
+          valor: interp.valor,
+          descricao: interp.descricao,
+          categoria: interp.categoria,
+          forma_pagamento: interp.forma_pagamento as any
+        };
+        
+        // Verifica o que está faltando
+        const dadosFaltantes: string[] = [];
+        if (!dadosExtraidos.valor) dadosFaltantes.push("valor");
+        if (!dadosExtraidos.descricao) dadosFaltantes.push("descricao");
+        
+        // Se temos valor e descrição, pede confirmação
+        if (dadosExtraidos.valor && dadosExtraidos.descricao) {
+          // Salva fluxo de confirmação
+          await salvarFluxoConfirmacaoMidia(
+            phoneNumber, usuarioId, "audio", 
+            dadosExtraidos, dadosFaltantes, undefined,
+            resultadoAudio.transcricao
+          );
+          
+          // Monta mensagem de confirmação
+          const tipoTexto = interp.tipo_operacao === "receita" ? "Receita" : "Gasto";
+          const emoji = interp.tipo_operacao === "receita" ? "💵" : "💸";
+          
+          let msgConfirmacao = `Entendi assim 👇\n`;
+          msgConfirmacao += `${emoji} *${tipoTexto}* de *R$ ${dadosExtraidos.valor!.toFixed(2)}*\n`;
+          msgConfirmacao += `📝 ${dadosExtraidos.descricao}`;
+          
+          if (dadosExtraidos.categoria && dadosExtraidos.categoria !== "outros") {
+            msgConfirmacao += `\n🏷️ Categoria: ${dadosExtraidos.categoria}`;
+          }
+          
+          if (dadosExtraidos.forma_pagamento) {
+            const formaPagMap: Record<string, string> = {
+              pix: "Pix",
+              dinheiro: "Dinheiro",
+              debito: "Débito",
+              credito: "Crédito"
+            };
+            msgConfirmacao += `\n💳 ${formaPagMap[dadosExtraidos.forma_pagamento] || dadosExtraidos.forma_pagamento}`;
+          }
+          
+          msgConfirmacao += `\n\nPosso registrar assim? 😊`;
+          
+          await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
+          
+          // Registra no histórico
+          await supabase.from("historico_conversas").insert({
+            phone_number: phoneNumber,
+            user_id: usuarioId,
+            user_message: `[ÁUDIO] ${resultadoAudio.transcricao}`,
+            ai_response: msgConfirmacao,
+            tipo: "audio_confirmacao_pendente"
+          });
+          
+          return new Response(
+            JSON.stringify({ status: "ok", aguardando_confirmacao: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        // Falta informação, pergunta o que falta
+        if (dadosFaltantes.length > 0) {
+          await salvarFluxoConfirmacaoMidia(
+            phoneNumber, usuarioId, "audio", 
+            dadosExtraidos, dadosFaltantes, undefined,
+            resultadoAudio.transcricao
+          );
+          
+          let pergunta = "";
+          if (!dadosExtraidos.valor && !dadosExtraidos.descricao) {
+            pergunta = "Não consegui entender bem 🤔\nQuanto foi e o que você comprou?";
+          } else if (!dadosExtraidos.valor) {
+            pergunta = `Entendi que foi ${dadosExtraidos.descricao}, mas quanto custou?`;
+          } else if (!dadosExtraidos.descricao) {
+            pergunta = `Vi o valor de R$ ${dadosExtraidos.valor!.toFixed(2)}, mas o que foi?`;
+          }
+          
+          await sendWhatsAppMessage(phoneNumber, pergunta, messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: phoneNumber,
+            user_id: usuarioId,
+            user_message: `[ÁUDIO] ${resultadoAudio.transcricao}`,
+            ai_response: pergunta,
+            tipo: "audio_dados_faltantes"
+          });
+          
+          return new Response(
+            JSON.stringify({ status: "ok", dados_faltantes: dadosFaltantes }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+      
+      // Áudio ambíguo ou sem interpretação clara - usa a transcrição como texto normal
+      messageText = resultadoAudio.transcricao;
+      console.log(`📝 Usando transcrição como texto: "${messageText}"`);
       
       // Registra no histórico
       await supabase.from("historico_conversas").insert({
         phone_number: phoneNumber,
         user_id: usuarioId,
-        user_message: `[ÁUDIO] ${transcricao}`,
-        ai_response: "[PROCESSANDO ÁUDIO]",
+        user_message: `[ÁUDIO] ${resultadoAudio.transcricao}`,
+        ai_response: "[PROCESSANDO COMO TEXTO]",
         tipo: "audio_recebido"
       });
     }
