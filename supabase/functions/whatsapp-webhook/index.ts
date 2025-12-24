@@ -445,16 +445,20 @@ VOCÊ NÃO PODE:
 • Use • ou - para listas
 
 ═══════════════════════════════════════════════════════════
-📋 PLANOS E ATIVAÇÃO
+📋 REGRA CRÍTICA SOBRE PLANOS
 ═══════════════════════════════════════════════════════════
 
-• Finax tem APENAS UM plano pago: PRO
-• Novos usuários: 7 dias de TESTE GRATUITO COMPLETO
-• Durante trial: NUNCA mencione "free", "limite" ou "restrição"
-• Trate usuário em trial como cliente premium
-• Após trial expirar: usuário só pode VER resumos, não registrar
-• Ativação PRO é via código único enviado pelo usuário
-• NÃO tente validar códigos - o sistema faz isso automaticamente
+🚫 VOCÊ NUNCA DEVE:
+• Mencionar planos, pagamentos, assinaturas ou bloqueios
+• Falar sobre trial, período de teste ou expiração
+• Mencionar preços, valores de planos ou monetização
+• Dizer que algo está bloqueado ou limitado
+
+✅ SE O USUÁRIO PERGUNTAR SOBRE PLANOS:
+"O controle de acesso é feito automaticamente pelo sistema.
+Se precisar de ajuda com isso, entre em contato conosco pelo site."
+
+O backend controla 100% do acesso. Você foca APENAS em finanças.
 
 ${acaoRealizada ? `\n═══════════════════════════════════════════════════════════\n✅ AÇÃO REALIZADA\n═══════════════════════════════════════════════════════════\n${acaoRealizada}\n` : ""}
 
@@ -579,6 +583,98 @@ function detectarTipoRelatorio(mensagem: string): TipoRelatorioDetectado | null 
   }
   
   return null;
+}
+
+// ========== ONBOARDING: SEQUÊNCIA DE BOAS-VINDAS ==========
+
+interface OnboardingConfig {
+  nome: string;
+  urlPainel: string;
+}
+
+async function enviarOnboarding(
+  phoneNumber: string, 
+  messageSource: MessageSource,
+  config: OnboardingConfig
+): Promise<void> {
+  const nome = config.nome || "amigo(a)";
+  const urlPainel = config.urlPainel || "finax.app";
+  
+  // Delay entre mensagens para parecer natural
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  
+  // 1️⃣ MENSAGEM DE BOAS-VINDAS
+  const msg1 = `Oi, ${nome}! 👋
+
+Prazer, eu sou o *Finax* — seu novo assistente financeiro pessoal.
+
+Estou aqui pra te ajudar a organizar suas finanças de um jeito simples, direto pelo WhatsApp.
+
+Vou te explicar rapidinho como funciona 👇`;
+
+  await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
+  await delay(2000);
+  
+  // 2️⃣ COMO FUNCIONA
+  const msg2 = `📱 *Como o Finax funciona*
+
+Você me manda mensagens naturais, como se estivesse falando com um amigo:
+
+• _"Gastei 50 no mercado"_
+• _"Recebi 1200 hoje"_
+• _"Assinei Netflix por 20,90 todo mês"_
+• _"Resumo do mês"_
+• _"Quanto gastei com alimentação?"_
+
+Eu entendo, organizo e registro tudo automaticamente. Sem formulários, sem complicação.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
+  await delay(2500);
+  
+  // 3️⃣ PERÍODO DE TESTE
+  const msg3 = `🎁 *Acesso liberado*
+
+Você está com acesso completo ao Finax Pro — todas as funcionalidades estão liberadas pra você experimentar.
+
+Pode usar tudo: registrar gastos, entradas, parcelamentos, ver resumos, relatórios...
+
+Mais pra frente te aviso sobre a continuidade 😊`;
+
+  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
+  await delay(2000);
+  
+  // 4️⃣ PAINEL WEB
+  const msg4 = `📊 *Painel Web*
+
+Além do WhatsApp, você também tem acesso ao painel online:
+
+→ Gráficos de gastos por categoria
+→ Histórico completo de transações
+→ Acompanhamento de evolução mensal
+
+*WhatsApp* = uso diário
+*Site* = visão geral e análises
+
+Pronto! Quando quiser começar, é só me mandar seu primeiro gasto 💰`;
+
+  await sendWhatsAppMessage(phoneNumber, msg4, messageSource);
+  
+  console.log(`✅ Onboarding completo enviado para ${phoneNumber}`);
+}
+
+// Verifica se usuário precisa de onboarding (primeira mensagem)
+async function verificarSeNovoUsuario(phoneNumber: string): Promise<boolean> {
+  const { count, error } = await supabase
+    .from("historico_conversas")
+    .select("id", { count: "exact", head: true })
+    .eq("phone_number", phoneNumber);
+  
+  if (error) {
+    console.error("Erro ao verificar histórico:", error);
+    return false;
+  }
+  
+  return count === 0;
 }
 
 // ========== MODELO DE PLANOS: TRIAL → EXPIRED → PRO ==========
@@ -1041,16 +1137,59 @@ serve(async (req) => {
       .eq("phone_number", phoneNumber)
       .single();
 
+    let isNovoUsuario = false;
+    
     if (!usuario) {
+      // Extrai nome do contato (Meta envia em contacts[0].profile.name)
+      let nomeContato: string | null = null;
+      if (messageSource === "meta" && json.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name) {
+        nomeContato = json.entry[0].changes[0].value.contacts[0].profile.name;
+      }
+      
       const { data: newUser } = await supabase
         .from("usuarios")
-        .insert({ phone_number: phoneNumber })
+        .insert({ 
+          phone_number: phoneNumber,
+          nome: nomeContato,
+          plano: "pro"  // Novos usuários começam como PRO (fase de testes)
+        })
         .select()
         .single();
       usuario = newUser;
+      isNovoUsuario = true;
+      console.log(`👤 Novo usuário criado: ${phoneNumber} - ${nomeContato || 'sem nome'}`);
+    } else {
+      // Verifica se é a primeira mensagem (sem histórico)
+      isNovoUsuario = await verificarSeNovoUsuario(phoneNumber);
     }
 
     const usuarioId = usuario?.id;
+
+    // ========== ONBOARDING PARA NOVOS USUÁRIOS ==========
+    if (isNovoUsuario) {
+      console.log(`🎉 Iniciando onboarding para ${phoneNumber}`);
+      
+      const nomeUsuario = usuario?.nome || "amigo(a)";
+      
+      await enviarOnboarding(phoneNumber, messageSource, {
+        nome: nomeUsuario,
+        urlPainel: "finax.app"
+      });
+      
+      // Registra onboarding no histórico
+      await supabase.from("historico_conversas").insert({
+        phone_number: phoneNumber,
+        user_id: usuarioId,
+        user_message: messageText,
+        ai_response: "[ONBOARDING ENVIADO]",
+        tipo: "onboarding"
+      });
+      
+      return new Response(
+        JSON.stringify({ status: "ok", onboarding: true }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // ========== VERIFICAR STATUS DO PLANO (TRIAL/EXPIRED/PRO) ==========
     const statusPlano = await verificarStatusPlano(usuarioId);
@@ -1075,7 +1214,6 @@ serve(async (req) => {
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
     // 2. Busca histórico recente para contexto
     const historicoRecente = await getHistoricoRecente(phoneNumber);
 
