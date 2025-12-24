@@ -36,6 +36,10 @@ interface ExtractedIntent {
     | "consultar_resumo"
     | "consultar_categoria"
     | "consultar_detalhes"
+    | "cancelar_transacao"
+    | "corrigir_transacao"
+    | "apagar_transacao"
+    | "iniciar_organizacao"
     | "saudacao"
     | "ajuda"
     | "outro";
@@ -44,6 +48,8 @@ interface ExtractedIntent {
   valor?: number;
   categoria?: string;
   descricao?: string;
+  forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
+  cartao_id?: string;
   
   // Para parcelamentos
   parcelas?: number;
@@ -56,6 +62,9 @@ interface ExtractedIntent {
   // Para consultas
   periodo?: string; // "mes_atual", "dezembro", "semana", etc.
   categoria_consulta?: string;
+  
+  // Para cancelamentos/correções
+  transacao_alvo?: string; // descrição da transação a ser alterada
 }
 
 // Interface ATUALIZADA para fluxo ativo com ultima_pergunta
@@ -303,6 +312,10 @@ INTENTS POSSÍVEIS:
 - "consultar_resumo": usuário quer ver resumo geral dos gastos
 - "consultar_categoria": usuário quer ver gastos de uma categoria específica
 - "consultar_detalhes": usuário quer ver detalhes/lista de transações
+- "cancelar_transacao": usuário quer cancelar/apagar/desfazer algo (ex: "cancela isso", "apaga", "registrei errado", "cancela a conta")
+- "corrigir_transacao": usuário quer corrigir/editar algo já registrado
+- "apagar_transacao": usuário quer deletar uma transação específica (ex: "apaga o gasto de 50 do mercado")
+- "iniciar_organizacao": usuário quer organizar cartões, salário, contas fixas (ex: "quero organizar", "sim" após convite do onboarding)
 - "saudacao": apenas cumprimento (oi, olá, bom dia)
 - "ajuda": pedindo ajuda sobre como usar
 - "outro": não se encaixa em nenhum
@@ -315,6 +328,15 @@ REGRAS DE EXTRAÇÃO:
 5. Se pedir detalhes, lista, o que comprou → intent = "consultar_detalhes"
 6. Recebi, ganhei, entrou, pix recebido → intent = "registrar_entrada"
 7. Gastei, paguei, comprei (sem parcela) → intent = "registrar_gasto"
+8. "cancela", "apaga", "desfaz", "registrei errado", "deixa pra lá", "deleta" → intent = "cancelar_transacao" ou "apagar_transacao"
+9. "errei", "corrige", "era X não Y", "valor errado" → intent = "corrigir_transacao"
+10. "sim", "quero organizar", "vamos lá", "bora" (contexto de onboarding) → intent = "iniciar_organizacao"
+
+FORMAS DE PAGAMENTO:
+- "no pix", "via pix", "pix" → forma_pagamento = "pix"
+- "dinheiro", "em espécie", "cash" → forma_pagamento = "dinheiro"
+- "débito", "cartão de débito" → forma_pagamento = "debito"
+- "crédito", "cartão de crédito", "no cartão" → forma_pagamento = "credito"
 
 CATEGORIAS VÁLIDAS:
 alimentação, transporte, lazer, moradia, saúde, educação, compras, tecnologia, assinaturas, salário, freelance, investimentos, pix, outros
@@ -330,12 +352,14 @@ Responda APENAS com JSON válido:
   "valor": number ou null,
   "categoria": "string" ou null,
   "descricao": "string" ou null,
+  "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null,
   "parcelas": number ou null,
   "tipo_recorrencia": "string" ou null,
   "dia_mes": number ou null,
   "dia_semana": "string" ou null,
   "periodo": "string" ou null,
-  "categoria_consulta": "string" ou null
+  "categoria_consulta": "string" ou null,
+  "transacao_alvo": "string" ou null
 }
 
 ${historicoRecente ? `CONTEXTO DA CONVERSA RECENTE:\n${historicoRecente}` : ""}
@@ -585,7 +609,7 @@ function detectarTipoRelatorio(mensagem: string): TipoRelatorioDetectado | null 
   return null;
 }
 
-// ========== ONBOARDING: SEQUÊNCIA DE BOAS-VINDAS ==========
+// ========== ONBOARDING: SEQUÊNCIA DE BOAS-VINDAS HUMANIZADA ==========
 
 interface OnboardingConfig {
   nome: string;
@@ -597,69 +621,331 @@ async function enviarOnboarding(
   messageSource: MessageSource,
   config: OnboardingConfig
 ): Promise<void> {
-  const nome = config.nome || "amigo(a)";
+  const nome = config.nome?.split(" ")[0] || "amigo(a)"; // Usa só primeiro nome
   const urlPainel = config.urlPainel || "finax.app";
   
   // Delay entre mensagens para parecer natural
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   
-  // 1️⃣ MENSAGEM DE BOAS-VINDAS
+  // 1️⃣ BOAS-VINDAS (humanizada, curta)
   const msg1 = `Oi, ${nome}! 👋
 
-Prazer, eu sou o *Finax* — seu novo assistente financeiro pessoal.
+Prazer, eu sou o *Finax* — seu assistente financeiro pessoal.
 
-Estou aqui pra te ajudar a organizar suas finanças de um jeito simples, direto pelo WhatsApp.
-
-Vou te explicar rapidinho como funciona 👇`;
+Estou aqui pra te ajudar a organizar suas finanças de um jeito simples, direto pelo WhatsApp.`;
 
   await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
-  await delay(2000);
-  
-  // 2️⃣ COMO FUNCIONA
-  const msg2 = `📱 *Como o Finax funciona*
-
-Você me manda mensagens naturais, como se estivesse falando com um amigo:
-
-• _"Gastei 50 no mercado"_
-• _"Recebi 1200 hoje"_
-• _"Assinei Netflix por 20,90 todo mês"_
-• _"Resumo do mês"_
-• _"Quanto gastei com alimentação?"_
-
-Eu entendo, organizo e registro tudo automaticamente. Sem formulários, sem complicação.`;
-
-  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
   await delay(2500);
   
-  // 3️⃣ PERÍODO DE TESTE
-  const msg3 = `🎁 *Acesso liberado*
+  // 2️⃣ VALOR, NÃO FEATURES
+  const msg2 = `Comigo você organiza tudo em um só lugar: gastos do dia a dia, cartões, dívidas e salário.
 
-Você está com acesso completo ao Finax Pro — todas as funcionalidades estão liberadas pra você experimentar.
+Sem planilha. Sem complicação. Só mandar mensagem como se fosse um amigo.`;
 
-Pode usar tudo: registrar gastos, entradas, parcelamentos, ver resumos, relatórios...
+  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
+  await delay(2000);
+  
+  // 3️⃣ DICA: FIXAR CONTATO
+  const msg3 = `💡 *Dica importante*
+
+Fixa o Finax no WhatsApp pra não perder seus registros no dia a dia.
+
+Assim seu controle financeiro fica sempre a um toque.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
+  await delay(2500);
+  
+  // 4️⃣ ACESSO PRO LIBERADO
+  const msg4 = `🎁 *Acesso liberado*
+
+Você tem acesso completo ao Finax — todas as funcionalidades estão liberadas.
+
+Pode registrar gastos, entradas, parcelamentos, ver resumos...
 
 Mais pra frente te aviso sobre a continuidade 😊`;
 
-  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
-  await delay(2000);
-  
-  // 4️⃣ PAINEL WEB
-  const msg4 = `📊 *Painel Web*
-
-Além do WhatsApp, você também tem acesso ao painel online:
-
-→ Gráficos de gastos por categoria
-→ Histórico completo de transações
-→ Acompanhamento de evolução mensal
-
-*WhatsApp* = uso diário
-*Site* = visão geral e análises
-
-Pronto! Quando quiser começar, é só me mandar seu primeiro gasto 💰`;
-
   await sendWhatsAppMessage(phoneNumber, msg4, messageSource);
+  await delay(2500);
+  
+  // 5️⃣ CONVITE PARA CENTRALIZAR (com consentimento)
+  const msg5 = `Quer que eu te ajude agora a organizar seus cartões, dívidas e salário?
+
+Fazendo isso, fica muito mais fácil registrar gastos depois.
+
+Responde *sim* se quiser começar, ou pode mandar direto seu primeiro gasto 💰`;
+
+  await sendWhatsAppMessage(phoneNumber, msg5, messageSource);
   
   console.log(`✅ Onboarding completo enviado para ${phoneNumber}`);
+}
+
+// ========== FLUXO DE CENTRALIZAÇÃO (ORGANIZAÇÃO INICIAL) ==========
+
+interface FluxoCentralizacao {
+  etapa: "cartoes" | "salario" | "contas_fixas" | "concluido";
+  dados: {
+    cartoes?: string[];
+    salario?: number;
+    dia_salario?: number;
+    contas_fixas?: { descricao: string; valor: number; dia: number }[];
+  };
+}
+
+async function iniciarFluxoCentralizacao(
+  phoneNumber: string,
+  usuarioId: string,
+  messageSource: MessageSource
+): Promise<void> {
+  const msg = `Ótimo! Vamos organizar sua base financeira 🎯
+
+Primeiro: você usa *cartão de crédito*?
+
+Se sim, me fala o nome do cartão (ex: "Nubank", "Inter", "C6")
+Se não, responde *não uso*`;
+
+  await sendWhatsAppMessage(phoneNumber, msg, messageSource);
+  
+  // Salva fluxo de centralização ativo
+  const fluxo: FluxoCentralizacao = {
+    etapa: "cartoes",
+    dados: {}
+  };
+  
+  await supabase.from("historico_conversas").insert({
+    phone_number: phoneNumber,
+    user_id: usuarioId,
+    user_message: "[INICIOU CENTRALIZAÇÃO]",
+    ai_response: msg,
+    tipo: "fluxo_ativo_centralizacao",
+    resumo: JSON.stringify(fluxo)
+  });
+}
+
+async function processarFluxoCentralizacao(
+  phoneNumber: string,
+  usuarioId: string,
+  messageSource: MessageSource,
+  mensagem: string,
+  fluxoAtual: FluxoCentralizacao
+): Promise<boolean> {
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const msgLower = mensagem.toLowerCase().trim();
+  
+  // Detecta se quer pular/cancelar
+  if (msgLower.includes("pular") || msgLower.includes("depois") || msgLower.includes("deixa") || msgLower.includes("cancela")) {
+    await sendWhatsAppMessage(phoneNumber, 
+      "Sem problema! Você pode organizar isso depois.\n\nQuando quiser, é só me mandar seu primeiro gasto 💰", 
+      messageSource
+    );
+    await limparFluxoAtivo(phoneNumber);
+    return true;
+  }
+  
+  switch (fluxoAtual.etapa) {
+    case "cartoes": {
+      if (msgLower.includes("não uso") || msgLower.includes("nao uso") || msgLower === "não" || msgLower === "nao") {
+        // Pula para salário
+        fluxoAtual.etapa = "salario";
+        fluxoAtual.dados.cartoes = [];
+      } else {
+        // Registra cartão
+        const nomeCartao = mensagem.trim();
+        
+        await supabase.from("cartoes_credito").insert({
+          usuario_id: usuarioId,
+          nome: nomeCartao,
+          ativo: true
+        });
+        
+        await sendWhatsAppMessage(phoneNumber, 
+          `✅ *${nomeCartao}* cadastrado!\n\nTem mais algum cartão? Me fala o nome ou responde *pronto* pra continuar.`, 
+          messageSource
+        );
+        
+        // Mantém na etapa cartões
+        fluxoAtual.dados.cartoes = [...(fluxoAtual.dados.cartoes || []), nomeCartao];
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: mensagem,
+          ai_response: `Cartão ${nomeCartao} cadastrado`,
+          tipo: "fluxo_ativo_centralizacao",
+          resumo: JSON.stringify(fluxoAtual)
+        });
+        
+        return true;
+      }
+      
+      if (msgLower === "pronto" || msgLower.includes("só isso") || msgLower.includes("so isso")) {
+        fluxoAtual.etapa = "salario";
+      }
+      
+      // Pergunta sobre salário
+      await delay(1000);
+      await sendWhatsAppMessage(phoneNumber, 
+        `Agora me conta: você recebe um salário fixo todo mês?\n\nSe sim, me fala o valor (ex: "3500") e o dia que costuma cair (ex: "dia 5")\n\nSe não, responde *não tenho*`, 
+        messageSource
+      );
+      
+      fluxoAtual.etapa = "salario";
+      await supabase.from("historico_conversas").insert({
+        phone_number: phoneNumber,
+        user_id: usuarioId,
+        user_message: mensagem,
+        ai_response: "Perguntou sobre salário",
+        tipo: "fluxo_ativo_centralizacao",
+        resumo: JSON.stringify(fluxoAtual)
+      });
+      
+      return true;
+    }
+    
+    case "salario": {
+      if (msgLower.includes("não tenho") || msgLower.includes("nao tenho") || msgLower === "não" || msgLower === "nao") {
+        fluxoAtual.etapa = "contas_fixas";
+      } else {
+        // Tenta extrair valor e dia
+        const valorMatch = mensagem.match(/(\d+(?:[.,]\d{2})?)/);
+        const diaMatch = mensagem.match(/dia\s*(\d{1,2})/i) || mensagem.match(/(\d{1,2})(?:\s*de\s*cada)?/);
+        
+        if (valorMatch) {
+          const valor = parseFloat(valorMatch[1].replace(",", "."));
+          const dia = diaMatch ? parseInt(diaMatch[1]) : 5; // Default dia 5
+          
+          // Cria entrada recorrente de salário
+          await supabase.from("gastos_recorrentes").insert({
+            usuario_id: usuarioId,
+            valor_parcela: valor,
+            categoria: "salário",
+            tipo_recorrencia: "Mensal",
+            dia_mes: dia,
+            descricao: "Salário",
+            ativo: true,
+            origem: "whatsapp"
+          });
+          
+          fluxoAtual.dados.salario = valor;
+          fluxoAtual.dados.dia_salario = dia;
+          
+          await sendWhatsAppMessage(phoneNumber, 
+            `✅ Salário de *R$ ${valor.toFixed(2)}* no dia *${dia}* registrado!\n\nVou lembrar automaticamente todo mês.`, 
+            messageSource
+          );
+        }
+      }
+      
+      // Pergunta sobre contas fixas
+      await delay(1500);
+      await sendWhatsAppMessage(phoneNumber, 
+        `Última etapa: você tem contas fixas todo mês? (aluguel, internet, luz...)\n\nMe fala uma por uma (ex: "aluguel 1200 dia 10") ou responde *não tenho*`, 
+        messageSource
+      );
+      
+      fluxoAtual.etapa = "contas_fixas";
+      await supabase.from("historico_conversas").insert({
+        phone_number: phoneNumber,
+        user_id: usuarioId,
+        user_message: mensagem,
+        ai_response: "Perguntou sobre contas fixas",
+        tipo: "fluxo_ativo_centralizacao",
+        resumo: JSON.stringify(fluxoAtual)
+      });
+      
+      return true;
+    }
+    
+    case "contas_fixas": {
+      if (msgLower.includes("não tenho") || msgLower.includes("nao tenho") || msgLower === "não" || msgLower === "nao" || 
+          msgLower === "pronto" || msgLower.includes("só isso")) {
+        // Finaliza centralização
+        fluxoAtual.etapa = "concluido";
+        
+        await sendWhatsAppMessage(phoneNumber, 
+          `🎉 *Pronto!* Sua base financeira está organizada.\n\nAgora registrar gastos vai ser muito mais fácil.\n\nQuando gastar algo, só me manda: _"Gastei 50 no mercado"_\n\nBora começar? 💰`, 
+          messageSource
+        );
+        
+        await limparFluxoAtivo(phoneNumber);
+        return true;
+      }
+      
+      // Tenta extrair conta fixa
+      const valorMatch = mensagem.match(/(\d+(?:[.,]\d{2})?)/);
+      const diaMatch = mensagem.match(/dia\s*(\d{1,2})/i);
+      const descricao = mensagem.replace(/\d+(?:[.,]\d{2})?/g, "").replace(/dia\s*\d{1,2}/gi, "").trim();
+      
+      if (valorMatch && descricao) {
+        const valor = parseFloat(valorMatch[1].replace(",", "."));
+        const dia = diaMatch ? parseInt(diaMatch[1]) : 1;
+        
+        await supabase.from("gastos_recorrentes").insert({
+          usuario_id: usuarioId,
+          valor_parcela: valor,
+          categoria: "moradia",
+          tipo_recorrencia: "Mensal",
+          dia_mes: dia,
+          descricao: descricao || "Conta fixa",
+          ativo: true,
+          origem: "whatsapp"
+        });
+        
+        await sendWhatsAppMessage(phoneNumber, 
+          `✅ *${descricao || "Conta fixa"}* de R$ ${valor.toFixed(2)} registrada!\n\nTem mais alguma? Me fala ou responde *pronto*`, 
+          messageSource
+        );
+        
+        fluxoAtual.dados.contas_fixas = [...(fluxoAtual.dados.contas_fixas || []), { descricao, valor, dia }];
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: mensagem,
+          ai_response: `Conta ${descricao} cadastrada`,
+          tipo: "fluxo_ativo_centralizacao",
+          resumo: JSON.stringify(fluxoAtual)
+        });
+        
+        return true;
+      }
+      
+      // Não conseguiu extrair
+      await sendWhatsAppMessage(phoneNumber, 
+        `Não consegui entender 🤔\n\nMe fala assim: "aluguel 1200 dia 10" ou "internet 100 dia 15"\n\nOu responde *pronto* se já terminou`, 
+        messageSource
+      );
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Busca fluxo de centralização ativo
+async function getFluxoCentralizacao(phoneNumber: string): Promise<FluxoCentralizacao | null> {
+  try {
+    const { data } = await supabase
+      .from("historico_conversas")
+      .select("resumo, created_at")
+      .eq("phone_number", phoneNumber)
+      .eq("tipo", "fluxo_ativo_centralizacao")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!data || !data.resumo) return null;
+
+    // Verifica se o fluxo não é muito antigo (máximo 30 minutos)
+    const createdAt = new Date(data.created_at);
+    const agora = new Date();
+    const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
+    
+    if (diffMinutos > 30) return null;
+
+    return JSON.parse(data.resumo) as FluxoCentralizacao;
+  } catch {
+    return null;
+  }
 }
 
 // Verifica se usuário precisa de onboarding (primeira mensagem)
@@ -1220,6 +1506,28 @@ serve(async (req) => {
     let acaoRealizada = "";
     let contextoDados = "";
     let intent: ExtractedIntent = { intent: "outro" };
+
+    // ========== VERIFICAR FLUXO DE CENTRALIZAÇÃO (ONBOARDING GUIADO) ==========
+    const fluxoCentralizacao = await getFluxoCentralizacao(phoneNumber);
+    
+    if (fluxoCentralizacao && fluxoCentralizacao.etapa !== "concluido") {
+      console.log("🏗️ Fluxo de centralização ativo:", fluxoCentralizacao.etapa);
+      
+      const processado = await processarFluxoCentralizacao(
+        phoneNumber, 
+        usuarioId, 
+        messageSource, 
+        messageText, 
+        fluxoCentralizacao
+      );
+      
+      if (processado) {
+        return new Response(
+          JSON.stringify({ status: "ok", centralizacao: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
 
     // ========== NOVA LÓGICA: VERIFICAR FLUXO ATIVO COM IA COGNITIVA ==========
     const fluxoAtivo = await getFluxoAtivo(phoneNumber);
@@ -1898,6 +2206,97 @@ serve(async (req) => {
                 contextoDados = "Você ainda não tem transações registradas este mês.";
               }
             }
+            break;
+          }
+
+          case "iniciar_organizacao": {
+            // Usuário quer organizar cartões/salário/contas
+            console.log("🏗️ Iniciando fluxo de centralização");
+            await iniciarFluxoCentralizacao(phoneNumber, usuarioId, messageSource);
+            
+            return new Response(
+              JSON.stringify({ status: "ok", centralizacao_iniciada: true }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+
+          case "cancelar_transacao":
+          case "apagar_transacao": {
+            // Busca últimas transações do usuário para mostrar opções
+            const { data: ultimasTransacoes } = await supabase
+              .from("transacoes")
+              .select("id, valor, categoria, descricao, data")
+              .eq("usuario_id", usuarioId)
+              .order("created_at", { ascending: false })
+              .limit(5);
+            
+            if (!ultimasTransacoes || ultimasTransacoes.length === 0) {
+              acaoRealizada = "Você não tem transações recentes para apagar.";
+              break;
+            }
+            
+            // Mostra opções para confirmar qual apagar
+            const listaOpcoes = ultimasTransacoes.map((t, i) => {
+              const data = new Date(t.data).toLocaleDateString("pt-BR");
+              const desc = t.descricao || t.categoria;
+              return `${i + 1}. R$ ${Number(t.valor).toFixed(2)} - ${desc} (${data})`;
+            }).join("\n");
+            
+            // Se o intent.transacao_alvo estiver definido, tenta encontrar a transação
+            if (intent.transacao_alvo) {
+              const alvo = intent.transacao_alvo.toLowerCase();
+              const transacaoEncontrada = ultimasTransacoes.find(t => 
+                (t.descricao?.toLowerCase().includes(alvo)) ||
+                (t.categoria?.toLowerCase().includes(alvo)) ||
+                (t.valor && alvo.includes(t.valor.toString()))
+              );
+              
+              if (transacaoEncontrada) {
+                // Deleta a transação encontrada
+                const { error } = await supabase
+                  .from("transacoes")
+                  .delete()
+                  .eq("id", transacaoEncontrada.id);
+                
+                if (!error) {
+                  acaoRealizada = `✅ Transação apagada!\n\n` +
+                    `❌ R$ ${Number(transacaoEncontrada.valor).toFixed(2)} - ${transacaoEncontrada.descricao || transacaoEncontrada.categoria}\n\n` +
+                    `Se errei, me avisa que a gente resolve 👍`;
+                } else {
+                  acaoRealizada = "❌ Erro ao apagar a transação. Tente novamente.";
+                }
+                break;
+              }
+            }
+            
+            // Se não encontrou específica, mostra lista
+            contextoDados = `🗑️ *Qual transação você quer apagar?*\n\n${listaOpcoes}\n\n` +
+              `Responde com o número ou me descreve melhor qual é.`;
+            break;
+          }
+
+          case "corrigir_transacao": {
+            // Busca última transação para oferecer correção
+            const { data: ultimaTransacao } = await supabase
+              .from("transacoes")
+              .select("id, valor, categoria, descricao, data")
+              .eq("usuario_id", usuarioId)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .single();
+            
+            if (!ultimaTransacao) {
+              acaoRealizada = "Você não tem transações recentes para corrigir.";
+              break;
+            }
+            
+            const data = new Date(ultimaTransacao.data).toLocaleDateString("pt-BR");
+            contextoDados = `📝 *Última transação registrada:*\n\n` +
+              `💰 R$ ${Number(ultimaTransacao.valor).toFixed(2)}\n` +
+              `📂 Categoria: ${ultimaTransacao.categoria}\n` +
+              `📝 Descrição: ${ultimaTransacao.descricao || "sem descrição"}\n` +
+              `📅 Data: ${data}\n\n` +
+              `O que você quer corrigir? Me fala o valor certo, a categoria certa, ou "apaga" pra deletar.`;
             break;
           }
 
