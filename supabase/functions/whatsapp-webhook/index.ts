@@ -10,6 +10,7 @@ const corsHeaders = {
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ASSEMBLYAI_API_KEY = Deno.env.get("ASSEMBLYAI_API_KEY");
 
 // WhatsApp Business API (Meta)
 const WHATSAPP_VERIFY_TOKEN = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
@@ -151,59 +152,110 @@ async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
   }
 }
 
-// Transcreve áudio (APENAS transcrição, sem interpretação)
+// Transcreve áudio via AssemblyAI (APENAS transcrição, sem interpretação)
 async function transcreverAudioPuro(audioBase64: string, mimeType: string): Promise<string | null> {
   try {
-    console.log("🎤 [PERCEPÇÃO] Transcrevendo áudio (sem interpretar)...");
+    console.log("🎤 [PERCEPÇÃO] Transcrevendo áudio via AssemblyAI...");
     
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    // Converter base64 para Uint8Array
+    const binaryString = atob(audioBase64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    
+    // 1. Upload do áudio para AssemblyAI
+    console.log("📤 [ASSEMBLYAI] Fazendo upload do áudio...");
+    const uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Authorization": ASSEMBLYAI_API_KEY!,
+        "Content-Type": "application/octet-stream",
+      },
+      body: bytes,
+    });
+    
+    if (!uploadResponse.ok) {
+      const errorText = await uploadResponse.text();
+      console.error("❌ [ASSEMBLYAI] Erro no upload:", errorText);
+      return null;
+    }
+    
+    const uploadData = await uploadResponse.json();
+    const uploadUrl = uploadData.upload_url;
+    console.log("✅ [ASSEMBLYAI] Upload concluído:", uploadUrl);
+    
+    // 2. Solicitar transcrição
+    console.log("📝 [ASSEMBLYAI] Solicitando transcrição...");
+    const transcriptResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
+      method: "POST",
+      headers: {
+        "Authorization": ASSEMBLYAI_API_KEY!,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content: `Você é um transcritor de áudio. 
-Sua ÚNICA tarefa é transcrever o áudio em português brasileiro.
-NÃO interprete, NÃO analise, apenas transcreva exatamente o que foi dito.
-Responda APENAS com a transcrição, sem formatação extra.`
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Transcreva este áudio:"
-              },
-              {
-                type: "audio",
-                audio: {
-                  data: audioBase64,
-                  mime_type: mimeType || "audio/ogg"
-                }
-              }
-            ]
-          }
-        ]
+        audio_url: uploadUrl,
+        language_code: "pt",
+        speech_model: "best",
       }),
     });
-
-    if (!response.ok) {
-      console.error("Erro na transcrição:", await response.text());
+    
+    if (!transcriptResponse.ok) {
+      const errorText = await transcriptResponse.text();
+      console.error("❌ [ASSEMBLYAI] Erro ao solicitar transcrição:", errorText);
       return null;
     }
-
-    const data = await response.json();
-    const transcricao = data.choices?.[0]?.message?.content?.trim() || null;
     
-    console.log(`📝 [PERCEPÇÃO] Transcrição: "${transcricao}"`);
-    return transcricao;
+    const transcriptData = await transcriptResponse.json();
+    const transcriptId = transcriptData.id;
+    console.log("🆔 [ASSEMBLYAI] ID da transcrição:", transcriptId);
+    
+    // 3. Polling para aguardar resultado
+    let status = "queued";
+    let transcricaoFinal: string | null = null;
+    let tentativas = 0;
+    const maxTentativas = 30; // Máximo 30 segundos
+    
+    while ((status === "queued" || status === "processing") && tentativas < maxTentativas) {
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Aguarda 1 segundo
+      
+      const pollingResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
+        headers: {
+          "Authorization": ASSEMBLYAI_API_KEY!,
+        },
+      });
+      
+      if (!pollingResponse.ok) {
+        console.error("❌ [ASSEMBLYAI] Erro no polling:", await pollingResponse.text());
+        tentativas++;
+        continue;
+      }
+      
+      const pollingData = await pollingResponse.json();
+      status = pollingData.status;
+      
+      console.log(`⏳ [ASSEMBLYAI] Status: ${status} (tentativa ${tentativas + 1})`);
+      
+      if (status === "completed") {
+        transcricaoFinal = pollingData.text;
+        break;
+      } else if (status === "error") {
+        console.error("❌ [ASSEMBLYAI] Erro na transcrição:", pollingData.error);
+        return null;
+      }
+      
+      tentativas++;
+    }
+    
+    if (!transcricaoFinal) {
+      console.error("❌ [ASSEMBLYAI] Timeout ou sem resultado");
+      return null;
+    }
+    
+    console.log(`✅ [PERCEPÇÃO] Transcrição AssemblyAI: "${transcricaoFinal}"`);
+    return transcricaoFinal;
   } catch (error) {
-    console.error("Erro ao transcrever áudio:", error);
+    console.error("❌ [PERCEPÇÃO] Erro ao transcrever áudio:", error);
     return null;
   }
 }
