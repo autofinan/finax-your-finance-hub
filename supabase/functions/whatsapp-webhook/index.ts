@@ -26,6 +26,33 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 // Tipo de origem da mensagem
 type MessageSource = "meta" | "vonage";
 
+// ============================================================================
+// 🎯 ARQUITETURA FINAX: 5 CAMADAS
+// ============================================================================
+// 1. PERCEPÇÃO: Transcrição de áudio, OCR de imagem (sem interpretação)
+// 2. INTERPRETAÇÃO: IA analisa e gera hipótese (tipo, valor, descrição)
+// 3. HIPÓTESE: Sistema cria proposta de registro
+// 4. VALIDAÇÃO: Usuário confirma ou corrige (OBRIGATÓRIO)
+// 5. EXECUÇÃO: Só após confirmação explícita
+// ============================================================================
+
+// Interface para hipótese pendente (entre interpretação e execução)
+interface HipotesePendente {
+  origem: "audio" | "imagem" | "texto";
+  tipo_operacao: "gasto" | "entrada" | "parcelamento" | "recorrente";
+  valor?: number;
+  descricao?: string;
+  categoria?: string;
+  forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
+  confianca: number;
+  dados_faltantes: string[];
+  mensagem_original?: string;
+  // Para imagens com múltiplos itens
+  multiplos_itens?: { descricao: string; valor: number }[];
+  modo_registro?: "unico" | "separado";
+  created_at: string;
+}
+
 // Tipos de intent que a IA pode detectar
 interface ExtractedIntent {
   intent: 
@@ -44,48 +71,26 @@ interface ExtractedIntent {
     | "ajuda"
     | "outro";
   
-  // Para transações simples
   valor?: number;
   categoria?: string;
   descricao?: string;
   forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
   cartao_id?: string;
-  
-  // Para parcelamentos
   parcelas?: number;
-  
-  // Para recorrentes
   tipo_recorrencia?: "mensal" | "semanal" | "anual";
   dia_mes?: number;
   dia_semana?: string;
-  
-  // Para consultas
-  periodo?: string; // "mes_atual", "dezembro", "semana", etc.
+  periodo?: string;
   categoria_consulta?: string;
-  
-  // Para cancelamentos/correções
-  transacao_alvo?: string; // descrição da transação a ser alterada
-  
-  // Para confirmação pendente (áudio/foto)
-  aguardando_confirmacao?: boolean;
+  transacao_alvo?: string;
 }
 
-// Interface para fluxo de confirmação de mídia
-interface FluxoConfirmacaoMidia {
-  tipo: "audio" | "imagem";
-  dados_extraidos: Partial<ExtractedIntent>;
-  dados_faltantes: string[];
-  mensagem_original?: string;
-  imagem_tipo?: "comprovante" | "fatura" | "extrato" | "outro";
-  created_at: string;
-}
-
-// Interface ATUALIZADA para fluxo ativo com ultima_pergunta
+// Interface para fluxo ativo
 interface FluxoAtivo {
   intent: string;
   dados_coletados: Partial<ExtractedIntent>;
   dados_faltantes: string[];
-  ultima_pergunta: string;  // NOVO: Contexto da última pergunta
+  ultima_pergunta: string;
   created_at: string;
 }
 
@@ -98,89 +103,15 @@ interface InterpretacaoIA {
   mensagem_clarificacao?: string;
 }
 
-// ========== FUNÇÕES DE CONTROLE DE ESTADO ==========
-
-// Busca fluxo ativo para o usuário
-async function getFluxoAtivo(phoneNumber: string): Promise<FluxoAtivo | null> {
-  try {
-    const { data } = await supabase
-      .from("historico_conversas")
-      .select("resumo, created_at")
-      .eq("phone_number", phoneNumber)
-      .like("tipo", "fluxo_ativo_%")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    if (!data || !data.resumo) return null;
-
-    // Verifica se o fluxo não é muito antigo (máximo 10 minutos)
-    const createdAt = new Date(data.created_at);
-    const agora = new Date();
-    const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
-    
-    if (diffMinutos > 10) {
-      console.log("⏰ Fluxo ativo expirado (mais de 10 min)");
-      return null;
-    }
-
-    return JSON.parse(data.resumo) as FluxoAtivo;
-  } catch (error) {
-    console.log("Nenhum fluxo ativo encontrado");
-    return null;
-  }
-}
-
-// Salva fluxo ativo ATUALIZADO com ultima_pergunta
-async function salvarFluxoAtivo(
-  phoneNumber: string, 
-  userId: string,
-  intentOriginal: string,
-  dadosColetados: Partial<ExtractedIntent>,
-  dadosFaltantes: string[],
-  mensagemUsuario: string,
-  respostaBot: string,
-  ultimaPergunta: string  // NOVO parâmetro
-): Promise<void> {
-  const fluxo: FluxoAtivo = {
-    intent: intentOriginal,
-    dados_coletados: dadosColetados,
-    dados_faltantes: dadosFaltantes,
-    ultima_pergunta: ultimaPergunta,  // NOVO
-    created_at: new Date().toISOString()
-  };
-
-  await supabase.from("historico_conversas").insert({
-    phone_number: phoneNumber,
-    user_id: userId,
-    user_message: mensagemUsuario,
-    ai_response: respostaBot,
-    tipo: `fluxo_ativo_${intentOriginal}`,
-    resumo: JSON.stringify(fluxo)
-  });
-
-  console.log("💾 Fluxo ativo salvo:", JSON.stringify(fluxo));
-}
-
-// Limpa fluxo ativo após conclusão
-async function limparFluxoAtivo(phoneNumber: string): Promise<void> {
-  await supabase
-    .from("historico_conversas")
-    .update({ tipo: "fluxo_concluido" })
-    .eq("phone_number", phoneNumber)
-    .like("tipo", "fluxo_ativo_%");
-    
-  console.log("🧹 Fluxo ativo limpo para:", phoneNumber);
-}
-
-// ========== PROCESSAMENTO DE ÁUDIO ==========
+// ============================================================================
+// 🧠 CAMADA 1: PERCEPÇÃO (SEM INTELIGÊNCIA)
+// ============================================================================
 
 // Baixa arquivo de mídia do WhatsApp
 async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
   try {
-    console.log(`🎵 Baixando mídia ${mediaId}...`);
+    console.log(`🎵 [PERCEPÇÃO] Baixando mídia ${mediaId}...`);
     
-    // 1. Obtém URL do arquivo
     const urlResponse = await fetch(
       `https://graph.facebook.com/v18.0/${mediaId}`,
       {
@@ -198,7 +129,6 @@ async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
     const urlData = await urlResponse.json();
     const mediaUrl = urlData.url;
     
-    // 2. Baixa o arquivo
     const mediaResponse = await fetch(mediaUrl, {
       headers: {
         "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
@@ -210,11 +140,10 @@ async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
       return null;
     }
     
-    // 3. Converte para base64
     const arrayBuffer = await mediaResponse.arrayBuffer();
     const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
     
-    console.log(`✅ Mídia baixada: ${base64.length} chars`);
+    console.log(`✅ [PERCEPÇÃO] Mídia baixada: ${base64.length} chars`);
     return base64;
   } catch (error) {
     console.error("Erro ao baixar mídia:", error);
@@ -222,22 +151,10 @@ async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
   }
 }
 
-// Transcreve e interpreta áudio usando Lovable AI (Gemini com suporte a áudio)
-interface TranscricaoAudio {
-  transcricao: string;
-  tipo: "financeiro" | "nao_financeiro" | "ambiguo";
-  interpretacao?: {
-    tipo_operacao?: "gasto" | "receita" | "parcelamento" | "recorrente" | "consulta";
-    valor?: number;
-    descricao?: string;
-    categoria?: string;
-    forma_pagamento?: string;
-  };
-}
-
-async function transcreverAudio(audioBase64: string, mimeType: string): Promise<TranscricaoAudio | null> {
+// Transcreve áudio (APENAS transcrição, sem interpretação)
+async function transcreverAudioPuro(audioBase64: string, mimeType: string): Promise<string | null> {
   try {
-    console.log("🎤 Transcrevendo e interpretando áudio via Lovable AI...");
+    console.log("🎤 [PERCEPÇÃO] Transcrevendo áudio (sem interpretar)...");
     
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -250,47 +167,17 @@ async function transcreverAudio(audioBase64: string, mimeType: string): Promise<
         messages: [
           {
             role: "system",
-            content: `Você é um assistente de transcrição para o Finax, um app de finanças pessoais via WhatsApp.
-            
-Sua tarefa é:
-1. Transcrever o áudio em português brasileiro
-2. Identificar se o conteúdo é relacionado a finanças pessoais
-3. Se for financeiro, extrair as informações relevantes
-
-TIPOS DE MENSAGENS FINANCEIRAS:
-- Registro de gasto: "gastei 50 no mercado", "comprei açaí de 25 reais", "paguei 100 de luz"
-- Registro de receita: "recebi 1500 hoje", "entrou meu salário de 3000"
-- Parcelamento: "comprei TV de 2000 em 10x"
-- Consulta: "quanto gastei esse mês", "meu resumo", "gastos com alimentação"
-
-NÚMEROS POR EXTENSO:
-- "vinte e cinco" = 25
-- "cem reais" = 100
-- "mil e quinhentos" = 1500
-
-REGRAS:
-- Foque em identificar VALOR e DESCRIÇÃO do gasto/receita
-- Se o áudio for uma receita de comida, vídeo aleatório, ou conteúdo não financeiro, marque como "nao_financeiro"
-- Se parecer que a pessoa está tentando registrar algo mas não ficou claro, marque como "ambiguo"`
+            content: `Você é um transcritor de áudio. 
+Sua ÚNICA tarefa é transcrever o áudio em português brasileiro.
+NÃO interprete, NÃO analise, apenas transcreva exatamente o que foi dito.
+Responda APENAS com a transcrição, sem formatação extra.`
           },
           {
             role: "user",
             content: [
               {
                 type: "text",
-                text: `Transcreva e interprete este áudio. Responda APENAS com JSON válido:
-
-{
-  "transcricao": "texto transcrito do áudio",
-  "tipo": "financeiro" | "nao_financeiro" | "ambiguo",
-  "interpretacao": {
-    "tipo_operacao": "gasto" | "receita" | "parcelamento" | "recorrente" | "consulta" ou null,
-    "valor": número ou null,
-    "descricao": "o que foi comprado/recebido" ou null,
-    "categoria": "alimentação" | "transporte" | "lazer" | "saúde" | "moradia" | "outros" ou null,
-    "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null
-  }
-}`
+                text: "Transcreva este áudio:"
               },
               {
                 type: "audio",
@@ -311,54 +198,30 @@ REGRAS:
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content?.trim();
+    const transcricao = data.choices?.[0]?.message?.content?.trim() || null;
     
-    console.log(`📝 Resposta da IA: "${content}"`);
-    
-    // Parse do JSON
-    try {
-      // Remove possíveis marcadores de código
-      const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const resultado = JSON.parse(jsonStr) as TranscricaoAudio;
-      
-      console.log(`📝 Transcrição: "${resultado.transcricao}"`);
-      console.log(`📝 Tipo: ${resultado.tipo}`);
-      if (resultado.interpretacao) {
-        console.log(`📝 Interpretação:`, JSON.stringify(resultado.interpretacao));
-      }
-      
-      return resultado;
-    } catch (parseError) {
-      // Se não conseguir parsear, retorna como transcrição simples não financeira
-      console.log("⚠️ Não conseguiu parsear resposta, usando como texto simples");
-      return {
-        transcricao: content,
-        tipo: "ambiguo"
-      };
-    }
+    console.log(`📝 [PERCEPÇÃO] Transcrição: "${transcricao}"`);
+    return transcricao;
   } catch (error) {
     console.error("Erro ao transcrever áudio:", error);
     return null;
   }
 }
 
-// ========== PROCESSAMENTO DE IMAGEM / OCR ==========
-
-// Analisa imagem e extrai informações financeiras via OCR
-interface AnaliseImagem {
+// Extrai dados brutos de imagem (OCR puro)
+interface DadosImagemBrutos {
   tipo: "comprovante" | "fatura" | "extrato" | "outro";
   valor?: number;
   descricao?: string;
   forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
-  data?: string;
   estabelecimento?: string;
   itens?: { descricao: string; valor: number }[];
   confianca: number;
 }
 
-async function analisarImagem(imageBase64: string, mimeType: string): Promise<AnaliseImagem | null> {
+async function extrairDadosImagemPuro(imageBase64: string, mimeType: string): Promise<DadosImagemBrutos | null> {
   try {
-    console.log("📷 Analisando imagem via Lovable AI Vision...");
+    console.log("📷 [PERCEPÇÃO] Extraindo dados da imagem (OCR)...");
     
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -374,34 +237,22 @@ async function analisarImagem(imageBase64: string, mimeType: string): Promise<An
             content: [
               {
                 type: "text",
-                text: `Analise esta imagem e extraia informações financeiras.
+                text: `Extraia dados visuais desta imagem. NÃO tome decisões, apenas extraia.
 
-IDENTIFIQUE O TIPO:
-- "comprovante": Comprovante de pagamento (PIX, cartão, boleto, recibo)
-- "fatura": Print de fatura de cartão de crédito
-- "extrato": Print de extrato bancário
-- "outro": Imagem não relacionada a finanças
+IDENTIFIQUE:
+- tipo: "comprovante" (pagamento), "fatura" (cartão), "extrato" (banco), "outro"
+- valor: número principal se visível
+- descricao: texto descritivo se visível
+- forma_pagamento: "pix", "dinheiro", "debito", "credito" se identificável
+- estabelecimento: nome do local se visível
+- itens: lista de produtos/itens se for nota fiscal
 
-EXTRAIA (se visível):
-- valor: Valor numérico principal (ex: 87.90)
-- descricao: O que foi comprado ou descrição do pagamento
-- forma_pagamento: "pix", "dinheiro", "debito" ou "credito"
-- data: Data do pagamento se visível (formato YYYY-MM-DD)
-- estabelecimento: Nome do estabelecimento se visível
-- itens: Lista de itens se for nota fiscal/cupom
-
-REGRAS:
-- Se não conseguir identificar algo, deixe null
-- O valor mais importante é o TOTAL
-- Priorize identificar o valor mesmo que outros dados não estejam claros
-
-Responda APENAS com JSON válido:
+Responda APENAS JSON:
 {
   "tipo": "comprovante" | "fatura" | "extrato" | "outro",
   "valor": number ou null,
   "descricao": "string" ou null,
   "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null,
-  "data": "YYYY-MM-DD" ou null,
   "estabelecimento": "string" ou null,
   "itens": [{"descricao": "string", "valor": number}] ou null,
   "confianca": 0.0 a 1.0
@@ -427,1046 +278,436 @@ Responda APENAS com JSON válido:
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '{"tipo": "outro", "confianca": 0}';
     
-    // Limpa markdown do JSON
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    console.log("📷 Análise da imagem:", cleanJson);
+    console.log("📷 [PERCEPÇÃO] Dados extraídos:", cleanJson);
     
-    return JSON.parse(cleanJson) as AnaliseImagem;
+    return JSON.parse(cleanJson) as DadosImagemBrutos;
   } catch (error) {
     console.error("Erro ao analisar imagem:", error);
     return null;
   }
 }
 
-// ========== FLUXO DE CONFIRMAÇÃO DE MÍDIA ==========
+// ============================================================================
+// 🧠 CAMADA 2: INTERPRETAÇÃO (IA ANALISA E CRIA HIPÓTESE)
+// ============================================================================
 
-// Salva fluxo de confirmação pendente
-async function salvarFluxoConfirmacaoMidia(
+interface InterpretacaoFinanceira {
+  eh_financeiro: boolean;
+  tipo_operacao?: "gasto" | "entrada" | "parcelamento" | "recorrente" | "consulta";
+  valor?: number;
+  descricao?: string;
+  categoria?: string;
+  forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
+  confianca: number;
+  motivo?: string;
+}
+
+async function interpretarMensagem(mensagem: string): Promise<InterpretacaoFinanceira> {
+  try {
+    console.log("🧠 [INTERPRETAÇÃO] Analisando mensagem...");
+    
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Você é um intérprete financeiro do Finax.
+Analise a mensagem e identifique se é sobre finanças pessoais.
+
+EXEMPLOS DE MENSAGENS FINANCEIRAS:
+- "gastei 50 no mercado" → gasto
+- "comprei açaí de 25 reais" → gasto
+- "recebi 1500 hoje" → entrada
+- "paguei 100 de luz" → gasto
+- "parcelei TV em 10x" → parcelamento
+
+NÚMEROS POR EXTENSO:
+- "vinte e cinco" = 25
+- "cem reais" = 100
+- "mil e quinhentos" = 1500
+
+CATEGORIAS: alimentação, transporte, lazer, moradia, saúde, educação, compras, tecnologia, assinaturas, salário, outros
+
+FORMAS DE PAGAMENTO:
+- "pix", "via pix" → pix
+- "dinheiro", "espécie" → dinheiro
+- "débito" → debito
+- "crédito", "cartão" → credito
+
+Se NÃO for sobre finanças (receita de comida, conversa aleatória, etc), marque eh_financeiro: false
+
+Responda APENAS JSON:
+{
+  "eh_financeiro": boolean,
+  "tipo_operacao": "gasto" | "entrada" | "parcelamento" | "recorrente" | "consulta" | null,
+  "valor": number ou null,
+  "descricao": "string" ou null,
+  "categoria": "string" ou null,
+  "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null,
+  "confianca": 0.0 a 1.0,
+  "motivo": "explicação breve" ou null
+}`
+          },
+          { role: "user", content: mensagem }
+        ]
+      }),
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '{"eh_financeiro": false, "confianca": 0}';
+    
+    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    console.log("🧠 [INTERPRETAÇÃO] Resultado:", cleanJson);
+    
+    return JSON.parse(cleanJson) as InterpretacaoFinanceira;
+  } catch (error) {
+    console.error("Erro ao interpretar mensagem:", error);
+    return { eh_financeiro: false, confianca: 0 };
+  }
+}
+
+// ============================================================================
+// 🎯 CAMADA 3: HIPÓTESE (SISTEMA CRIA PROPOSTA)
+// ============================================================================
+
+// Salva hipótese pendente de confirmação
+async function salvarHipotesePendente(
   phoneNumber: string,
   userId: string,
-  tipo: "audio" | "imagem",
-  dadosExtraidos: Partial<ExtractedIntent>,
-  dadosFaltantes: string[],
-  imagemTipo?: "comprovante" | "fatura" | "extrato" | "outro",
-  mensagemOriginal?: string
+  hipotese: HipotesePendente
 ): Promise<void> {
-  const fluxo: FluxoConfirmacaoMidia = {
-    tipo,
-    dados_extraidos: dadosExtraidos,
-    dados_faltantes: dadosFaltantes,
-    imagem_tipo: imagemTipo,
-    mensagem_original: mensagemOriginal,
-    created_at: new Date().toISOString()
-  };
-
   await supabase.from("historico_conversas").insert({
     phone_number: phoneNumber,
     user_id: userId,
-    user_message: `[${tipo.toUpperCase()} RECEBIDO]${mensagemOriginal ? `: ${mensagemOriginal}` : ''}`,
-    ai_response: "[AGUARDANDO CONFIRMAÇÃO]",
-    tipo: `fluxo_confirmacao_${tipo}`,
-    resumo: JSON.stringify(fluxo)
+    user_message: `[HIPÓTESE] ${hipotese.origem}`,
+    ai_response: "[AGUARDANDO VALIDAÇÃO]",
+    tipo: "hipotese_pendente",
+    resumo: JSON.stringify(hipotese)
   });
 
-  console.log(`💾 Fluxo de confirmação ${tipo} salvo`);
+  console.log(`💡 [HIPÓTESE] Salva para validação: ${JSON.stringify(hipotese)}`);
 }
 
-// Busca fluxo de confirmação pendente
-async function getFluxoConfirmacaoMidia(phoneNumber: string): Promise<FluxoConfirmacaoMidia | null> {
+// Busca hipótese pendente
+async function getHipotesePendente(phoneNumber: string): Promise<HipotesePendente | null> {
   try {
     const { data } = await supabase
       .from("historico_conversas")
       .select("resumo, created_at")
       .eq("phone_number", phoneNumber)
-      .like("tipo", "fluxo_confirmacao_%")
+      .eq("tipo", "hipotese_pendente")
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
 
     if (!data || !data.resumo) return null;
 
-    // Verifica se não é muito antigo (máximo 15 minutos)
+    // Verifica validade (máximo 15 minutos)
     const createdAt = new Date(data.created_at);
     const agora = new Date();
     const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
     
     if (diffMinutos > 15) return null;
 
-    return JSON.parse(data.resumo) as FluxoConfirmacaoMidia;
+    return JSON.parse(data.resumo) as HipotesePendente;
   } catch {
     return null;
   }
 }
 
-// Limpa fluxo de confirmação
-async function limparFluxoConfirmacaoMidia(phoneNumber: string): Promise<void> {
+// Limpa hipótese pendente (após confirmação, cancelamento ou novo comando)
+async function limparHipotesePendente(phoneNumber: string): Promise<void> {
   await supabase
     .from("historico_conversas")
-    .update({ tipo: "confirmacao_concluida" })
+    .update({ tipo: "hipotese_processada" })
     .eq("phone_number", phoneNumber)
-    .like("tipo", "fluxo_confirmacao_%");
+    .eq("tipo", "hipotese_pendente");
     
-  console.log("🧹 Fluxo de confirmação limpo");
+  console.log("🧹 [HIPÓTESE] Limpa");
 }
 
-// Processa confirmação do usuário
-function detectarConfirmacao(mensagem: string): "sim" | "nao" | "correcao" | null {
+// ============================================================================
+// ✅ CAMADA 4: VALIDAÇÃO (DETECÇÃO DE RESPOSTA DO USUÁRIO)
+// ============================================================================
+
+interface RespostaValidacao {
+  tipo: "confirmar" | "cancelar" | "corrigir" | "dados_novos" | "indefinido";
+  dados_corrigidos?: Partial<HipotesePendente>;
+}
+
+function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente): RespostaValidacao {
   const msg = mensagem.toLowerCase().trim();
   
-  // Confirmações positivas
-  if (/^(sim|s|ok|pode|confirma|isso|certo|exato|tá|ta|blz|beleza|isso mesmo|pode salvar|salva|registra)$/i.test(msg)) {
-    return "sim";
-  }
-  
-  // Negações
-  if (/^(não|nao|n|cancela|para|desiste|deixa|errado|não é isso)$/i.test(msg)) {
-    return "nao";
-  }
-  
-  // Provavelmente uma correção
-  if (msg.includes("era") || msg.includes("foi") || msg.includes("valor") || 
-      msg.includes("categoria") || msg.includes("cartão") || msg.includes("débito") ||
-      msg.includes("crédito") || msg.includes("pix")) {
-    return "correcao";
-  }
-  
-  return null;
-}
-
-// ========== NOVA FUNÇÃO: IA COMO ORQUESTRADORA COGNITIVA ==========
-// Substitui extractDadosResposta - agora a IA interpreta com CONTEXTO COMPLETO
-async function interpretarRespostaComContexto(
-  mensagemUsuario: string, 
-  fluxoAtivo: FluxoAtivo
-): Promise<InterpretacaoIA> {
-  console.log("🧠 Interpretando resposta com contexto completo...");
-  console.log(`   Fluxo: ${fluxoAtivo.intent}`);
-  console.log(`   Dados coletados: ${JSON.stringify(fluxoAtivo.dados_coletados)}`);
-  console.log(`   Dados faltantes: ${fluxoAtivo.dados_faltantes.join(", ")}`);
-  console.log(`   Última pergunta: ${fluxoAtivo.ultima_pergunta}`);
-  console.log(`   Mensagem do usuário: ${mensagemUsuario}`);
-  
-  try {
-    // Prompt dinâmico com CONTEXTO COMPLETO - IA como intérprete cognitivo
-    const prompt = `Você é um assistente financeiro conversacional INTELIGENTE chamado Finax.
-Sua tarefa é INTERPRETAR a resposta do usuário no contexto da conversa ativa.
-
-═══════════════════════════════════════════════════════════
-CONTEXTO DO FLUXO ATIVO
-═══════════════════════════════════════════════════════════
-Fluxo em andamento: ${fluxoAtivo.intent}
-Dados já coletados: ${JSON.stringify(fluxoAtivo.dados_coletados, null, 2)}
-Dados que ainda precisamos: ${fluxoAtivo.dados_faltantes.join(", ")}
-
-═══════════════════════════════════════════════════════════
-ÚLTIMA PERGUNTA FEITA AO USUÁRIO
-═══════════════════════════════════════════════════════════
-"${fluxoAtivo.ultima_pergunta}"
-
-═══════════════════════════════════════════════════════════
-MENSAGEM DO USUÁRIO (resposta à pergunta acima)
-═══════════════════════════════════════════════════════════
-"${mensagemUsuario}"
-
-═══════════════════════════════════════════════════════════
-REGRAS DE INTERPRETAÇÃO
-═══════════════════════════════════════════════════════════
-
-1. NÚMEROS POR EXTENSO - Converta para valor numérico:
-   - "dez" → 10
-   - "vinte" → 20
-   - "vinte e três" → 23
-   - "trinta e um" → 31
-   - "quinze" → 15
-   - "acho que vinte e três" → 23
-
-2. PADRÕES DE DIA DO MÊS:
-   - "dia 10" → dia_mes: 10
-   - "no dia 15" → dia_mes: 15
-   - "acho que dia vinte e três" → dia_mes: 23
-   - "todo dia 5" → dia_mes: 5
-   - "23" (número puro) → dia_mes: 23
-
-3. VALORES MONETÁRIOS:
-   - "59,90" → valor: 59.90
-   - "R$ 100" → valor: 100
-   - "cem reais" → valor: 100
-   - "cinquenta e nove e noventa" → valor: 59.90
-
-4. INTENÇÕES ESPECIAIS:
-   - "cancelar", "cancela", "parar", "deixa pra lá", "esquece" → intencao: "cancelar"
-   - Se o usuário menciona algo COMPLETAMENTE diferente (ex: "gastei 50 no mercado") → intencao: "novo_comando"
-   - Se a mensagem responde à pergunta → intencao: "continuar_fluxo"
-   - Se não faz sentido → intencao: "indefinida"
-
-5. REGRA CRÍTICA:
-   - Interprete a mensagem COMO RESPOSTA À PERGUNTA, não como comando novo
-   - Se a pergunta era "qual dia do mês?" e o usuário disse "vinte e três", isso É o dia 23
-   - Não peça confirmação, apenas extraia o valor
-
-═══════════════════════════════════════════════════════════
-FORMATO DE RESPOSTA (JSON OBRIGATÓRIO)
-═══════════════════════════════════════════════════════════
-{
-  "campo": "dia_mes",           // ou "valor", "descricao", etc. - qual dado foi informado
-  "valor": 23,                  // o valor extraído/convertido
-  "confianca": 0.95,            // 0 a 1, quão certo você está
-  "intencao": "continuar_fluxo" // "continuar_fluxo", "cancelar", "novo_comando" ou "indefinida"
-}
-
-Se intencao for "indefinida", adicione:
-{
-  "campo": null,
-  "valor": null,
-  "confianca": 0.2,
-  "intencao": "indefinida",
-  "mensagem_clarificacao": "Não entendi sua resposta. Você pode me dizer o dia do mês? Por exemplo: 10, dia 15, ou vinte e três."
-}
-
-RESPONDA APENAS COM O JSON, SEM EXPLICAÇÕES.`;
-
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: prompt },
-          { role: "user", content: mensagemUsuario }
-        ],
-      }),
-    });
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '{"intencao": "indefinida", "confianca": 0}';
-    
-    // Limpa markdown do JSON
-    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    console.log("🧠 Interpretação da IA (raw):", cleanJson);
-    
-    const interpretacao: InterpretacaoIA = JSON.parse(cleanJson);
-    console.log("🧠 Interpretação processada:", JSON.stringify(interpretacao));
-    
-    return interpretacao;
-  } catch (error) {
-    console.error("❌ Erro ao interpretar resposta:", error);
-    return {
-      confianca: 0,
-      intencao: "indefinida",
-      mensagem_clarificacao: "Desculpe, não consegui processar sua resposta. Pode tentar novamente?"
-    };
-  }
-}
-
-// Extrai intent e entidades da mensagem usando AI
-async function extractIntent(message: string, historicoRecente: string): Promise<ExtractedIntent> {
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content: `Você é um analisador de intenções financeiras. Analise a mensagem do usuário e extraia a intenção e entidades.
-
-INTENTS POSSÍVEIS:
-- "registrar_gasto": usuário quer registrar um gasto/despesa simples
-- "registrar_entrada": usuário quer registrar uma receita/entrada de dinheiro
-- "criar_parcelamento": usuário comprou algo parcelado (ex: "comprei TV em 12x", "parcelei em 6 vezes")
-- "criar_recorrente": usuário quer cadastrar gasto que se repete (ex: "todo mês pago netflix", "semanalmente gasto X")
-- "consultar_resumo": usuário quer ver resumo geral dos gastos
-- "consultar_categoria": usuário quer ver gastos de uma categoria específica
-- "consultar_detalhes": usuário quer ver detalhes/lista de transações
-- "cancelar_transacao": usuário quer cancelar/apagar/desfazer algo (ex: "cancela isso", "apaga", "registrei errado", "cancela a conta")
-- "corrigir_transacao": usuário quer corrigir/editar algo já registrado
-- "apagar_transacao": usuário quer deletar uma transação específica (ex: "apaga o gasto de 50 do mercado")
-- "iniciar_organizacao": usuário quer organizar cartões, salário, contas fixas (ex: "quero organizar", "sim" após convite do onboarding)
-- "saudacao": apenas cumprimento (oi, olá, bom dia)
-- "ajuda": pedindo ajuda sobre como usar
-- "outro": não se encaixa em nenhum
-
-REGRAS DE EXTRAÇÃO:
-1. Se mencionar parcelas, vezes, "em Xx" → intent = "criar_parcelamento"
-2. Se mencionar "todo mês", "mensal", "semanal", "recorrente" → intent = "criar_recorrente"
-3. Se pedir resumo, quanto gastou, balanço → intent = "consultar_resumo"
-4. Se perguntar sobre categoria específica (alimentação, transporte, etc) → intent = "consultar_categoria"
-5. Se pedir detalhes, lista, o que comprou → intent = "consultar_detalhes"
-6. Recebi, ganhei, entrou, pix recebido → intent = "registrar_entrada"
-7. Gastei, paguei, comprei (sem parcela) → intent = "registrar_gasto"
-8. "cancela", "apaga", "desfaz", "registrei errado", "deixa pra lá", "deleta" → intent = "cancelar_transacao" ou "apagar_transacao"
-9. "errei", "corrige", "era X não Y", "valor errado" → intent = "corrigir_transacao"
-10. "sim", "quero organizar", "vamos lá", "bora" (contexto de onboarding) → intent = "iniciar_organizacao"
-
-FORMAS DE PAGAMENTO:
-- "no pix", "via pix", "pix" → forma_pagamento = "pix"
-- "dinheiro", "em espécie", "cash" → forma_pagamento = "dinheiro"
-- "débito", "cartão de débito" → forma_pagamento = "debito"
-- "crédito", "cartão de crédito", "no cartão" → forma_pagamento = "credito"
-
-CATEGORIAS VÁLIDAS:
-alimentação, transporte, lazer, moradia, saúde, educação, compras, tecnologia, assinaturas, salário, freelance, investimentos, pix, outros
-
-EXTRAÇÃO DE VALORES:
-- "45 reais", "R$ 45", "45,00" → valor: 45
-- "3000 em 12x" → valor: 3000 (total), parcelas: 12
-- "20,90 todo mês no dia 10" → valor: 20.90, tipo_recorrencia: "mensal", dia_mes: 10
-
-Responda APENAS com JSON válido:
-{
-  "intent": "string",
-  "valor": number ou null,
-  "categoria": "string" ou null,
-  "descricao": "string" ou null,
-  "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null,
-  "parcelas": number ou null,
-  "tipo_recorrencia": "string" ou null,
-  "dia_mes": number ou null,
-  "dia_semana": "string" ou null,
-  "periodo": "string" ou null,
-  "categoria_consulta": "string" ou null,
-  "transacao_alvo": "string" ou null
-}
-
-${historicoRecente ? `CONTEXTO DA CONVERSA RECENTE:\n${historicoRecente}` : ""}
-`
-          },
-          { role: "user", content: message }
-        ],
-      }),
-    });
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '{"intent": "outro"}';
-    
-    // Limpa o JSON de possíveis markdown
-    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    console.log("Intent extraído:", cleanJson);
-    return JSON.parse(cleanJson);
-  } catch (error) {
-    console.error("Erro ao extrair intent:", error);
-    return { intent: "outro" };
-  }
-}
-
-// Gera resposta conversacional com contexto completo
-async function generateResponse(
-  userMessage: string, 
-  context: string, 
-  acaoRealizada: string
-): Promise<string> {
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content: `Você é o Finax, um assistente financeiro pessoal via WhatsApp.
-
-═══════════════════════════════════════════════════════════
-📌 ESCOPO PERMITIDO (APENAS FINANÇAS PESSOAIS)
-═══════════════════════════════════════════════════════════
-
-VOCÊ PODE:
-✅ Registrar gastos e entradas
-✅ Entender descrições naturais de movimentações financeiras
-✅ Gerenciar gastos recorrentes e parcelamentos
-✅ Fornecer resumos e relatórios financeiros
-✅ Ajudar a entender a situação financeira
-✅ Dar dicas práticas sobre orçamento e organização
-✅ Explicar como o Finax funciona
-
-VOCÊ NÃO PODE:
-❌ Responder perguntas de conhecimento geral
-❌ Conversar sobre temas não relacionados a finanças
-❌ Falar sobre política, notícias, entretenimento, receitas, piadas
-❌ Atuar como assistente genérico
-
-Se a mensagem estiver FORA do domínio financeiro:
-"Meu foco é te ajudar a organizar suas finanças 💰
-Posso registrar gastos, mostrar resumos ou ajudar com orçamento.
-O que você gostaria de fazer?"
-
-═══════════════════════════════════════════════════════════
-🚨 REGRA CRÍTICA: A IA NÃO CALCULA
-═══════════════════════════════════════════════════════════
-
-🚫 NUNCA calcule valores financeiros
-🚫 NUNCA some, subtraia, tire médias ou percentuais
-🚫 NUNCA refaça cálculos que já foram fornecidos
-✅ Todos os valores numéricos são PRÉ-CALCULADOS pelo sistema
-✅ Apenas APRESENTE e INTERPRETE os dados fornecidos
-✅ Confie 100% nos números que receber
-
-═══════════════════════════════════════════════════════════
-💬 COMPORTAMENTO CONSULTIVO
-═══════════════════════════════════════════════════════════
-
-Você é um CONSULTOR FINANCEIRO PESSOAL, não um robô.
-
-VOCÊ PODE:
-• Analisar padrões de gastos
-• Apontar excessos com linguagem leve
-• Sugerir ajustes simples
-• Alertar riscos financeiros com cuidado
-
-VOCÊ NÃO PODE:
-• Julgar o usuário
-• Usar tom agressivo ou crítico
-• Dar conselhos técnicos ou complexos
-• Fazer previsões absolutas (use "tende a", "pode indicar")
-
-═══════════════════════════════════════════════════════════
-📝 FORMATO DAS MENSAGENS (WHATSAPP)
-═══════════════════════════════════════════════════════════
-
-• Mensagens CURTAS e escaneáveis
-• Emojis com MODERAÇÃO (2-3 no máximo)
-• Blocos bem separados com linhas em branco
-• Clareza > texto longo
-• Linguagem simples para público geral
-• Destaque valores importantes com *negrito*
-• Use • ou - para listas
-
-═══════════════════════════════════════════════════════════
-📋 REGRA CRÍTICA SOBRE PLANOS
-═══════════════════════════════════════════════════════════
-
-🚫 VOCÊ NUNCA DEVE:
-• Mencionar planos, pagamentos, assinaturas ou bloqueios
-• Falar sobre trial, período de teste ou expiração
-• Mencionar preços, valores de planos ou monetização
-• Dizer que algo está bloqueado ou limitado
-
-✅ SE O USUÁRIO PERGUNTAR SOBRE PLANOS:
-"O controle de acesso é feito automaticamente pelo sistema.
-Se precisar de ajuda com isso, entre em contato conosco pelo site."
-
-O backend controla 100% do acesso. Você foca APENAS em finanças.
-
-${acaoRealizada ? `\n═══════════════════════════════════════════════════════════\n✅ AÇÃO REALIZADA\n═══════════════════════════════════════════════════════════\n${acaoRealizada}\n` : ""}
-
-${context ? `\n═══════════════════════════════════════════════════════════\n📊 CONTEXTO FINANCEIRO (PRÉ-CALCULADO - NÃO RECALCULE)\n═══════════════════════════════════════════════════════════\n${context}` : ""}
-
-Responda de forma natural, amigável e consultiva.`
-          },
-          { role: "user", content: userMessage }
-        ],
-      }),
-    });
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || "Desculpe, não consegui processar sua mensagem.";
-  } catch (error) {
-    console.error("Erro ao gerar resposta:", error);
-    return "Ops! Tive um probleminha. Tente novamente em alguns segundos. 🔄";
-  }
-}
-
-// ========== FUNÇÕES PARA RELATÓRIOS USANDO BACKEND ==========
-
-// Busca relatório semanal calculado no backend
-// tipoPeriodo: "semana_atual" (segunda até hoje) ou "semana_passada" (segunda a domingo anterior)
-async function getRelatorioSemanal(usuarioId: string, tipoPeriodo: "semana_atual" | "semana_passada" = "semana_atual"): Promise<any> {
-  try {
-    console.log(`📊 Buscando relatório semanal: ${tipoPeriodo} para usuário ${usuarioId}`);
-    
-    const { data, error } = await supabase.rpc("fn_relatorio_semanal", { 
-      p_usuario_id: usuarioId,
-      p_tipo_periodo: tipoPeriodo
-    });
-    
-    if (error) {
-      console.error("Erro ao buscar relatório semanal:", error);
-      return null;
-    }
-    console.log("📊 Relatório semanal obtido:", JSON.stringify(data));
-    return data;
-  } catch (error) {
-    console.error("Erro no relatório semanal:", error);
-    return null;
-  }
-}
-
-// Busca relatório mensal calculado no backend
-async function getRelatorioMensal(usuarioId: string, mes?: number, ano?: number): Promise<any> {
-  try {
-    const params: any = { p_usuario_id: usuarioId };
-    if (mes) params.p_mes = mes;
-    if (ano) params.p_ano = ano;
-    
-    const { data, error } = await supabase.rpc("fn_relatorio_mensal", params);
-    
-    if (error) {
-      console.error("Erro ao buscar relatório mensal:", error);
-      return null;
-    }
-    return data;
-  } catch (error) {
-    console.error("Erro no relatório mensal:", error);
-    return null;
-  }
-}
-
-// Busca análise consultiva do backend
-async function getAnaliseConsultiva(usuarioId: string): Promise<any> {
-  try {
-    const { data, error } = await supabase.rpc("fn_analise_consultiva", { 
-      p_usuario_id: usuarioId 
-    });
-    
-    if (error) {
-      console.error("Erro ao buscar análise consultiva:", error);
-      return null;
-    }
-    return data;
-  } catch (error) {
-    console.error("Erro na análise consultiva:", error);
-    return null;
-  }
-}
-
-// Detecta tipo de relatório solicitado na mensagem
-interface TipoRelatorioDetectado {
-  tipo: "semanal" | "mensal" | "hoje" | "resumo";
-  periodo: "atual" | "passado";
-}
-
-function detectarTipoRelatorio(mensagem: string): TipoRelatorioDetectado | null {
-  const msg = mensagem.toLowerCase();
-  
-  // Detecta relatório semanal
-  if (msg.includes("semana") || msg.includes("semanal") || msg.includes("últimos 7 dias") || 
-      msg.includes("essa semana") || msg.includes("desta semana") || msg.includes("essa semana") ||
-      msg.includes("relatório da semana") || msg.includes("relatorio da semana")) {
-    
-    // Verifica se é semana passada
-    if (msg.includes("passada") || msg.includes("anterior") || msg.includes("última semana") ||
-        msg.includes("ultima semana") || msg.includes("semana passada")) {
-      return { tipo: "semanal", periodo: "passado" };
-    }
-    // Default: semana atual (dessa semana)
-    return { tipo: "semanal", periodo: "atual" };
-  }
-  
-  // Detecta relatório mensal
-  if (msg.includes("mês") || msg.includes("mensal") || msg.includes("esse mês") || 
-      msg.includes("mes") || msg.includes("esse mes")) {
-    if (msg.includes("passado") || msg.includes("anterior")) {
-      return { tipo: "mensal", periodo: "passado" };
-    }
-    return { tipo: "mensal", periodo: "atual" };
-  }
-  
-  if (msg.includes("hoje") || msg.includes("dia")) {
-    return { tipo: "hoje", periodo: "atual" };
-  }
-  
-  if (msg.includes("resumo") || msg.includes("balanço") || msg.includes("como estou") || msg.includes("situação")) {
-    return { tipo: "resumo", periodo: "atual" };
-  }
-  
-  return null;
-}
-
-// ========== ONBOARDING: SEQUÊNCIA DE BOAS-VINDAS HUMANIZADA ==========
-
-interface OnboardingConfig {
-  nome: string;
-  urlPainel: string;
-}
-
-async function enviarOnboarding(
-  phoneNumber: string, 
-  messageSource: MessageSource,
-  config: OnboardingConfig
-): Promise<void> {
-  const nome = config.nome?.split(" ")[0] || "amigo(a)"; // Usa só primeiro nome
-  const urlPainel = config.urlPainel || "finax.app";
-  
-  // Delay entre mensagens para parecer natural
-  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-  
-  // 1️⃣ BOAS-VINDAS (humanizada, curta)
-  const msg1 = `Oi, ${nome}! 👋
-
-Prazer, eu sou o *Finax* — seu assistente financeiro pessoal.
-
-Estou aqui pra te ajudar a organizar suas finanças de um jeito simples, direto pelo WhatsApp.`;
-
-  await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
-  await delay(2500);
-  
-  // 2️⃣ VALOR, NÃO FEATURES
-  const msg2 = `Comigo você organiza tudo em um só lugar: gastos do dia a dia, cartões, dívidas e salário.
-
-Sem planilha. Sem complicação. Só mandar mensagem como se fosse um amigo.`;
-
-  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
-  await delay(2000);
-  
-  // 3️⃣ DICA: FIXAR CONTATO
-  const msg3 = `💡 *Dica importante*
-
-Fixa o Finax no WhatsApp pra não perder seus registros no dia a dia.
-
-Assim seu controle financeiro fica sempre a um toque.`;
-
-  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
-  await delay(2500);
-  
-  // 4️⃣ ACESSO PRO LIBERADO
-  const msg4 = `🎁 *Acesso liberado*
-
-Você tem acesso completo ao Finax — todas as funcionalidades estão liberadas.
-
-Pode registrar gastos, entradas, parcelamentos, ver resumos...
-
-Mais pra frente te aviso sobre a continuidade 😊`;
-
-  await sendWhatsAppMessage(phoneNumber, msg4, messageSource);
-  await delay(2500);
-  
-  // 5️⃣ CONVITE PARA CENTRALIZAR (com consentimento)
-  const msg5 = `Quer que eu te ajude agora a organizar seus cartões, dívidas e salário?
-
-Fazendo isso, fica muito mais fácil registrar gastos depois.
-
-Responde *sim* se quiser começar, ou pode mandar direto seu primeiro gasto 💰`;
-
-  await sendWhatsAppMessage(phoneNumber, msg5, messageSource);
-  
-  console.log(`✅ Onboarding completo enviado para ${phoneNumber}`);
-}
-
-// ========== FLUXO DE CENTRALIZAÇÃO (ORGANIZAÇÃO INICIAL) ==========
-
-interface FluxoCentralizacao {
-  etapa: "cartoes" | "salario" | "contas_fixas" | "concluido";
-  dados: {
-    cartoes?: string[];
-    salario?: number;
-    dia_salario?: number;
-    contas_fixas?: { descricao: string; valor: number; dia: number }[];
-  };
-}
-
-async function iniciarFluxoCentralizacao(
-  phoneNumber: string,
-  usuarioId: string,
-  messageSource: MessageSource
-): Promise<void> {
-  const msg = `Ótimo! Vamos organizar sua base financeira 🎯
-
-Primeiro: você usa *cartão de crédito*?
-
-Se sim, me fala o nome do cartão (ex: "Nubank", "Inter", "C6")
-Se não, responde *não uso*`;
-
-  await sendWhatsAppMessage(phoneNumber, msg, messageSource);
-  
-  // Salva fluxo de centralização ativo
-  const fluxo: FluxoCentralizacao = {
-    etapa: "cartoes",
-    dados: {}
-  };
-  
-  await supabase.from("historico_conversas").insert({
-    phone_number: phoneNumber,
-    user_id: usuarioId,
-    user_message: "[INICIOU CENTRALIZAÇÃO]",
-    ai_response: msg,
-    tipo: "fluxo_ativo_centralizacao",
-    resumo: JSON.stringify(fluxo)
-  });
-}
-
-async function processarFluxoCentralizacao(
-  phoneNumber: string,
-  usuarioId: string,
-  messageSource: MessageSource,
-  mensagem: string,
-  fluxoAtual: FluxoCentralizacao
-): Promise<boolean> {
-  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-  const msgLower = mensagem.toLowerCase().trim();
-  
-  // Detecta se quer pular/cancelar
-  if (msgLower.includes("pular") || msgLower.includes("depois") || msgLower.includes("deixa") || msgLower.includes("cancela")) {
-    await sendWhatsAppMessage(phoneNumber, 
-      "Sem problema! Você pode organizar isso depois.\n\nQuando quiser, é só me mandar seu primeiro gasto 💰", 
-      messageSource
-    );
-    await limparFluxoAtivo(phoneNumber);
-    return true;
-  }
-  
-  switch (fluxoAtual.etapa) {
-    case "cartoes": {
-      if (msgLower.includes("não uso") || msgLower.includes("nao uso") || msgLower === "não" || msgLower === "nao") {
-        // Pula para salário
-        fluxoAtual.etapa = "salario";
-        fluxoAtual.dados.cartoes = [];
-      } else {
-        // Registra cartão
-        const nomeCartao = mensagem.trim();
-        
-        await supabase.from("cartoes_credito").insert({
-          usuario_id: usuarioId,
-          nome: nomeCartao,
-          ativo: true
-        });
-        
-        await sendWhatsAppMessage(phoneNumber, 
-          `✅ *${nomeCartao}* cadastrado!\n\nTem mais algum cartão? Me fala o nome ou responde *pronto* pra continuar.`, 
-          messageSource
-        );
-        
-        // Mantém na etapa cartões
-        fluxoAtual.dados.cartoes = [...(fluxoAtual.dados.cartoes || []), nomeCartao];
-        
-        await supabase.from("historico_conversas").insert({
-          phone_number: phoneNumber,
-          user_id: usuarioId,
-          user_message: mensagem,
-          ai_response: `Cartão ${nomeCartao} cadastrado`,
-          tipo: "fluxo_ativo_centralizacao",
-          resumo: JSON.stringify(fluxoAtual)
-        });
-        
-        return true;
-      }
-      
-      if (msgLower === "pronto" || msgLower.includes("só isso") || msgLower.includes("so isso")) {
-        fluxoAtual.etapa = "salario";
-      }
-      
-      // Pergunta sobre salário
-      await delay(1000);
-      await sendWhatsAppMessage(phoneNumber, 
-        `Agora me conta: você recebe um salário fixo todo mês?\n\nSe sim, me fala o valor (ex: "3500") e o dia que costuma cair (ex: "dia 5")\n\nSe não, responde *não tenho*`, 
-        messageSource
-      );
-      
-      fluxoAtual.etapa = "salario";
-      await supabase.from("historico_conversas").insert({
-        phone_number: phoneNumber,
-        user_id: usuarioId,
-        user_message: mensagem,
-        ai_response: "Perguntou sobre salário",
-        tipo: "fluxo_ativo_centralizacao",
-        resumo: JSON.stringify(fluxoAtual)
-      });
-      
-      return true;
-    }
-    
-    case "salario": {
-      if (msgLower.includes("não tenho") || msgLower.includes("nao tenho") || msgLower === "não" || msgLower === "nao") {
-        fluxoAtual.etapa = "contas_fixas";
-      } else {
-        // Tenta extrair valor e dia
-        const valorMatch = mensagem.match(/(\d+(?:[.,]\d{2})?)/);
-        const diaMatch = mensagem.match(/dia\s*(\d{1,2})/i) || mensagem.match(/(\d{1,2})(?:\s*de\s*cada)?/);
-        
-        if (valorMatch) {
-          const valor = parseFloat(valorMatch[1].replace(",", "."));
-          const dia = diaMatch ? parseInt(diaMatch[1]) : 5; // Default dia 5
-          
-          // Cria entrada recorrente de salário
-          await supabase.from("gastos_recorrentes").insert({
-            usuario_id: usuarioId,
-            valor_parcela: valor,
-            categoria: "salário",
-            tipo_recorrencia: "Mensal",
-            dia_mes: dia,
-            descricao: "Salário",
-            ativo: true,
-            origem: "whatsapp"
-          });
-          
-          fluxoAtual.dados.salario = valor;
-          fluxoAtual.dados.dia_salario = dia;
-          
-          await sendWhatsAppMessage(phoneNumber, 
-            `✅ Salário de *R$ ${valor.toFixed(2)}* no dia *${dia}* registrado!\n\nVou lembrar automaticamente todo mês.`, 
-            messageSource
-          );
-        }
-      }
-      
-      // Pergunta sobre contas fixas
-      await delay(1500);
-      await sendWhatsAppMessage(phoneNumber, 
-        `Última etapa: você tem contas fixas todo mês? (aluguel, internet, luz...)\n\nMe fala uma por uma (ex: "aluguel 1200 dia 10") ou responde *não tenho*`, 
-        messageSource
-      );
-      
-      fluxoAtual.etapa = "contas_fixas";
-      await supabase.from("historico_conversas").insert({
-        phone_number: phoneNumber,
-        user_id: usuarioId,
-        user_message: mensagem,
-        ai_response: "Perguntou sobre contas fixas",
-        tipo: "fluxo_ativo_centralizacao",
-        resumo: JSON.stringify(fluxoAtual)
-      });
-      
-      return true;
-    }
-    
-    case "contas_fixas": {
-      if (msgLower.includes("não tenho") || msgLower.includes("nao tenho") || msgLower === "não" || msgLower === "nao" || 
-          msgLower === "pronto" || msgLower.includes("só isso")) {
-        // Finaliza centralização
-        fluxoAtual.etapa = "concluido";
-        
-        await sendWhatsAppMessage(phoneNumber, 
-          `🎉 *Pronto!* Sua base financeira está organizada.\n\nAgora registrar gastos vai ser muito mais fácil.\n\nQuando gastar algo, só me manda: _"Gastei 50 no mercado"_\n\nBora começar? 💰`, 
-          messageSource
-        );
-        
-        await limparFluxoAtivo(phoneNumber);
-        return true;
-      }
-      
-      // Tenta extrair conta fixa
-      const valorMatch = mensagem.match(/(\d+(?:[.,]\d{2})?)/);
-      const diaMatch = mensagem.match(/dia\s*(\d{1,2})/i);
-      const descricao = mensagem.replace(/\d+(?:[.,]\d{2})?/g, "").replace(/dia\s*\d{1,2}/gi, "").trim();
-      
-      if (valorMatch && descricao) {
-        const valor = parseFloat(valorMatch[1].replace(",", "."));
-        const dia = diaMatch ? parseInt(diaMatch[1]) : 1;
-        
-        await supabase.from("gastos_recorrentes").insert({
-          usuario_id: usuarioId,
-          valor_parcela: valor,
-          categoria: "moradia",
-          tipo_recorrencia: "Mensal",
-          dia_mes: dia,
-          descricao: descricao || "Conta fixa",
-          ativo: true,
-          origem: "whatsapp"
-        });
-        
-        await sendWhatsAppMessage(phoneNumber, 
-          `✅ *${descricao || "Conta fixa"}* de R$ ${valor.toFixed(2)} registrada!\n\nTem mais alguma? Me fala ou responde *pronto*`, 
-          messageSource
-        );
-        
-        fluxoAtual.dados.contas_fixas = [...(fluxoAtual.dados.contas_fixas || []), { descricao, valor, dia }];
-        
-        await supabase.from("historico_conversas").insert({
-          phone_number: phoneNumber,
-          user_id: usuarioId,
-          user_message: mensagem,
-          ai_response: `Conta ${descricao} cadastrada`,
-          tipo: "fluxo_ativo_centralizacao",
-          resumo: JSON.stringify(fluxoAtual)
-        });
-        
-        return true;
-      }
-      
-      // Não conseguiu extrair
-      await sendWhatsAppMessage(phoneNumber, 
-        `Não consegui entender 🤔\n\nMe fala assim: "aluguel 1200 dia 10" ou "internet 100 dia 15"\n\nOu responde *pronto* se já terminou`, 
-        messageSource
-      );
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-// Busca fluxo de centralização ativo
-async function getFluxoCentralizacao(phoneNumber: string): Promise<FluxoCentralizacao | null> {
-  try {
-    const { data } = await supabase
-      .from("historico_conversas")
-      .select("resumo, created_at")
-      .eq("phone_number", phoneNumber)
-      .eq("tipo", "fluxo_ativo_centralizacao")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    if (!data || !data.resumo) return null;
-
-    // Verifica se o fluxo não é muito antigo (máximo 30 minutos)
-    const createdAt = new Date(data.created_at);
-    const agora = new Date();
-    const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
-    
-    if (diffMinutos > 30) return null;
-
-    return JSON.parse(data.resumo) as FluxoCentralizacao;
-  } catch {
-    return null;
-  }
-}
-
-// Verifica se usuário precisa de onboarding (primeira mensagem)
-async function verificarSeNovoUsuario(phoneNumber: string): Promise<boolean> {
-  const { count, error } = await supabase
-    .from("historico_conversas")
-    .select("id", { count: "exact", head: true })
-    .eq("phone_number", phoneNumber);
-  
-  if (error) {
-    console.error("Erro ao verificar histórico:", error);
-    return false;
-  }
-  
-  return count === 0;
-}
-
-// ========== MODELO DE PLANOS: TRIAL → EXPIRED → PRO ==========
-// Status possíveis: trial (7 dias), expired, pro
-
-interface StatusPlano {
-  status: "trial" | "expired" | "pro";
-  permitido: boolean;
-  diasRestantes?: number;
-  mensagem?: string;
-  bloqueiaEscrita: boolean;  // true = só consultas permitidas
-}
-
-async function verificarStatusPlano(usuarioId: string): Promise<StatusPlano> {
-  try {
-    const { data: usuario } = await supabase
-      .from("usuarios")
-      .select("plano, trial_inicio, trial_fim")
-      .eq("id", usuarioId)
-      .single();
-    
-    if (!usuario) {
-      return { status: "trial", permitido: true, bloqueiaEscrita: false };
-    }
-    
-    const plano = usuario.plano || "trial";
-    const agora = new Date();
-    
-    // Plano Pro ativo = acesso total
-    if (plano === "pro") {
-      return { status: "pro", permitido: true, bloqueiaEscrita: false };
-    }
-    
-    // Verifica se está no período de trial
-    const trialFim = usuario.trial_fim ? new Date(usuario.trial_fim) : null;
-    
-    if (trialFim) {
-      const diasRestantes = Math.ceil((trialFim.getTime() - agora.getTime()) / (1000 * 60 * 60 * 24));
-      
-      if (diasRestantes > 0) {
-        // Trial ainda ativo
-        return { 
-          status: "trial", 
-          permitido: true, 
-          diasRestantes,
-          bloqueiaEscrita: false 
-        };
-      } else {
-        // Trial expirado - atualiza status se necessário
-        if (plano !== "expired") {
-          await supabase.from("usuarios").update({ plano: "expired" }).eq("id", usuarioId);
-        }
-        
-        return { 
-          status: "expired", 
-          permitido: true,  // Permite consultas
-          bloqueiaEscrita: true,  // Bloqueia registros
-          mensagem: `Seu período de teste do Finax Pro terminou 😔\n\n` +
-            `Você ainda pode consultar seus resumos, mas para registrar novos gastos, ` +
-            `ative sua assinatura no site e envie o código de ativação aqui no WhatsApp.`
-        };
-      }
-    }
-    
-    // Fallback: considera como trial ativo
-    return { status: "trial", permitido: true, bloqueiaEscrita: false };
-  } catch (error) {
-    console.error("Erro ao verificar status do plano:", error);
-    return { status: "trial", permitido: true, bloqueiaEscrita: false };
-  }
-}
-
-// ========== VALIDAÇÃO DE CÓDIGO DE ATIVAÇÃO PRO ==========
-async function validarCodigoAtivacao(codigo: string, usuarioId: string): Promise<{ valido: boolean; mensagem: string }> {
-  try {
-    console.log(`🔑 Tentando validar código: ${codigo} para usuário: ${usuarioId}`);
-    
-    const { data, error } = await supabase.rpc("validar_codigo_ativacao", {
-      p_codigo: codigo,
-      p_usuario_id: usuarioId
-    });
-    
-    if (error) {
-      console.error("Erro ao validar código:", error);
-      return { 
-        valido: false, 
-        mensagem: "Ocorreu um erro ao validar o código. Tente novamente." 
-      };
-    }
-    
-    if (data?.valido) {
-      return { 
-        valido: true, 
-        mensagem: "🎉 Perfeito! Seu Finax Pro foi ativado com sucesso.\n\n" +
-          "Agora você tem acesso ilimitado a todas as funcionalidades!" 
-      };
-    } else {
-      const erro = data?.erro;
-      let msg = "Esse código não é válido ou já foi utilizado 😕\n\n" +
-        "Por favor, verifique no site ou gere um novo código.";
-      
-      if (erro === "codigo_expirado") {
-        msg = "Esse código expirou 😕\n\nPor favor, gere um novo código no site.";
-      } else if (erro === "codigo_usado") {
-        msg = "Esse código já foi utilizado 😕\n\nCada código só pode ser usado uma vez.";
-      }
-      
-      return { valido: false, mensagem: msg };
-    }
-  } catch (error) {
-    console.error("Erro na validação:", error);
-    return { 
-      valido: false, 
-      mensagem: "Ocorreu um erro ao validar o código. Tente novamente." 
-    };
-  }
-}
-
-// Detecta se a mensagem parece um código de ativação
-function pareceCodigoAtivacao(mensagem: string): boolean {
-  const msg = mensagem.trim().toUpperCase();
-  // Padrões comuns de código: FINAX-XXXX, PRO-XXXX, códigos alfanuméricos de 6-20 chars
-  const padroes = [
-    /^FINAX-[A-Z0-9]{4,10}$/,
-    /^PRO-[A-Z0-9]{4,10}$/,
-    /^[A-Z0-9]{6,12}$/,  // Código simples alfanumérico
-    /^[A-Z]{2,4}-[A-Z0-9]{4,8}$/  // Padrão PREFIX-CODE
+  // 🚨 REGRA CRÍTICA: Cancelamentos SEMPRE limpam contexto
+  const padroesCancel = [
+    /^(não|nao|n)$/,
+    /^cancela/,
+    /^para/,
+    /^desiste/,
+    /^deixa/,
+    /^errado/,
+    /não é isso/,
+    /nao e isso/,
+    /não era/,
+    /nao era/,
+    /^esquece/,
+    /deixa pra l[áa]/
   ];
   
-  return padroes.some(p => p.test(msg));
+  if (padroesCancel.some(p => p.test(msg))) {
+    console.log("❌ [VALIDAÇÃO] Usuário CANCELOU - descartando hipótese");
+    return { tipo: "cancelar" };
+  }
+  
+  // Confirmações positivas
+  const padroesConfirm = [
+    /^(sim|s|ok|pode|confirma|isso|certo|exato|t[áa]|blz|beleza)$/,
+    /isso mesmo/,
+    /pode salvar/,
+    /^salva$/,
+    /^registra$/,
+    /pode registrar/,
+    /manda ver/,
+    /^perfeito$/
+  ];
+  
+  if (padroesConfirm.some(p => p.test(msg))) {
+    console.log("✅ [VALIDAÇÃO] Usuário CONFIRMOU");
+    return { tipo: "confirmar" };
+  }
+  
+  // Detecta correções
+  const correcoes: Partial<HipotesePendente> = {};
+  let temCorrecao = false;
+  
+  // Correção de valor
+  const valorMatch = msg.match(/(?:era|foi|valor[:]?\s*)?r?\$?\s*(\d+(?:[.,]\d{2})?)/);
+  if (valorMatch && hipotese.valor) {
+    const novoValor = parseFloat(valorMatch[1].replace(",", "."));
+    if (novoValor !== hipotese.valor) {
+      correcoes.valor = novoValor;
+      temCorrecao = true;
+    }
+  }
+  
+  // Correção de forma de pagamento
+  if (msg.includes("pix") && hipotese.forma_pagamento !== "pix") {
+    correcoes.forma_pagamento = "pix";
+    temCorrecao = true;
+  } else if ((msg.includes("débito") || msg.includes("debito")) && hipotese.forma_pagamento !== "debito") {
+    correcoes.forma_pagamento = "debito";
+    temCorrecao = true;
+  } else if ((msg.includes("crédito") || msg.includes("credito") || msg.includes("cartão")) && hipotese.forma_pagamento !== "credito") {
+    correcoes.forma_pagamento = "credito";
+    temCorrecao = true;
+  } else if (msg.includes("dinheiro") && hipotese.forma_pagamento !== "dinheiro") {
+    correcoes.forma_pagamento = "dinheiro";
+    temCorrecao = true;
+  }
+  
+  // Seleção de forma de pagamento por número
+  if (hipotese.dados_faltantes?.includes("forma_pagamento")) {
+    if (msg === "1") correcoes.forma_pagamento = "pix";
+    else if (msg === "2") correcoes.forma_pagamento = "dinheiro";
+    else if (msg === "3") correcoes.forma_pagamento = "debito";
+    else if (msg === "4") correcoes.forma_pagamento = "credito";
+    
+    if (correcoes.forma_pagamento) temCorrecao = true;
+  }
+  
+  // Se está fornecendo descrição faltante
+  if (hipotese.dados_faltantes?.includes("descricao") && msg.length > 2 && !temCorrecao) {
+    correcoes.descricao = mensagem.trim();
+    temCorrecao = true;
+  }
+  
+  // Se está fornecendo valor faltante
+  if (hipotese.dados_faltantes?.includes("valor")) {
+    const valorPuro = msg.match(/(\d+(?:[.,]\d{2})?)/);
+    if (valorPuro) {
+      correcoes.valor = parseFloat(valorPuro[1].replace(",", "."));
+      temCorrecao = true;
+    }
+  }
+  
+  // Seleção de modo de registro para múltiplos itens
+  if (hipotese.multiplos_itens && hipotese.multiplos_itens.length > 1) {
+    if (msg === "1" || msg.includes("único") || msg.includes("unico") || msg.includes("junto")) {
+      correcoes.modo_registro = "unico";
+      temCorrecao = true;
+    } else if (msg === "2" || msg.includes("separado") || msg.includes("cada")) {
+      correcoes.modo_registro = "separado";
+      temCorrecao = true;
+    }
+  }
+  
+  if (temCorrecao) {
+    console.log("🔄 [VALIDAÇÃO] Correção/dados detectados:", JSON.stringify(correcoes));
+    return { tipo: "corrigir", dados_corrigidos: correcoes };
+  }
+  
+  // Se a mensagem parece ser dados novos (descrição)
+  if (msg.length > 3 && !msg.includes("?")) {
+    return { tipo: "dados_novos", dados_corrigidos: { descricao: mensagem.trim() } };
+  }
+  
+  return { tipo: "indefinido" };
 }
 
-// Envia mensagem via WhatsApp Business API (Meta)
+// ============================================================================
+// 🚀 CAMADA 5: EXECUÇÃO (SOMENTE APÓS CONFIRMAÇÃO)
+// ============================================================================
+
+async function executarRegistro(
+  usuarioId: string,
+  hipotese: HipotesePendente
+): Promise<{ sucesso: boolean; mensagem: string }> {
+  console.log("🚀 [EXECUÇÃO] Registrando após confirmação...");
+  
+  // Múltiplos itens registrados separadamente
+  if (hipotese.multiplos_itens && hipotese.modo_registro === "separado") {
+    const transacoes = hipotese.multiplos_itens.map(item => ({
+      usuario_id: usuarioId,
+      valor: item.valor,
+      categoria: hipotese.categoria || "outros",
+      tipo: "saida",
+      descricao: item.descricao,
+      observacao: item.descricao,
+      data: new Date().toISOString(),
+      origem: "whatsapp"
+    }));
+    
+    const { error } = await supabase.from("transacoes").insert(transacoes);
+    
+    if (error) {
+      console.error("Erro ao registrar múltiplos:", error);
+      return { sucesso: false, mensagem: "Erro ao salvar os registros 😕" };
+    }
+    
+    const total = hipotese.multiplos_itens.reduce((s, i) => s + i.valor, 0);
+    return {
+      sucesso: true,
+      mensagem: `✅ ${hipotese.multiplos_itens.length} itens registrados!\n\n` +
+        hipotese.multiplos_itens.map(i => `• R$ ${i.valor.toFixed(2)} - ${i.descricao}`).join("\n") +
+        `\n\n💰 Total: R$ ${total.toFixed(2)}`
+    };
+  }
+  
+  // Registro único
+  const tipoTransacao = hipotese.tipo_operacao === "entrada" ? "entrada" : "saida";
+  
+  const { error } = await supabase.from("transacoes").insert({
+    usuario_id: usuarioId,
+    valor: hipotese.valor,
+    categoria: hipotese.categoria || "outros",
+    tipo: tipoTransacao,
+    descricao: hipotese.descricao,
+    observacao: hipotese.descricao,
+    data: new Date().toISOString(),
+    origem: "whatsapp"
+  });
+  
+  if (error) {
+    console.error("Erro ao registrar:", error);
+    return { sucesso: false, mensagem: "Erro ao salvar o registro 😕" };
+  }
+  
+  const emoji = tipoTransacao === "entrada" ? "📈" : "💸";
+  const sinal = tipoTransacao === "entrada" ? "+" : "-";
+  
+  return {
+    sucesso: true,
+    mensagem: `✅ Registrado!\n\n` +
+      `${emoji} ${sinal}R$ ${hipotese.valor?.toFixed(2)}\n` +
+      `📂 ${hipotese.categoria || "outros"}\n` +
+      (hipotese.descricao ? `📝 ${hipotese.descricao}\n` : "") +
+      (hipotese.forma_pagamento ? `💳 ${hipotese.forma_pagamento.toUpperCase()}\n` : "") +
+      `\nAssim fica tudo organizado aqui 😉`
+  };
+}
+
+// ============================================================================
+// 📨 FUNÇÕES DE MENSAGEM
+// ============================================================================
+
+// Monta mensagem de confirmação (SEMPRE antes de registrar)
+function montarMensagemConfirmacao(hipotese: HipotesePendente): string {
+  let msg = "";
+  
+  // Se tem múltiplos itens na imagem
+  if (hipotese.multiplos_itens && hipotese.multiplos_itens.length > 1) {
+    const total = hipotese.multiplos_itens.reduce((s, i) => s + i.valor, 0);
+    msg = `📋 Identifiquei ${hipotese.multiplos_itens.length} itens nesse comprovante:\n\n`;
+    msg += hipotese.multiplos_itens.map(i => `• R$ ${i.valor.toFixed(2)} - ${i.descricao}`).join("\n");
+    msg += `\n\n💰 Total: R$ ${total.toFixed(2)}`;
+    msg += `\n\nVocê prefere:\n1️⃣ Registrar tudo como um único gasto de R$ ${total.toFixed(2)}\n2️⃣ Registrar cada item separadamente`;
+    return msg;
+  }
+  
+  // Se falta dados
+  if (hipotese.dados_faltantes.length > 0) {
+    if (hipotese.dados_faltantes.includes("descricao")) {
+      if (hipotese.valor) {
+        msg = `Vi o valor de *R$ ${hipotese.valor.toFixed(2)}* 💰\n\nMe conta: o que você comprou?`;
+      } else {
+        msg = `Não consegui identificar bem 🤔\n\nO que foi essa compra e quanto custou?`;
+      }
+      return msg;
+    }
+    
+    if (hipotese.dados_faltantes.includes("valor")) {
+      if (hipotese.descricao) {
+        msg = `Entendi que foi *${hipotese.descricao}*\n\nQuanto custou?`;
+      } else {
+        msg = `Quanto foi esse gasto? 💰`;
+      }
+      return msg;
+    }
+    
+    if (hipotese.dados_faltantes.includes("forma_pagamento")) {
+      msg = `Vi *R$ ${hipotese.valor?.toFixed(2)}* - ${hipotese.descricao}\n\n`;
+      msg += `Como você pagou?\n1️⃣ Pix\n2️⃣ Dinheiro\n3️⃣ Débito\n4️⃣ Crédito`;
+      return msg;
+    }
+  }
+  
+  // Tem todos os dados - pede confirmação final
+  const tipoTexto = hipotese.tipo_operacao === "entrada" ? "Entrada" : "Gasto";
+  const emoji = hipotese.tipo_operacao === "entrada" ? "📈" : "💸";
+  
+  msg = `Entendi assim 👇\n\n`;
+  msg += `${emoji} ${tipoTexto} de *R$ ${hipotese.valor?.toFixed(2)}*\n`;
+  if (hipotese.descricao) msg += `📝 ${hipotese.descricao}\n`;
+  if (hipotese.categoria) msg += `📂 ${hipotese.categoria}\n`;
+  if (hipotese.forma_pagamento) msg += `💳 ${hipotese.forma_pagamento.toUpperCase()}\n`;
+  
+  msg += `\nPosso registrar assim? 😊`;
+  
+  return msg;
+}
+
+// Mensagem após cancelamento (empática, sem insistir)
+function mensagemPosCancelamento(): string {
+  const respostas = [
+    "Sem problemas! 👍 Já descartei.\n\nMe conta novamente como foi, ou faz outra coisa.",
+    "Ok, ignorei! 👍\n\nO que você gostaria de fazer?",
+    "Entendido! Descartei isso. 👍\n\nComo posso te ajudar?",
+    "Beleza, já apaguei! 👍\n\nPode me contar de novo ou fazer outra coisa."
+  ];
+  return respostas[Math.floor(Math.random() * respostas.length)];
+}
+
+// ============================================================================
+// 📱 FUNÇÕES DE ENVIO
+// ============================================================================
+
 async function sendWhatsAppMeta(to: string, text: string): Promise<boolean> {
   try {
     const cleanNumber = to.replace(/\D/g, "");
@@ -1495,7 +736,7 @@ async function sendWhatsAppMeta(to: string, text: string): Promise<boolean> {
     if (!response.ok) {
       console.error("[Meta] Erro na API:", result);
     }
-    
+
     return response.ok;
   } catch (error) {
     console.error("[Meta] Erro ao enviar:", error);
@@ -1503,7 +744,6 @@ async function sendWhatsAppMeta(to: string, text: string): Promise<boolean> {
   }
 }
 
-// Envia mensagem via Vonage (Sandbox)
 async function sendWhatsAppVonage(to: string, text: string): Promise<boolean> {
   try {
     const cleanNumber = to.replace(/\D/g, "");
@@ -1538,12 +778,245 @@ async function sendWhatsAppVonage(to: string, text: string): Promise<boolean> {
   }
 }
 
-// Envia mensagem usando a origem correta
 async function sendWhatsAppMessage(to: string, text: string, source: MessageSource): Promise<boolean> {
   if (source === "vonage") {
     return sendWhatsAppVonage(to, text);
   }
   return sendWhatsAppMeta(to, text);
+}
+
+// ============================================================================
+// 🔧 FUNÇÕES AUXILIARES
+// ============================================================================
+
+// Busca fluxo ativo para o usuário
+async function getFluxoAtivo(phoneNumber: string): Promise<FluxoAtivo | null> {
+  try {
+    const { data } = await supabase
+      .from("historico_conversas")
+      .select("resumo, created_at")
+      .eq("phone_number", phoneNumber)
+      .like("tipo", "fluxo_ativo_%")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!data || !data.resumo) return null;
+
+    const createdAt = new Date(data.created_at);
+    const agora = new Date();
+    const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
+    
+    if (diffMinutos > 10) {
+      console.log("⏰ Fluxo ativo expirado (mais de 10 min)");
+      return null;
+    }
+
+    return JSON.parse(data.resumo) as FluxoAtivo;
+  } catch {
+    return null;
+  }
+}
+
+// Salva fluxo ativo
+async function salvarFluxoAtivo(
+  phoneNumber: string, 
+  userId: string,
+  intentOriginal: string,
+  dadosColetados: Partial<ExtractedIntent>,
+  dadosFaltantes: string[],
+  mensagemUsuario: string,
+  respostaBot: string,
+  ultimaPergunta: string
+): Promise<void> {
+  const fluxo: FluxoAtivo = {
+    intent: intentOriginal,
+    dados_coletados: dadosColetados,
+    dados_faltantes: dadosFaltantes,
+    ultima_pergunta: ultimaPergunta,
+    created_at: new Date().toISOString()
+  };
+
+  await supabase.from("historico_conversas").insert({
+    phone_number: phoneNumber,
+    user_id: userId,
+    user_message: mensagemUsuario,
+    ai_response: respostaBot,
+    tipo: `fluxo_ativo_${intentOriginal}`,
+    resumo: JSON.stringify(fluxo)
+  });
+
+  console.log("💾 Fluxo ativo salvo:", JSON.stringify(fluxo));
+}
+
+// Limpa fluxo ativo após conclusão
+async function limparFluxoAtivo(phoneNumber: string): Promise<void> {
+  await supabase
+    .from("historico_conversas")
+    .update({ tipo: "fluxo_concluido" })
+    .eq("phone_number", phoneNumber)
+    .like("tipo", "fluxo_ativo_%");
+    
+  console.log("🧹 Fluxo ativo limpo para:", phoneNumber);
+}
+
+// Limpa TUDO (hipótese + fluxo) - usado em cancelamentos
+async function limparTodoContexto(phoneNumber: string): Promise<void> {
+  await Promise.all([
+    limparHipotesePendente(phoneNumber),
+    limparFluxoAtivo(phoneNumber)
+  ]);
+  console.log("🧹 Todo contexto limpo para:", phoneNumber);
+}
+
+// Busca histórico recente de conversa
+async function getHistoricoRecente(phoneNumber: string): Promise<string> {
+  const { data: historico } = await supabase
+    .from("historico_conversas")
+    .select("user_message, ai_response")
+    .eq("phone_number", phoneNumber)
+    .not("tipo", "like", "fluxo_%")
+    .not("tipo", "eq", "hipotese_pendente")
+    .order("created_at", { ascending: false })
+    .limit(3);
+
+  if (!historico || historico.length === 0) return "";
+
+  return historico.reverse().map(h => 
+    `Usuário: ${h.user_message}\nAssistente: ${h.ai_response}`
+  ).join("\n\n");
+}
+
+// Verifica se usuário precisa de onboarding
+async function verificarSeNovoUsuario(phoneNumber: string): Promise<boolean> {
+  const { count, error } = await supabase
+    .from("historico_conversas")
+    .select("id", { count: "exact", head: true })
+    .eq("phone_number", phoneNumber);
+  
+  if (error) {
+    console.error("Erro ao verificar histórico:", error);
+    return false;
+  }
+  
+  return count === 0;
+}
+
+// Onboarding para novos usuários
+async function enviarOnboarding(
+  phoneNumber: string, 
+  messageSource: MessageSource, 
+  dados: { nome: string; urlPainel: string }
+): Promise<void> {
+  const primeiroNome = dados.nome.split(" ")[0];
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  
+  const msg1 = `Oi, ${primeiroNome}! 👋
+
+Prazer, eu sou o *Finax* — seu assistente financeiro pessoal.
+
+Estou aqui pra te ajudar a organizar suas finanças de um jeito simples, direto pelo WhatsApp.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
+  await delay(2500);
+  
+  const msg2 = `Comigo você organiza tudo em um só lugar: gastos do dia a dia, cartões, dívidas e salário.
+
+Sem planilha. Sem complicação. Só mandar mensagem como se fosse um amigo.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
+  await delay(2000);
+  
+  const msg3 = `💡 *Dica importante*
+
+Fixa o Finax no WhatsApp pra não perder seus registros no dia a dia.
+
+Assim seu controle financeiro fica sempre a um toque.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
+  await delay(2500);
+  
+  const msg4 = `🎁 *Acesso liberado*
+
+Você tem acesso completo ao Finax — todas as funcionalidades estão liberadas.
+
+Pode registrar gastos, entradas, parcelamentos, ver resumos...
+
+Mais pra frente te aviso sobre a continuidade 😊`;
+
+  await sendWhatsAppMessage(phoneNumber, msg4, messageSource);
+  await delay(2500);
+  
+  const msg5 = `Quer que eu te ajude agora a organizar seus cartões, dívidas e salário?
+
+Fazendo isso, fica muito mais fácil registrar gastos depois.
+
+Responde *sim* se quiser começar, ou pode mandar direto seu primeiro gasto 💰`;
+
+  await sendWhatsAppMessage(phoneNumber, msg5, messageSource);
+  
+  console.log(`✅ Onboarding completo enviado para ${phoneNumber}`);
+}
+
+// Verificar status do plano
+interface StatusPlano {
+  status: "trial" | "expired" | "pro";
+  permitido: boolean;
+  bloqueiaEscrita: boolean;
+  mensagem?: string;
+}
+
+async function verificarStatusPlano(usuarioId: string): Promise<StatusPlano> {
+  try {
+    const { data: usuario } = await supabase
+      .from("usuarios")
+      .select("plano, trial_inicio, trial_fim")
+      .eq("id", usuarioId)
+      .single();
+    
+    if (!usuario) {
+      return { status: "trial", permitido: true, bloqueiaEscrita: false };
+    }
+    
+    const plano = usuario.plano || "trial";
+    const agora = new Date();
+    
+    if (plano === "pro") {
+      return { status: "pro", permitido: true, bloqueiaEscrita: false };
+    }
+    
+    const trialFim = usuario.trial_fim ? new Date(usuario.trial_fim) : null;
+    
+    if (trialFim) {
+      const diasRestantes = Math.ceil((trialFim.getTime() - agora.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (diasRestantes > 0) {
+        return { 
+          status: "trial", 
+          permitido: true, 
+          bloqueiaEscrita: false 
+        };
+      } else {
+        if (plano !== "expired") {
+          await supabase.from("usuarios").update({ plano: "expired" }).eq("id", usuarioId);
+        }
+        
+        return { 
+          status: "expired", 
+          permitido: true,
+          bloqueiaEscrita: true,
+          mensagem: `Seu período de teste do Finax Pro terminou 😔\n\n` +
+            `Você ainda pode consultar seus resumos, mas para registrar novos gastos, ` +
+            `ative sua assinatura no site.`
+        };
+      }
+    }
+    
+    return { status: "trial", permitido: true, bloqueiaEscrita: false };
+  } catch (error) {
+    console.error("Erro ao verificar status do plano:", error);
+    return { status: "trial", permitido: true, bloqueiaEscrita: false };
+  }
 }
 
 // Busca resumo financeiro do mês
@@ -1587,112 +1060,137 @@ async function getResumoMes(usuarioId: string) {
   };
 }
 
-// Busca transações por categoria
-async function getTransacoesPorCategoria(usuarioId: string, categoria: string, periodo?: string) {
-  const inicioMes = new Date();
-  inicioMes.setDate(1);
-  inicioMes.setHours(0, 0, 0, 0);
-  
-  const fimMes = new Date(inicioMes);
-  fimMes.setMonth(fimMes.getMonth() + 1);
-  fimMes.setDate(0);
-  fimMes.setHours(23, 59, 59, 999);
-  
-  const { data: transacoes } = await supabase
-    .from("transacoes")
-    .select("*")
-    .eq("usuario_id", usuarioId)
-    .ilike("categoria", `%${categoria}%`)
-    .gte("data", inicioMes.toISOString())
-    .lte("data", fimMes.toISOString())
-    .order("data", { ascending: false });
+// Gera resposta conversacional com contexto
+async function generateResponse(
+  userMessage: string, 
+  context: string, 
+  acaoRealizada: string
+): Promise<string> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Você é o Finax, um assistente financeiro pessoal via WhatsApp.
 
-  return transacoes || [];
-}
+PERSONALIDADE:
+- Calmo, humano, seguro
+- Sem pressa, sem culpa, sem julgamento
+- Consultor financeiro, não robô
 
-// Busca histórico recente de conversa
-async function getHistoricoRecente(phoneNumber: string): Promise<string> {
-  const { data: historico } = await supabase
-    .from("historico_conversas")
-    .select("user_message, ai_response")
-    .eq("phone_number", phoneNumber)
-    .not("tipo", "like", "fluxo_ativo_%")
-    .order("created_at", { ascending: false })
-    .limit(3);
+ESCOPO (APENAS FINANÇAS):
+✅ Registrar gastos e entradas
+✅ Gerenciar recorrentes e parcelamentos
+✅ Fornecer resumos e relatórios
+✅ Dar dicas práticas de orçamento
 
-  if (!historico || historico.length === 0) return "";
+❌ Não responda sobre outros temas
+❌ Não calcule valores (use os fornecidos)
+❌ Não mencione planos ou pagamentos
 
-  return historico.reverse().map(h => 
-    `Usuário: ${h.user_message}\nAssistente: ${h.ai_response}`
-  ).join("\n\n");
-}
+Se fora do escopo:
+"Meu foco é te ajudar a organizar suas finanças 💰
+Posso registrar gastos, mostrar resumos ou ajudar com orçamento."
 
-// Detectar múltiplos gastos
-function detectarMultiplosGastos(mensagem: string): string[] {
-  const linhas = mensagem.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  const padraoGasto = /(?:gast[ei|ou]|pagu[ei|ou]|compr[ei|ou]|compra|gasto|pagamento)\s*(?:de\s*)?(?:R\$\s*)?\d+(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?\s*(?:reais?|R\$)?\s*(?:em|no|na|de|com)/i;
-  
-  const gastosDetectados: string[] = [];
-  
-  for (const linha of linhas) {
-    if (padraoGasto.test(linha)) {
-      gastosDetectados.push(linha);
-    }
+FORMATO:
+- Mensagens CURTAS
+- Emojis com MODERAÇÃO (2-3)
+- Linguagem simples
+
+${acaoRealizada ? `\n✅ AÇÃO REALIZADA:\n${acaoRealizada}` : ""}
+${context ? `\n📊 CONTEXTO:\n${context}` : ""}`
+          },
+          { role: "user", content: userMessage }
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "Desculpe, não consegui processar sua mensagem.";
+  } catch (error) {
+    console.error("Erro ao gerar resposta:", error);
+    return "Desculpe, ocorreu um erro. Tente novamente.";
   }
-  
-  if (gastosDetectados.length <= 1 && linhas.length === 1) {
-    const padraoMultiplo = /(?:gast[ei|ou]|pagu[ei|ou])\s*(?:R\$\s*)?\d+(?:[.,]\d{2})?\s*(?:em|no|na|de|com)\s*\w+/gi;
-    const matches = mensagem.match(padraoMultiplo);
-    if (matches && matches.length > 1) {
-      return matches;
-    }
-  }
-  
-  return gastosDetectados.length > 1 ? gastosDetectados : [];
 }
 
-async function processarMultiplosGastos(
-  linhas: string[], 
-  usuarioId: string, 
-  historicoRecente: string
-): Promise<{ sucesso: number; detalhes: string[] }> {
-  const resultados: { sucesso: number; detalhes: string[] } = { sucesso: 0, detalhes: [] };
-  const transacoesParaInserir: any[] = [];
-  
-  for (const linha of linhas) {
-    const intent = await extractIntent(linha, historicoRecente);
-    console.log(`Processando linha: "${linha}" -> intent: ${JSON.stringify(intent)}`);
+// Extrai intent da mensagem
+async function extractIntent(message: string, historicoRecente: string): Promise<ExtractedIntent> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Você é um analisador de intenções financeiras.
+
+INTENTS:
+- "registrar_gasto": gasto/despesa simples
+- "registrar_entrada": receita/entrada de dinheiro
+- "criar_parcelamento": compra parcelada (em Xx)
+- "criar_recorrente": gasto repetitivo (todo mês)
+- "consultar_resumo": resumo geral
+- "consultar_categoria": gastos de categoria específica
+- "cancelar_transacao": cancelar/apagar algo
+- "corrigir_transacao": corrigir algo registrado
+- "iniciar_organizacao": organizar cartões/salário
+- "saudacao": cumprimento
+- "ajuda": pedindo ajuda
+- "outro": não se encaixa
+
+FORMAS DE PAGAMENTO:
+- "pix" → pix
+- "dinheiro" → dinheiro
+- "débito" → debito
+- "crédito", "cartão" → credito
+
+Responda APENAS JSON:
+{
+  "intent": "string",
+  "valor": number ou null,
+  "categoria": "string" ou null,
+  "descricao": "string" ou null,
+  "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null,
+  "parcelas": number ou null,
+  "tipo_recorrencia": "string" ou null,
+  "dia_mes": number ou null,
+  "transacao_alvo": "string" ou null
+}
+
+${historicoRecente ? `CONTEXTO:\n${historicoRecente}` : ""}`
+          },
+          { role: "user", content: message }
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '{"intent": "outro"}';
     
-    if (intent.intent === "registrar_gasto" && intent.valor) {
-      transacoesParaInserir.push({
-        usuario_id: usuarioId,
-        valor: intent.valor,
-        categoria: intent.categoria || "outros",
-        tipo: "saida",
-        observacao: intent.descricao || linha,
-        descricao: intent.descricao || linha,
-        data: new Date().toISOString(),
-        origem: "whatsapp"
-      });
-      resultados.detalhes.push(`R$ ${intent.valor.toFixed(2)} em ${intent.categoria || "outros"}`);
-    }
+    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    console.log("Intent extraído:", cleanJson);
+    return JSON.parse(cleanJson);
+  } catch (error) {
+    console.error("Erro ao extrair intent:", error);
+    return { intent: "outro" };
   }
-  
-  if (transacoesParaInserir.length > 0) {
-    const { error } = await supabase.from("transacoes").insert(transacoesParaInserir);
-    
-    if (!error) {
-      resultados.sucesso = transacoesParaInserir.length;
-      console.log(`✅ ${transacoesParaInserir.length} gastos inseridos com sucesso`);
-    } else {
-      console.error("Erro ao inserir múltiplos gastos:", error);
-      resultados.sucesso = 0;
-      resultados.detalhes = [];
-    }
-  }
-  
-  return resultados;
 }
+
+// ============================================================================
+// 🚀 WEBHOOK PRINCIPAL
+// ============================================================================
 
 serve(async (req) => {
   // CORS preflight
@@ -1700,28 +1198,25 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // ========== VERIFICAÇÃO GET (Meta Webhook Verification) ==========
+  // Verificação GET (Meta Webhook)
   if (req.method === "GET") {
     const url = new URL(req.url);
     const mode = url.searchParams.get("hub.mode");
     const token = url.searchParams.get("hub.verify_token");
     const challenge = url.searchParams.get("hub.challenge");
     
-    console.log("Verificação webhook recebida:", { mode, token, challenge: challenge?.substring(0, 20) });
-    
     if (mode === "subscribe" && token === WHATSAPP_VERIFY_TOKEN) {
-      console.log("✅ Webhook verificado com sucesso!");
+      console.log("✅ Webhook verificado!");
       return new Response(challenge, { 
         status: 200,
         headers: { "Content-Type": "text/plain" }
       });
     }
     
-    console.log("❌ Verificação falhou - token inválido");
     return new Response("Forbidden", { status: 403 });
   }
 
-  // ========== PROCESSAMENTO POST (Mensagens recebidas) ==========
+  // Processamento POST
   try {
     const json = await req.json();
     console.log("Webhook payload:", JSON.stringify(json));
@@ -1733,8 +1228,7 @@ serve(async (req) => {
     let mediaId: string | null = null;
     let mediaMimeType: string = "";
 
-    // ========== DETECTAR ORIGEM: VONAGE ou META ==========
-    
+    // Detectar origem: Vonage ou Meta
     if (json.channel === "whatsapp" && json.from && json.text !== undefined) {
       console.log("📱 Detectado formato VONAGE");
       messageSource = "vonage";
@@ -1742,7 +1236,6 @@ serve(async (req) => {
       messageText = json.text || "";
       
       if (json.message_type !== "text" || !messageText) {
-        console.log(`Ignorando mensagem Vonage do tipo: ${json.message_type}`);
         return new Response(JSON.stringify({ status: "ok" }), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1756,7 +1249,7 @@ serve(async (req) => {
       const value = json.entry[0].changes[0].value;
       
       if (!value.messages || value.messages.length === 0) {
-        console.log("Ignorando: não é uma mensagem de usuário (pode ser status update)");
+        console.log("Ignorando: não é mensagem de usuário");
         return new Response(JSON.stringify({ status: "ok" }), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1766,7 +1259,6 @@ serve(async (req) => {
       const message = value.messages[0];
       phoneNumber = message.from;
       
-      // ========== DETECTAR TIPO DE MENSAGEM (TEXTO, ÁUDIO, IMAGEM) ==========
       if (message.type === "text") {
         messageType = "text";
         messageText = message.text?.body || "";
@@ -1774,14 +1266,13 @@ serve(async (req) => {
         messageType = "audio";
         mediaId = message.audio?.id || null;
         mediaMimeType = message.audio?.mime_type || "audio/ogg";
-        console.log(`🎵 Áudio recebido: ${mediaId} (${mediaMimeType})`);
+        console.log(`🎵 Áudio recebido: ${mediaId}`);
       } else if (message.type === "image") {
         messageType = "image";
         mediaId = message.image?.id || null;
         mediaMimeType = message.image?.mime_type || "image/jpeg";
-        console.log(`📷 Imagem recebida: ${mediaId} (${mediaMimeType})`);
+        console.log(`📷 Imagem recebida: ${mediaId}`);
       } else {
-        console.log(`Ignorando mensagem Meta do tipo: ${message.type}`);
         return new Response(JSON.stringify({ status: "ok" }), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1789,7 +1280,6 @@ serve(async (req) => {
       }
     }
     else {
-      console.log("❌ Formato de mensagem não reconhecido");
       return new Response(JSON.stringify({ status: "ok", message: "Unknown format" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1805,7 +1295,7 @@ serve(async (req) => {
       });
     }
 
-    // 1. Busca ou cria usuário
+    // Busca ou cria usuário
     let { data: usuario } = await supabase
       .from("usuarios")
       .select("*")
@@ -1815,7 +1305,6 @@ serve(async (req) => {
     let isNovoUsuario = false;
     
     if (!usuario) {
-      // Extrai nome do contato (Meta envia em contacts[0].profile.name)
       let nomeContato: string | null = null;
       if (messageSource === "meta" && json.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name) {
         nomeContato = json.entry[0].changes[0].value.contacts[0].profile.name;
@@ -1826,32 +1315,28 @@ serve(async (req) => {
         .insert({ 
           phone_number: phoneNumber,
           nome: nomeContato,
-          plano: "pro"  // Novos usuários começam como PRO (fase de testes)
+          plano: "pro"
         })
         .select()
         .single();
       usuario = newUser;
       isNovoUsuario = true;
-      console.log(`👤 Novo usuário criado: ${phoneNumber} - ${nomeContato || 'sem nome'}`);
+      console.log(`👤 Novo usuário: ${phoneNumber} - ${nomeContato || 'sem nome'}`);
     } else {
-      // Verifica se é a primeira mensagem (sem histórico)
       isNovoUsuario = await verificarSeNovoUsuario(phoneNumber);
     }
 
     const usuarioId = usuario?.id;
 
-    // ========== ONBOARDING PARA NOVOS USUÁRIOS ==========
+    // Onboarding para novos usuários
     if (isNovoUsuario) {
       console.log(`🎉 Iniciando onboarding para ${phoneNumber}`);
       
-      const nomeUsuario = usuario?.nome || "amigo(a)";
-      
       await enviarOnboarding(phoneNumber, messageSource, {
-        nome: nomeUsuario,
+        nome: usuario?.nome || "amigo(a)",
         urlPainel: "finax.app"
       });
       
-      // Registra onboarding no histórico
       await supabase.from("historico_conversas").insert({
         phone_number: phoneNumber,
         user_id: usuarioId,
@@ -1866,35 +1351,124 @@ serve(async (req) => {
       );
     }
 
-    // ========== VERIFICAR STATUS DO PLANO (TRIAL/EXPIRED/PRO) ==========
+    // Verificar status do plano
     const statusPlano = await verificarStatusPlano(usuarioId);
-    console.log(`📋 Status do plano: ${statusPlano.status}, bloqueiaEscrita: ${statusPlano.bloqueiaEscrita}`);
+    console.log(`📋 Plano: ${statusPlano.status}, bloqueiaEscrita: ${statusPlano.bloqueiaEscrita}`);
+
+    // ========================================================================
+    // 🎯 VERIFICAR HIPÓTESE PENDENTE (ANTES DE TUDO)
+    // ========================================================================
+    const hipotesePendente = await getHipotesePendente(phoneNumber);
     
-    // ========== VERIFICAR SE MENSAGEM É CÓDIGO DE ATIVAÇÃO ==========
-    if (pareceCodigoAtivacao(messageText)) {
-      console.log("🔑 Detectado possível código de ativação");
-      const resultado = await validarCodigoAtivacao(messageText.trim(), usuarioId);
-      await sendWhatsAppMessage(phoneNumber, resultado.mensagem, messageSource);
+    if (hipotesePendente && messageType === "text") {
+      console.log("💡 Hipótese pendente encontrada:", JSON.stringify(hipotesePendente));
       
-      await supabase.from("historico_conversas").insert({
-        phone_number: phoneNumber,
-        user_id: usuarioId,
-        user_message: messageText,
-        ai_response: resultado.mensagem,
-        tipo: resultado.valido ? "ativacao_pro" : "codigo_invalido"
-      });
+      const resposta = analisarRespostaValidacao(messageText, hipotesePendente);
+      
+      // 🚨 CANCELAMENTO: Limpa tudo e responde empaticamente
+      if (resposta.tipo === "cancelar") {
+        await limparTodoContexto(phoneNumber);
+        const msg = mensagemPosCancelamento();
+        await sendWhatsAppMessage(phoneNumber, msg, messageSource);
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: messageText,
+          ai_response: msg,
+          tipo: "cancelamento"
+        });
+        
+        return new Response(
+          JSON.stringify({ status: "ok", cancelled: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // ✅ CONFIRMAÇÃO: Executa o registro
+      if (resposta.tipo === "confirmar") {
+        // Verifica bloqueio de escrita
+        if (statusPlano.bloqueiaEscrita) {
+          await limparHipotesePendente(phoneNumber);
+          await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
+          return new Response(
+            JSON.stringify({ status: "ok", blocked: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        const resultado = await executarRegistro(usuarioId, hipotesePendente);
+        await limparHipotesePendente(phoneNumber);
+        await sendWhatsAppMessage(phoneNumber, resultado.mensagem, messageSource);
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: messageText,
+          ai_response: resultado.mensagem,
+          tipo: "registro_confirmado"
+        });
+        
+        return new Response(
+          JSON.stringify({ status: "ok", registered: resultado.sucesso }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // 🔄 CORREÇÃO/DADOS: Atualiza hipótese e pede confirmação novamente
+      if (resposta.tipo === "corrigir" || resposta.tipo === "dados_novos") {
+        const novaHipotese: HipotesePendente = {
+          ...hipotesePendente,
+          ...resposta.dados_corrigidos,
+          dados_faltantes: hipotesePendente.dados_faltantes.filter(d => {
+            if (d === "descricao" && resposta.dados_corrigidos?.descricao) return false;
+            if (d === "valor" && resposta.dados_corrigidos?.valor) return false;
+            if (d === "forma_pagamento" && resposta.dados_corrigidos?.forma_pagamento) return false;
+            return true;
+          })
+        };
+        
+        // Se escolheu modo de registro para múltiplos itens
+        if (novaHipotese.multiplos_itens && novaHipotese.modo_registro) {
+          if (novaHipotese.modo_registro === "unico") {
+            const total = novaHipotese.multiplos_itens.reduce((s, i) => s + i.valor, 0);
+            novaHipotese.valor = total;
+            novaHipotese.descricao = novaHipotese.multiplos_itens.map(i => i.descricao).join(", ");
+            novaHipotese.multiplos_itens = undefined;
+          }
+          novaHipotese.dados_faltantes = [];
+        }
+        
+        await salvarHipotesePendente(phoneNumber, usuarioId, novaHipotese);
+        const msgConfirmacao = montarMensagemConfirmacao(novaHipotese);
+        await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
+        
+        return new Response(
+          JSON.stringify({ status: "ok", updated: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // ❓ INDEFINIDO: Repete a pergunta
+      const msgRepete = montarMensagemConfirmacao(hipotesePendente);
+      await sendWhatsAppMessage(phoneNumber, 
+        `Não entendi 🤔\n\n${msgRepete}`,
+        messageSource
+      );
       
       return new Response(
-        JSON.stringify({ status: "ok", activation_result: resultado.valido }),
+        JSON.stringify({ status: "ok", awaiting: true }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // ========== PROCESSAMENTO DE ÁUDIO ==========
+    // ========================================================================
+    // 🎤 PROCESSAMENTO DE ÁUDIO (CAMADAS 1-3)
+    // ========================================================================
     if (messageType === "audio" && mediaId) {
-      console.log("🎵 Processando mensagem de áudio...");
+      console.log("🎵 [PIPELINE] Processando áudio...");
       
-      // 1. Baixa o áudio
+      // CAMADA 1: Percepção - Download e transcrição pura
       const audioBase64 = await downloadWhatsAppMedia(mediaId);
       
       if (!audioBase64) {
@@ -1903,15 +1477,14 @@ serve(async (req) => {
           messageSource
         );
         return new Response(
-          JSON.stringify({ status: "ok", error: "audio_download_failed" }),
+          JSON.stringify({ status: "ok", error: "download_failed" }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       
-      // 2. Transcreve e interpreta o áudio
-      const resultadoAudio = await transcreverAudio(audioBase64, mediaMimeType);
+      const transcricao = await transcreverAudioPuro(audioBase64, mediaMimeType);
       
-      if (!resultadoAudio) {
+      if (!transcricao) {
         await sendWhatsAppMessage(phoneNumber, 
           "Não consegui entender o áudio 😕\nPode tentar falar mais devagar ou escrever?", 
           messageSource
@@ -1922,154 +1495,75 @@ serve(async (req) => {
         );
       }
       
-      console.log(`📝 Áudio transcrito: "${resultadoAudio.transcricao}"`);
-      console.log(`📝 Tipo detectado: ${resultadoAudio.tipo}`);
+      // CAMADA 2: Interpretação
+      const interpretacao = await interpretarMensagem(transcricao);
       
-      // Se o áudio não é financeiro, informa o usuário
-      if (resultadoAudio.tipo === "nao_financeiro") {
+      if (!interpretacao.eh_financeiro) {
         await sendWhatsAppMessage(phoneNumber, 
-          "Hmm, esse áudio parece não ser sobre finanças 🤔\n\n" +
+          "Hmm, parece que esse áudio não é sobre finanças 🤔\n\n" +
           "Eu sou focado em te ajudar com dinheiro! 💰\n" +
           "Quer registrar um gasto, ver seu resumo ou organizar algo?", 
           messageSource
         );
         
-        // Registra no histórico
         await supabase.from("historico_conversas").insert({
           phone_number: phoneNumber,
           user_id: usuarioId,
-          user_message: `[ÁUDIO NÃO FINANCEIRO] ${resultadoAudio.transcricao}`,
-          ai_response: "Áudio detectado como não financeiro",
+          user_message: `[ÁUDIO] ${transcricao}`,
+          ai_response: "Áudio não financeiro",
           tipo: "audio_nao_financeiro"
         });
         
         return new Response(
-          JSON.stringify({ status: "ok", audio_type: "nao_financeiro" }),
+          JSON.stringify({ status: "ok", not_financial: true }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       
-      // Se temos interpretação financeira direta, processa imediatamente
-      if (resultadoAudio.tipo === "financeiro" && resultadoAudio.interpretacao) {
-        const interp = resultadoAudio.interpretacao;
-        
-        // Cria dados para confirmação
-        const dadosExtraidos: Partial<ExtractedIntent> = {
-          intent: interp.tipo_operacao === "receita" ? "registrar_entrada" : "registrar_gasto",
-          valor: interp.valor,
-          descricao: interp.descricao,
-          categoria: interp.categoria,
-          forma_pagamento: interp.forma_pagamento as any
-        };
-        
-        // Verifica o que está faltando
-        const dadosFaltantes: string[] = [];
-        if (!dadosExtraidos.valor) dadosFaltantes.push("valor");
-        if (!dadosExtraidos.descricao) dadosFaltantes.push("descricao");
-        
-        // Se temos valor e descrição, pede confirmação
-        if (dadosExtraidos.valor && dadosExtraidos.descricao) {
-          // Salva fluxo de confirmação
-          await salvarFluxoConfirmacaoMidia(
-            phoneNumber, usuarioId, "audio", 
-            dadosExtraidos, dadosFaltantes, undefined,
-            resultadoAudio.transcricao
-          );
-          
-          // Monta mensagem de confirmação
-          const tipoTexto = interp.tipo_operacao === "receita" ? "Receita" : "Gasto";
-          const emoji = interp.tipo_operacao === "receita" ? "💵" : "💸";
-          
-          let msgConfirmacao = `Entendi assim 👇\n`;
-          msgConfirmacao += `${emoji} *${tipoTexto}* de *R$ ${dadosExtraidos.valor!.toFixed(2)}*\n`;
-          msgConfirmacao += `📝 ${dadosExtraidos.descricao}`;
-          
-          if (dadosExtraidos.categoria && dadosExtraidos.categoria !== "outros") {
-            msgConfirmacao += `\n🏷️ Categoria: ${dadosExtraidos.categoria}`;
-          }
-          
-          if (dadosExtraidos.forma_pagamento) {
-            const formaPagMap: Record<string, string> = {
-              pix: "Pix",
-              dinheiro: "Dinheiro",
-              debito: "Débito",
-              credito: "Crédito"
-            };
-            msgConfirmacao += `\n💳 ${formaPagMap[dadosExtraidos.forma_pagamento] || dadosExtraidos.forma_pagamento}`;
-          }
-          
-          msgConfirmacao += `\n\nPosso registrar assim? 😊`;
-          
-          await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
-          
-          // Registra no histórico
-          await supabase.from("historico_conversas").insert({
-            phone_number: phoneNumber,
-            user_id: usuarioId,
-            user_message: `[ÁUDIO] ${resultadoAudio.transcricao}`,
-            ai_response: msgConfirmacao,
-            tipo: "audio_confirmacao_pendente"
-          });
-          
-          return new Response(
-            JSON.stringify({ status: "ok", aguardando_confirmacao: true }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-        
-        // Falta informação, pergunta o que falta
-        if (dadosFaltantes.length > 0) {
-          await salvarFluxoConfirmacaoMidia(
-            phoneNumber, usuarioId, "audio", 
-            dadosExtraidos, dadosFaltantes, undefined,
-            resultadoAudio.transcricao
-          );
-          
-          let pergunta = "";
-          if (!dadosExtraidos.valor && !dadosExtraidos.descricao) {
-            pergunta = "Não consegui entender bem 🤔\nQuanto foi e o que você comprou?";
-          } else if (!dadosExtraidos.valor) {
-            pergunta = `Entendi que foi ${dadosExtraidos.descricao}, mas quanto custou?`;
-          } else if (!dadosExtraidos.descricao) {
-            pergunta = `Vi o valor de R$ ${dadosExtraidos.valor!.toFixed(2)}, mas o que foi?`;
-          }
-          
-          await sendWhatsAppMessage(phoneNumber, pergunta, messageSource);
-          
-          await supabase.from("historico_conversas").insert({
-            phone_number: phoneNumber,
-            user_id: usuarioId,
-            user_message: `[ÁUDIO] ${resultadoAudio.transcricao}`,
-            ai_response: pergunta,
-            tipo: "audio_dados_faltantes"
-          });
-          
-          return new Response(
-            JSON.stringify({ status: "ok", dados_faltantes: dadosFaltantes }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-      }
+      // CAMADA 3: Hipótese
+      const hipotese: HipotesePendente = {
+        origem: "audio",
+        tipo_operacao: interpretacao.tipo_operacao === "entrada" ? "entrada" : "gasto",
+        valor: interpretacao.valor,
+        descricao: interpretacao.descricao,
+        categoria: interpretacao.categoria,
+        forma_pagamento: interpretacao.forma_pagamento,
+        confianca: interpretacao.confianca,
+        dados_faltantes: [],
+        mensagem_original: transcricao,
+        created_at: new Date().toISOString()
+      };
       
-      // Áudio ambíguo ou sem interpretação clara - usa a transcrição como texto normal
-      messageText = resultadoAudio.transcricao;
-      console.log(`📝 Usando transcrição como texto: "${messageText}"`);
+      if (!hipotese.valor) hipotese.dados_faltantes.push("valor");
+      if (!hipotese.descricao) hipotese.dados_faltantes.push("descricao");
       
-      // Registra no histórico
+      await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
+      
+      // CAMADA 4: Pedir validação (NUNCA registra direto)
+      const msgConfirmacao = montarMensagemConfirmacao(hipotese);
+      await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
+      
       await supabase.from("historico_conversas").insert({
         phone_number: phoneNumber,
         user_id: usuarioId,
-        user_message: `[ÁUDIO] ${resultadoAudio.transcricao}`,
-        ai_response: "[PROCESSANDO COMO TEXTO]",
-        tipo: "audio_recebido"
+        user_message: `[ÁUDIO] ${transcricao}`,
+        ai_response: msgConfirmacao,
+        tipo: "audio_aguardando_validacao"
       });
+      
+      return new Response(
+        JSON.stringify({ status: "ok", awaiting_validation: true }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    // ========== PROCESSAMENTO DE IMAGEM ==========
+    // ========================================================================
+    // 📷 PROCESSAMENTO DE IMAGEM (CAMADAS 1-3)
+    // ========================================================================
     if (messageType === "image" && mediaId) {
-      console.log("📷 Processando mensagem de imagem...");
+      console.log("📷 [PIPELINE] Processando imagem...");
       
-      // 1. Baixa a imagem
+      // CAMADA 1: Percepção - Download e OCR
       const imageBase64 = await downloadWhatsAppMedia(mediaId);
       
       if (!imageBase64) {
@@ -2078,15 +1572,14 @@ serve(async (req) => {
           messageSource
         );
         return new Response(
-          JSON.stringify({ status: "ok", error: "image_download_failed" }),
+          JSON.stringify({ status: "ok", error: "download_failed" }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       
-      // 2. Analisa a imagem (OCR)
-      const analise = await analisarImagem(imageBase64, mediaMimeType);
+      const dadosImagem = await extrairDadosImagemPuro(imageBase64, mediaMimeType);
       
-      if (!analise || analise.tipo === "outro") {
+      if (!dadosImagem || dadosImagem.tipo === "outro") {
         await sendWhatsAppMessage(phoneNumber, 
           "Não consegui identificar informações financeiras nessa imagem 🤔\n\n" +
           "Pode me contar o que era? Por exemplo:\n" +
@@ -2099,217 +1592,125 @@ serve(async (req) => {
         );
       }
       
-      console.log(`📷 Imagem analisada: ${analise.tipo}, valor: ${analise.valor}`);
+      // CAMADA 3: Hipótese
+      const hipotese: HipotesePendente = {
+        origem: "imagem",
+        tipo_operacao: "gasto",
+        valor: dadosImagem.valor,
+        descricao: dadosImagem.descricao || dadosImagem.estabelecimento,
+        categoria: "outros",
+        forma_pagamento: dadosImagem.forma_pagamento,
+        confianca: dadosImagem.confianca,
+        dados_faltantes: [],
+        multiplos_itens: dadosImagem.itens && dadosImagem.itens.length > 1 ? dadosImagem.itens : undefined,
+        created_at: new Date().toISOString()
+      };
       
-      // 3. Processa de acordo com o tipo
-      if (analise.tipo === "comprovante") {
-        // Comprovante de pagamento - pede confirmação
-        if (analise.valor) {
-          const dadosExtraidos: Partial<ExtractedIntent> = {
-            intent: "registrar_gasto",
-            valor: analise.valor,
-            descricao: analise.descricao || analise.estabelecimento,
-            categoria: analise.descricao?.toLowerCase().includes("mercado") ? "alimentação" : "outros",
-            forma_pagamento: analise.forma_pagamento
-          };
-          
-          // Verifica o que está faltando
-          const dadosFaltantes: string[] = [];
-          if (!dadosExtraidos.descricao) dadosFaltantes.push("descricao");
-          if (!dadosExtraidos.forma_pagamento) dadosFaltantes.push("forma_pagamento");
-          
-          // Salva fluxo de confirmação
-          await salvarFluxoConfirmacaoMidia(
-            phoneNumber, usuarioId, "imagem", 
-            dadosExtraidos, dadosFaltantes, "comprovante"
-          );
-          
-          // Monta mensagem de confirmação
-          let msgConfirmacao = `Vi aqui um pagamento de *R$ ${analise.valor.toFixed(2)}* 💸`;
-          
-          if (analise.estabelecimento) {
-            msgConfirmacao += `\n📍 ${analise.estabelecimento}`;
-          }
-          
-          if (dadosFaltantes.includes("descricao")) {
-            msgConfirmacao += "\n\n👉 Me conta rapidinho: o que você comprou?";
-          } else if (dadosFaltantes.includes("forma_pagamento")) {
-            msgConfirmacao += "\n\nE foi pago como?\n1️⃣ Pix\n2️⃣ Dinheiro\n3️⃣ Débito\n4️⃣ Crédito";
-          } else {
-            // Tem todos os dados - pede confirmação final
-            msgConfirmacao += `\n\n📝 ${dadosExtraidos.descricao}`;
-            if (dadosExtraidos.forma_pagamento) {
-              msgConfirmacao += `\n💳 ${dadosExtraidos.forma_pagamento.toUpperCase()}`;
-            }
-            msgConfirmacao += "\n\nPosso registrar assim?";
-          }
-          
-          await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
-          
-          return new Response(
-            JSON.stringify({ status: "ok", image_processed: true, type: "comprovante" }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        } else {
-          await sendWhatsAppMessage(phoneNumber, 
-            "Recebi a imagem mas não consegui identificar o valor 🤔\n\n" +
-            "Pode me dizer quanto foi?", 
-            messageSource
-          );
-          
-          await salvarFluxoConfirmacaoMidia(
-            phoneNumber, usuarioId, "imagem", 
-            { intent: "registrar_gasto" }, ["valor", "descricao"], "comprovante"
-          );
-          
-          return new Response(
-            JSON.stringify({ status: "ok", image_processed: true, needs_value: true }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-      } else if (analise.tipo === "fatura") {
-        // Print de fatura - oferece ajuda para organizar
+      if (!hipotese.valor && !hipotese.multiplos_itens) hipotese.dados_faltantes.push("valor");
+      if (!hipotese.descricao && !hipotese.multiplos_itens) hipotese.dados_faltantes.push("descricao");
+      
+      // Se é fatura, oferece ajuda diferente
+      if (dadosImagem.tipo === "fatura") {
         await sendWhatsAppMessage(phoneNumber, 
           "Percebi que isso é um print da fatura do cartão 📄\n\n" +
           "Quer que eu te ajude a organizar esses gastos aqui no Finax?\n\n" +
           "Responde *sim* se quiser começar, ou me manda os gastos que quer registrar.", 
           messageSource
         );
-        
-        await salvarFluxoConfirmacaoMidia(
-          phoneNumber, usuarioId, "imagem", 
-          {}, [], "fatura"
-        );
-        
         return new Response(
-          JSON.stringify({ status: "ok", image_processed: true, type: "fatura" }),
+          JSON.stringify({ status: "ok", image_type: "fatura" }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
-      } else if (analise.tipo === "extrato") {
-        // Print de extrato
+      }
+      
+      // Se é extrato
+      if (dadosImagem.tipo === "extrato") {
         await sendWhatsAppMessage(phoneNumber, 
           "Recebi um print do extrato 📊\n\n" +
           "Me diz: qual transação desse extrato você quer registrar?", 
           messageSource
         );
-        
         return new Response(
-          JSON.stringify({ status: "ok", image_processed: true, type: "extrato" }),
+          JSON.stringify({ status: "ok", image_type: "extrato" }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+      
+      await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
+      
+      // CAMADA 4: Pedir validação
+      const msgConfirmacao = montarMensagemConfirmacao(hipotese);
+      await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
+      
+      await supabase.from("historico_conversas").insert({
+        phone_number: phoneNumber,
+        user_id: usuarioId,
+        user_message: "[IMAGEM RECEBIDA]",
+        ai_response: msgConfirmacao,
+        tipo: "imagem_aguardando_validacao"
+      });
+      
+      return new Response(
+        JSON.stringify({ status: "ok", awaiting_validation: true }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    // ========== VERIFICAR FLUXO DE CONFIRMAÇÃO PENDENTE (ÁUDIO/FOTO) ==========
-    const fluxoConfirmacao = await getFluxoConfirmacaoMidia(phoneNumber);
+    // ========================================================================
+    // 💬 PROCESSAMENTO DE TEXTO (CAMADAS 2-4)
+    // ========================================================================
+    if (!messageText) {
+      return new Response(
+        JSON.stringify({ status: "ok" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Busca histórico para contexto
+    const historicoRecente = await getHistoricoRecente(phoneNumber);
     
-    if (fluxoConfirmacao && messageType === "text") {
-      console.log("📋 Fluxo de confirmação de mídia ativo:", fluxoConfirmacao.tipo);
-      
-      const confirmacao = detectarConfirmacao(messageText);
-      
-      if (confirmacao === "sim") {
-        // Usuário confirmou - registra a transação
-        const dados = fluxoConfirmacao.dados_extraidos;
+    // Extrai intent
+    const intent = await extractIntent(messageText, historicoRecente);
+    console.log("Intent:", JSON.stringify(intent));
+
+    let acaoRealizada = "";
+    let contextoDados = "";
+
+    // Processa baseado no intent
+    switch (intent.intent) {
+      case "registrar_gasto":
+      case "registrar_entrada": {
+        // CAMADA 2: Interpretação já feita pelo extractIntent
+        // CAMADA 3: Criar hipótese
+        const hipotese: HipotesePendente = {
+          origem: "texto",
+          tipo_operacao: intent.intent === "registrar_entrada" ? "entrada" : "gasto",
+          valor: intent.valor,
+          descricao: intent.descricao,
+          categoria: intent.categoria,
+          forma_pagamento: intent.forma_pagamento,
+          confianca: 0.8,
+          dados_faltantes: [],
+          mensagem_original: messageText,
+          created_at: new Date().toISOString()
+        };
         
-        if (dados.valor && (dados.intent === "registrar_gasto" || !dados.intent)) {
-          const { error } = await supabase.from("transacoes").insert({
-            usuario_id: usuarioId,
-            valor: dados.valor,
-            categoria: dados.categoria || "outros",
-            tipo: "saida",
-            descricao: dados.descricao,
-            observacao: dados.descricao,
-            data: new Date().toISOString(),
-            origem: "whatsapp"
+        if (!hipotese.valor) hipotese.dados_faltantes.push("valor");
+        if (!hipotese.descricao) hipotese.dados_faltantes.push("descricao");
+        
+        // Se falta dados críticos
+        if (hipotese.dados_faltantes.length > 0) {
+          await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
+          const msgConfirmacao = montarMensagemConfirmacao(hipotese);
+          await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: phoneNumber,
+            user_id: usuarioId,
+            user_message: messageText,
+            ai_response: msgConfirmacao,
+            tipo: "texto_aguardando_dados"
           });
-          
-          if (!error) {
-            await limparFluxoConfirmacaoMidia(phoneNumber);
-            await sendWhatsAppMessage(phoneNumber, 
-              `✅ Registrado!\n\n` +
-              `💰 R$ ${dados.valor.toFixed(2)}\n` +
-              `📂 ${dados.categoria || "outros"}\n` +
-              `${dados.descricao ? `📝 ${dados.descricao}` : ""}\n\n` +
-              `Assim fica tudo organizado aqui e você não precisa lembrar depois 😉`, 
-              messageSource
-            );
-          } else {
-            await sendWhatsAppMessage(phoneNumber, 
-              "Ops, deu um erro ao salvar 😕 Pode tentar de novo?", 
-              messageSource
-            );
-          }
-          
-          return new Response(
-            JSON.stringify({ status: "ok", transaction_saved: true }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-      } else if (confirmacao === "nao") {
-        // Usuário cancelou
-        await limparFluxoConfirmacaoMidia(phoneNumber);
-        await sendWhatsAppMessage(phoneNumber, 
-          "Ok, cancelei! 👍\n\nComo posso te ajudar?", 
-          messageSource
-        );
-        
-        return new Response(
-          JSON.stringify({ status: "ok", cancelled: true }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      } else {
-        // Usuário está corrigindo ou fornecendo dados faltantes
-        const dadosFaltantes = fluxoConfirmacao.dados_faltantes;
-        const dadosAtuais = { ...fluxoConfirmacao.dados_extraidos };
-        
-        // Tenta extrair dados da mensagem
-        if (dadosFaltantes.includes("descricao")) {
-          dadosAtuais.descricao = messageText;
-          const idx = dadosFaltantes.indexOf("descricao");
-          dadosFaltantes.splice(idx, 1);
-        } else if (dadosFaltantes.includes("valor")) {
-          const valorMatch = messageText.match(/(\d+(?:[.,]\d{2})?)/);
-          if (valorMatch) {
-            dadosAtuais.valor = parseFloat(valorMatch[1].replace(",", "."));
-            const idx = dadosFaltantes.indexOf("valor");
-            dadosFaltantes.splice(idx, 1);
-          }
-        } else if (dadosFaltantes.includes("forma_pagamento")) {
-          const msgLower = messageText.toLowerCase();
-          if (msgLower.includes("pix") || msgLower === "1") {
-            dadosAtuais.forma_pagamento = "pix";
-          } else if (msgLower.includes("dinheiro") || msgLower === "2") {
-            dadosAtuais.forma_pagamento = "dinheiro";
-          } else if (msgLower.includes("débito") || msgLower.includes("debito") || msgLower === "3") {
-            dadosAtuais.forma_pagamento = "debito";
-          } else if (msgLower.includes("crédito") || msgLower.includes("credito") || msgLower.includes("cartão") || msgLower === "4") {
-            dadosAtuais.forma_pagamento = "credito";
-          }
-          if (dadosAtuais.forma_pagamento) {
-            const idx = dadosFaltantes.indexOf("forma_pagamento");
-            dadosFaltantes.splice(idx, 1);
-          }
-        }
-        
-        // Verifica se ainda falta algo
-        if (dadosFaltantes.length > 0 || !dadosAtuais.valor) {
-          // Atualiza fluxo e pergunta próximo dado
-          await salvarFluxoConfirmacaoMidia(
-            phoneNumber, usuarioId, fluxoConfirmacao.tipo,
-            dadosAtuais, dadosFaltantes, fluxoConfirmacao.imagem_tipo
-          );
-          
-          if (dadosFaltantes.includes("valor")) {
-            await sendWhatsAppMessage(phoneNumber, "Qual foi o valor? 💰", messageSource);
-          } else if (dadosFaltantes.includes("descricao")) {
-            await sendWhatsAppMessage(phoneNumber, "O que você comprou?", messageSource);
-          } else if (dadosFaltantes.includes("forma_pagamento")) {
-            await sendWhatsAppMessage(phoneNumber, 
-              "E foi pago como?\n1️⃣ Pix\n2️⃣ Dinheiro\n3️⃣ Débito\n4️⃣ Crédito", 
-              messageSource
-            );
-          }
           
           return new Response(
             JSON.stringify({ status: "ok", awaiting_data: true }),
@@ -2317,864 +1718,104 @@ serve(async (req) => {
           );
         }
         
-        // Tem todos os dados - pede confirmação final
-        await salvarFluxoConfirmacaoMidia(
-          phoneNumber, usuarioId, fluxoConfirmacao.tipo,
-          dadosAtuais, [], fluxoConfirmacao.imagem_tipo
-        );
-        
-        let msgFinal = `Vou registrar assim 👇\n\n`;
-        msgFinal += `💰 R$ ${dadosAtuais.valor?.toFixed(2)}\n`;
-        if (dadosAtuais.descricao) msgFinal += `📝 ${dadosAtuais.descricao}\n`;
-        if (dadosAtuais.forma_pagamento) msgFinal += `💳 ${dadosAtuais.forma_pagamento.toUpperCase()}\n`;
-        msgFinal += `\nPosso salvar?`;
-        
-        await sendWhatsAppMessage(phoneNumber, msgFinal, messageSource);
-        
-        return new Response(
-          JSON.stringify({ status: "ok", awaiting_confirmation: true }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-
-    // Se não tem messageText ainda (áudio/imagem foi processado), sai
-    if (!messageText && messageType !== "text") {
-      return new Response(
-        JSON.stringify({ status: "ok" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // 2. Busca histórico recente para contexto
-    const historicoRecente = await getHistoricoRecente(phoneNumber);
-
-    let acaoRealizada = "";
-    let contextoDados = "";
-    let intent: ExtractedIntent = { intent: "outro" };
-
-    // ========== VERIFICAR FLUXO DE CENTRALIZAÇÃO (ONBOARDING GUIADO) ==========
-    const fluxoCentralizacao = await getFluxoCentralizacao(phoneNumber);
-    
-    if (fluxoCentralizacao && fluxoCentralizacao.etapa !== "concluido") {
-      console.log("🏗️ Fluxo de centralização ativo:", fluxoCentralizacao.etapa);
-      
-      const processado = await processarFluxoCentralizacao(
-        phoneNumber, 
-        usuarioId, 
-        messageSource, 
-        messageText, 
-        fluxoCentralizacao
-      );
-      
-      if (processado) {
-        return new Response(
-          JSON.stringify({ status: "ok", centralizacao: true }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-
-    // ========== NOVA LÓGICA: VERIFICAR FLUXO ATIVO COM IA COGNITIVA ==========
-    const fluxoAtivo = await getFluxoAtivo(phoneNumber);
-    
-    if (fluxoAtivo) {
-      console.log("🔄 Fluxo ativo encontrado:", JSON.stringify(fluxoAtivo));
-      
-      // NOVA ARQUITETURA: Usar IA como orquestradora cognitiva
-      const interpretacao = await interpretarRespostaComContexto(messageText, fluxoAtivo);
-      
-      console.log("🧠 Resultado da interpretação:", JSON.stringify(interpretacao));
-      
-      // ========== PROCESSAMENTO BASEADO NA INTENÇÃO ==========
-      
-      if (interpretacao.intencao === "cancelar") {
-        // Usuário quer cancelar o fluxo
-        console.log("❌ Usuário cancelou o fluxo");
-        await limparFluxoAtivo(phoneNumber);
-        
-        const resposta = "Ok, cancelei a operação! 👍 Como posso te ajudar?";
-        await sendWhatsAppMessage(phoneNumber, resposta, messageSource);
+        // Tem todos os dados - pede confirmação (NUNCA registra direto)
+        await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
+        const msgConfirmacao = montarMensagemConfirmacao(hipotese);
+        await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
         
         await supabase.from("historico_conversas").insert({
           phone_number: phoneNumber,
           user_id: usuarioId,
           user_message: messageText,
-          ai_response: resposta,
-          tipo: "fluxo_cancelado"
+          ai_response: msgConfirmacao,
+          tipo: "texto_aguardando_validacao"
         });
         
         return new Response(
-          JSON.stringify({ status: "ok", message_sent: true }),
+          JSON.stringify({ status: "ok", awaiting_validation: true }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      
-      if (interpretacao.intencao === "novo_comando") {
-        // Usuário quer fazer algo diferente - limpa fluxo e processa normalmente
-        console.log("🔀 Usuário iniciou novo comando - limpando fluxo antigo");
-        await limparFluxoAtivo(phoneNumber);
-        // Continua para o fluxo normal abaixo (extractIntent)
-      }
-      
-      else if (interpretacao.intencao === "continuar_fluxo") {
-        // FLUXO PRINCIPAL: Continuar com os dados interpretados
-        console.log("✅ Continuando fluxo com dados interpretados");
+
+      case "consultar_resumo": {
+        const resumo = await getResumoMes(usuarioId);
         
-        // Mescla dados SEM sobrescrever com null/undefined
-        const dadosMesclados = { ...fluxoAtivo.dados_coletados };
-        if (interpretacao.campo && interpretacao.valor !== null && interpretacao.valor !== undefined) {
-          (dadosMesclados as any)[interpretacao.campo] = interpretacao.valor;
-          console.log(`✅ Adicionado ${interpretacao.campo}: ${interpretacao.valor}`);
-        }
-        console.log("📦 Dados mesclados:", JSON.stringify(dadosMesclados));
-        
-        // Atualiza lista de dados faltantes
-        const dadosAindaFaltantes = fluxoAtivo.dados_faltantes.filter(campo => {
-          const valor = dadosMesclados[campo as keyof ExtractedIntent];
-          return valor === null || valor === undefined;
-        });
-        console.log("📋 Dados ainda faltantes:", dadosAindaFaltantes);
-        
-        if (fluxoAtivo.intent === "criar_recorrente") {
-          const temValor = dadosMesclados.valor !== null && dadosMesclados.valor !== undefined && Number(dadosMesclados.valor) > 0;
-          const temDiaMes = dadosMesclados.dia_mes !== null && dadosMesclados.dia_mes !== undefined && Number(dadosMesclados.dia_mes) > 0;
-          
-          console.log(`📊 Estado: temValor=${temValor} (${dadosMesclados.valor}), temDiaMes=${temDiaMes} (${dadosMesclados.dia_mes})`);
-          
-          if (temValor && temDiaMes) {
-            // SUCESSO: Tem todos os dados para criar recorrente
-            console.log("🎉 Todos os dados coletados - criando gasto recorrente!");
-            
-            const { error } = await supabase.from("gastos_recorrentes").insert({
-              usuario_id: usuarioId,
-              valor_parcela: dadosMesclados.valor,
-              categoria: dadosMesclados.categoria || "assinaturas",
-              tipo_recorrencia: "Mensal", // Maiúsculo para passar no check constraint
-              dia_mes: dadosMesclados.dia_mes,
-              descricao: dadosMesclados.descricao,
-              ativo: true,
-              proxima_execucao: null,
-              origem: "whatsapp"
-            });
-
-            if (!error) {
-              await limparFluxoAtivo(phoneNumber);
-              acaoRealizada = `✅ Gasto recorrente cadastrado com sucesso!\n\n` +
-                `🔄 ${dadosMesclados.descricao || dadosMesclados.categoria || "Gasto recorrente"}\n` +
-                `💰 R$ ${Number(dadosMesclados.valor).toFixed(2)} todo dia ${dadosMesclados.dia_mes}\n\n` +
-                `Vou registrar automaticamente quando a data chegar.`;
-              console.log("✅ Gasto recorrente criado com sucesso!");
-            } else {
-              console.error("❌ Erro ao criar gasto recorrente:", error);
-              acaoRealizada = "❌ Erro ao criar o gasto recorrente. Tente novamente.";
-              await limparFluxoAtivo(phoneNumber);
-            }
-          } else if (temValor && !temDiaMes) {
-            // Tem valor mas falta dia do mês
-            const pergunta = `Qual o *dia do mês* que você costuma fazer esse pagamento de R$ ${Number(dadosMesclados.valor).toFixed(2)}? 📅`;
-            
-            const aiResponse = await generateResponse(messageText, "", pergunta);
-            
-            await salvarFluxoAtivo(
-              phoneNumber,
-              usuarioId,
-              "criar_recorrente",
-              dadosMesclados,
-              ["dia_mes"],
-              messageText,
-              aiResponse,
-              pergunta  // NOVO: Salva a pergunta para contexto
-            );
-            
-            await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
-            
-            return new Response(
-              JSON.stringify({ status: "ok", message_sent: true }),
-              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          } else {
-            // Falta valor
-            const pergunta = "Qual o valor do gasto recorrente? 💰 (ex: 59,90)";
-            
-            const aiResponse = await generateResponse(messageText, "", pergunta);
-            
-            await salvarFluxoAtivo(
-              phoneNumber,
-              usuarioId,
-              "criar_recorrente",
-              dadosMesclados,
-              ["valor"],
-              messageText,
-              aiResponse,
-              pergunta
-            );
-            
-            await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
-            
-            return new Response(
-              JSON.stringify({ status: "ok", message_sent: true }),
-              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          }
-        }
-      }
-      
-      else if (interpretacao.intencao === "indefinida") {
-        // REGRA CRÍTICA: NÃO dispara fallback genérico - pede clarificação
-        console.log("❓ Intenção indefinida - pedindo clarificação (SEM fallback genérico)");
-        
-        const mensagemClarificacao = interpretacao.mensagem_clarificacao || 
-          `Desculpe, não entendi sua resposta. ${fluxoAtivo.ultima_pergunta || "Pode tentar de outra forma?"}`;
-        
-        await sendWhatsAppMessage(phoneNumber, mensagemClarificacao, messageSource);
-        
-        await supabase.from("historico_conversas").insert({
-          phone_number: phoneNumber,
-          user_id: usuarioId,
-          user_message: messageText,
-          ai_response: mensagemClarificacao,
-          tipo: "clarificacao_fluxo"
-        });
-        
-        return new Response(
-          JSON.stringify({ status: "ok", message_sent: true }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-    
-    // ========== FLUXO NORMAL (SEM fluxo ativo ou após novo_comando) ==========
-    if (!fluxoAtivo || (fluxoAtivo && acaoRealizada === "")) {
-      // Verificar múltiplos gastos
-      const gastosDetectados = detectarMultiplosGastos(messageText);
-      
-      if (gastosDetectados.length > 1) {
-        console.log(`🔢 Detectados ${gastosDetectados.length} gastos na mensagem`);
-        
-        // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
-        if (statusPlano.bloqueiaEscrita) {
-          console.log("🚫 Usuário com trial expirado tentando registrar gastos");
-          await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
-          return new Response(
-            JSON.stringify({ status: "ok", message: "trial_expired" }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-        
-        const resultado = await processarMultiplosGastos(gastosDetectados, usuarioId, historicoRecente);
-        
-        if (resultado.sucesso > 0) {
-          acaoRealizada = `✅ ${resultado.sucesso} gastos registrados!\n\n` +
-            resultado.detalhes.map(d => `• ${d}`).join("\n");
-        } else {
-          acaoRealizada = "❌ Não consegui processar os gastos. Tente enviar um por um.";
-        }
-      } else {
-        // Fluxo normal - extrai intent
-        intent = await extractIntent(messageText, historicoRecente);
-        console.log("Intent detectado:", JSON.stringify(intent));
-
-        // Processa baseado no intent
-        switch (intent.intent) {
-          case "registrar_gasto": {
-            // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
-            if (statusPlano.bloqueiaEscrita) {
-              console.log("🚫 Usuário com trial expirado tentando registrar gasto");
-              await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
-              return new Response(
-                JSON.stringify({ status: "ok", message: "trial_expired" }),
-                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-              );
-            }
-            
-            if (intent.valor) {
-              const { error } = await supabase.from("transacoes").insert({
-                usuario_id: usuarioId,
-                valor: intent.valor,
-                categoria: intent.categoria || "outros",
-                tipo: "saida",
-                observacao: intent.descricao,
-                descricao: intent.descricao,
-                data: new Date().toISOString(),
-                origem: "whatsapp"
-              });
-
-              if (!error) {
-                acaoRealizada = `✅ Gasto registrado: -R$ ${intent.valor.toFixed(2)} em ${intent.categoria || "outros"}${intent.descricao ? ` (${intent.descricao})` : ""}`;
-              }
-            }
-            break;
-          }
-
-          case "registrar_entrada": {
-            // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
-            if (statusPlano.bloqueiaEscrita) {
-              console.log("🚫 Usuário com trial expirado tentando registrar entrada");
-              await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
-              return new Response(
-                JSON.stringify({ status: "ok", message: "trial_expired" }),
-                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-              );
-            }
-            
-            if (intent.valor) {
-              const { error } = await supabase.from("transacoes").insert({
-                usuario_id: usuarioId,
-                valor: intent.valor,
-                categoria: intent.categoria || "outros",
-                tipo: "entrada",
-                observacao: intent.descricao,
-                descricao: intent.descricao,
-                data: new Date().toISOString(),
-                origem: "whatsapp"
-              });
-
-              if (!error) {
-                acaoRealizada = `✅ Entrada registrada: +R$ ${intent.valor.toFixed(2)} em ${intent.categoria || "outros"}${intent.descricao ? ` (${intent.descricao})` : ""}`;
-              }
-            }
-            break;
-          }
-
-          case "criar_parcelamento": {
-            // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
-            if (statusPlano.bloqueiaEscrita) {
-              console.log("🚫 Usuário com trial expirado tentando criar parcelamento");
-              await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
-              return new Response(
-                JSON.stringify({ status: "ok", message: "trial_expired" }),
-                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-              );
-            }
-            
-            if (intent.valor && intent.parcelas && intent.parcelas > 1) {
-              const valorParcela = intent.valor / intent.parcelas;
-              
-              const { data: parcelamento, error: errParc } = await supabase
-                .from("parcelamentos")
-                .insert({
-                  usuario_id: usuarioId,
-                  valor_total: intent.valor,
-                  num_parcelas: intent.parcelas,
-                  parcela_atual: 1,
-                  valor_parcela: valorParcela,
-                  ativa: true,
-                  descricao: intent.descricao || "Compra parcelada"
-                })
-                .select()
-                .single();
-
-              if (!errParc && parcelamento) {
-                const hoje = new Date();
-                const transacoesParcelas = [];
-                
-                for (let i = 0; i < intent.parcelas; i++) {
-                  const dataParcela = new Date(hoje);
-                  dataParcela.setMonth(dataParcela.getMonth() + i);
-                  
-                  transacoesParcelas.push({
-                    usuario_id: usuarioId,
-                    valor: valorParcela,
-                    categoria: intent.categoria || "compras",
-                    tipo: "saida",
-                    observacao: intent.descricao,
-                    descricao: intent.descricao,
-                    parcela: `${i + 1}/${intent.parcelas}`,
-                    parcela_atual: i + 1,
-                    total_parcelas: intent.parcelas,
-                    parcelamento_id: parcelamento.id,
-                    data: dataParcela.toISOString(),
-                    status: i === 0 ? "confirmada" : "prevista",
-                    origem: "whatsapp"
-                  });
-                }
-
-                await supabase.from("transacoes").insert(transacoesParcelas);
-
-                acaoRealizada = `✅ Parcelamento criado!\n\n` +
-                  `📦 ${intent.descricao || "Compra"}\n` +
-                  `💰 Valor total: R$ ${intent.valor.toFixed(2)}\n` +
-                  `📅 ${intent.parcelas}x de R$ ${valorParcela.toFixed(2)}`;
-              }
-            }
-            break;
-          }
-
-          case "criar_recorrente": {
-            // ========== BLOQUEIO DE ESCRITA PARA EXPIRED ==========
-            if (statusPlano.bloqueiaEscrita) {
-              console.log("🚫 Usuário com trial expirado tentando criar recorrente");
-              await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
-              return new Response(
-                JSON.stringify({ status: "ok", message: "trial_expired" }),
-                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-              );
-            }
-            
-            console.log(`criar_recorrente - temValor: ${intent.valor !== null && intent.valor !== undefined} (${intent.valor}), temDiaMes: ${intent.dia_mes !== null && intent.dia_mes !== undefined} (${intent.dia_mes})`);
-
-            
-            // Verifica se tem todos os dados necessários
-            const temValor = intent.valor !== null && intent.valor !== undefined && Number(intent.valor) > 0;
-            const temDiaMes = intent.dia_mes !== null && intent.dia_mes !== undefined && Number(intent.dia_mes) > 0;
-            
-            if (temValor && temDiaMes) {
-              // Tem todos os dados - cria imediatamente
-              const { error } = await supabase.from("gastos_recorrentes").insert({
-                usuario_id: usuarioId,
-                valor_parcela: intent.valor,
-                categoria: intent.categoria || "assinaturas",
-                tipo_recorrencia: "Mensal",
-                dia_mes: intent.dia_mes,
-                descricao: intent.descricao,
-                ativo: true,
-                proxima_execucao: null,
-                origem: "whatsapp"
-              });
-
-              if (!error) {
-                acaoRealizada = `✅ Gasto recorrente cadastrado!\n\n` +
-                  `🔄 ${intent.descricao || intent.categoria || "Gasto recorrente"}\n` +
-                  `💰 R$ ${Number(intent.valor).toFixed(2)} todo dia ${intent.dia_mes}\n\n` +
-                  `Vou registrar automaticamente quando a data chegar.`;
-              } else {
-                console.error("Erro ao criar gasto recorrente:", error);
-                acaoRealizada = "❌ Erro ao criar o gasto recorrente. Tente novamente.";
-              }
-            } else if (temValor && !temDiaMes) {
-              // Tem valor mas falta dia - pergunta e salva fluxo
-              const pergunta = `Qual o *dia do mês* que você costuma fazer esse pagamento de R$ ${Number(intent.valor).toFixed(2)}? 📅`;
-              
-              const aiResponse = await generateResponse(messageText, "", pergunta);
-              
-              await salvarFluxoAtivo(
-                phoneNumber,
-                usuarioId,
-                "criar_recorrente",
-                {
-                  valor: intent.valor,
-                  categoria: intent.categoria,
-                  descricao: intent.descricao,
-                  tipo_recorrencia: intent.tipo_recorrencia || "mensal"
-                },
-                ["dia_mes"],
-                messageText,
-                aiResponse,
-                pergunta
-              );
-              
-              await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
-              
-              return new Response(
-                JSON.stringify({ status: "ok", message_sent: true }),
-                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-              );
-            } else {
-              // Falta valor - pergunta
-              const pergunta = "Para cadastrar esse gasto recorrente, preciso saber o valor. Quanto você paga? 💰 (ex: 59,90)";
-              
-              const aiResponse = await generateResponse(messageText, "", pergunta);
-              
-              await salvarFluxoAtivo(
-                phoneNumber,
-                usuarioId,
-                "criar_recorrente",
-                {
-                  categoria: intent.categoria,
-                  descricao: intent.descricao,
-                  tipo_recorrencia: intent.tipo_recorrencia,
-                  dia_mes: intent.dia_mes
-                },
-                ["valor"],
-                messageText,
-                aiResponse,
-                pergunta
-              );
-              
-              await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
-              
-              return new Response(
-                JSON.stringify({ status: "ok", message_sent: true }),
-                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-              );
-            }
-            break;
-          }
-
-          case "consultar_resumo": {
-            // Detecta tipo de relatório solicitado
-            const tipoRelatorio = detectarTipoRelatorio(messageText);
-            
-            if (tipoRelatorio && tipoRelatorio.tipo === "semanal") {
-              // Relatório semanal calculado no backend
-              const tipoPeriodo = tipoRelatorio.periodo === "passado" ? "semana_passada" : "semana_atual";
-              const relatorioSemanal = await getRelatorioSemanal(usuarioId, tipoPeriodo);
-              
-              if (relatorioSemanal && relatorioSemanal.totais) {
-                const totais = relatorioSemanal.totais;
-                const comparativo = relatorioSemanal.comparativo;
-                const categorias = relatorioSemanal.categorias || [];
-                const periodo = relatorioSemanal.periodo;
-                
-                let categoriasTexto = "";
-                if (categorias.length > 0) {
-                  categoriasTexto = "\n\n📊 Categorias:\n" + 
-                    categorias.slice(0, 5).map((c: any) => 
-                      `• ${c.categoria}: R$ ${Number(c.total).toFixed(2)}`
-                    ).join("\n");
-                }
-                
-                const variacaoTexto = comparativo.variacao_gastos_percentual > 0 
-                  ? `📈 Gastos ${comparativo.variacao_gastos_percentual.toFixed(1)}% MAIORES que semana anterior`
-                  : comparativo.variacao_gastos_percentual < 0
-                    ? `📉 Gastos ${Math.abs(comparativo.variacao_gastos_percentual).toFixed(1)}% MENORES que semana anterior`
-                    : `➡️ Gastos estáveis em relação à semana anterior`;
-                
-                const tituloSemana = tipoPeriodo === "semana_atual" ? "Semana Atual" : "Semana Passada";
-                
-                contextoDados = `📅 *Relatório ${tituloSemana}*\n` +
-                  `📆 Período: ${periodo.inicio} a ${periodo.fim}\n\n` +
-                  `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
-                  `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
-                  `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n\n` +
-                  `${variacaoTexto}` +
-                  categoriasTexto +
-                  `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
-              } else {
-                const resumo = await getResumoMes(usuarioId);
-                contextoDados = `Sem dados suficientes para relatório semanal.\n\n` +
-                  `Resumo do mês: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
-              }
-            } else if (tipoRelatorio && tipoRelatorio.tipo === "mensal") {
-              // Relatório mensal calculado no backend
-              const relatorioMensal = await getRelatorioMensal(usuarioId);
-              
-              if (relatorioMensal && relatorioMensal.totais) {
-                const periodo = relatorioMensal.periodo;
-                const totais = relatorioMensal.totais;
-                const categorias = relatorioMensal.categorias || [];
-                const maioresGastos = relatorioMensal.maiores_gastos || [];
-                
-                let categoriasTexto = "";
-                if (categorias.length > 0) {
-                  categoriasTexto = "\n\n📊 Por categoria:\n" + 
-                    categorias.slice(0, 5).map((c: any) => 
-                      `• ${c.categoria}: R$ ${Number(c.total).toFixed(2)} (${c.percentual}%)`
-                    ).join("\n");
-                }
-                
-                let maioresTexto = "";
-                if (maioresGastos.length > 0) {
-                  maioresTexto = "\n\n💰 Maiores gastos:\n" + 
-                    maioresGastos.slice(0, 3).map((g: any) => 
-                      `• ${g.descricao}: R$ ${Number(g.valor).toFixed(2)}`
-                    ).join("\n");
-                }
-                
-                contextoDados = `📅 *Relatório de ${periodo.nome_mes}/${periodo.ano}*\n\n` +
-                  `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
-                  `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
-                  `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n` +
-                  `📊 Média diária: R$ ${Number(totais.media_diaria).toFixed(2)}\n` +
-                  `🔁 Despesas fixas: R$ ${Number(totais.despesas_fixas).toFixed(2)}` +
-                  categoriasTexto +
-                  maioresTexto +
-                  `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
-              } else {
-                const resumo = await getResumoMes(usuarioId);
-                contextoDados = `Sem dados suficientes para relatório mensal detalhado.\n\n` +
-                  `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
-              }
-            } else {
-              // Resumo padrão do mês atual
-              const resumo = await getResumoMes(usuarioId);
-              
-              let categoriasTexto = "";
-              const categoriasOrdenadas = Object.entries(resumo.porCategoria)
-                .sort(([,a], [,b]) => b - a)
-                .slice(0, 5);
-              
-              if (categoriasOrdenadas.length > 0) {
-                categoriasTexto = "\n\n📊 Maiores gastos por categoria:\n" +
-                  categoriasOrdenadas.map(([cat, val]) => 
-                    `• ${cat}: R$ ${val.toFixed(2)}`
-                  ).join("\n");
-              }
-
-              contextoDados = `📅 Resumo do mês atual:\n\n` +
-                `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
-                `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
-                `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*` +
-                categoriasTexto +
-                `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
-            }
-            break;
-          }
-
-          case "consultar_categoria": {
-            if (intent.categoria_consulta) {
-              const transacoes = await getTransacoesPorCategoria(usuarioId, intent.categoria_consulta);
-              const total = transacoes.reduce((sum, t) => sum + Number(t.valor), 0);
-              
-              if (transacoes.length > 0) {
-                const listaTransacoes = transacoes.slice(0, 10).map(t => {
-                  const data = new Date(t.data).toLocaleDateString("pt-BR");
-                  const desc = t.descricao || t.observacao || t.categoria;
-                  return `• ${data}: R$ ${Number(t.valor).toFixed(2)} - ${desc}`;
-                }).join("\n");
-
-                contextoDados = `📊 Gastos em ${intent.categoria_consulta} este mês:\n\n` +
-                  `💰 Total: *R$ ${total.toFixed(2)}*\n` +
-                  `📝 ${transacoes.length} transação(ões)\n\n` +
-                  `Detalhes:\n${listaTransacoes}\n\n` +
-                  `⚠️ TOTAL PRÉ-CALCULADO - NÃO RECALCULE`;
-              } else {
-                contextoDados = `Você não teve gastos em ${intent.categoria_consulta} este mês.`;
-              }
-            }
-            break;
-          }
-
-          case "consultar_detalhes": {
-            // PRIMEIRO: Verifica se pediu relatório semanal/mensal
-            const tipoRelatorioDetalhes = detectarTipoRelatorio(messageText);
-            
-            if (tipoRelatorioDetalhes && tipoRelatorioDetalhes.tipo === "semanal") {
-              // Relatório semanal solicitado
-              const tipoPeriodo = tipoRelatorioDetalhes.periodo === "passado" ? "semana_passada" : "semana_atual";
-              console.log(`📊 Detectado pedido de relatório semanal (${tipoPeriodo}) em consultar_detalhes`);
-              
-              const relatorioSemanal = await getRelatorioSemanal(usuarioId, tipoPeriodo);
-              
-              if (relatorioSemanal && relatorioSemanal.totais) {
-                const totais = relatorioSemanal.totais;
-                const comparativo = relatorioSemanal.comparativo;
-                const categorias = relatorioSemanal.categorias || [];
-                const periodo = relatorioSemanal.periodo;
-                
-                let categoriasTexto = "";
-                if (categorias.length > 0) {
-                  categoriasTexto = "\n\n📊 Categorias:\n" + 
-                    categorias.slice(0, 5).map((c: any) => 
-                      `• ${c.categoria}: R$ ${Number(c.total).toFixed(2)}`
-                    ).join("\n");
-                }
-                
-                const variacaoTexto = comparativo.variacao_gastos_percentual > 0 
-                  ? `📈 Gastos ${comparativo.variacao_gastos_percentual.toFixed(1)}% MAIORES que semana anterior`
-                  : comparativo.variacao_gastos_percentual < 0
-                    ? `📉 Gastos ${Math.abs(comparativo.variacao_gastos_percentual).toFixed(1)}% MENORES que semana anterior`
-                    : `➡️ Gastos estáveis em relação à semana anterior`;
-                
-                const tituloSemana = tipoPeriodo === "semana_atual" ? "Semana Atual" : "Semana Passada";
-                
-                contextoDados = `📅 *Relatório ${tituloSemana}*\n` +
-                  `📆 Período: ${periodo.inicio} a ${periodo.fim}\n\n` +
-                  `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
-                  `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
-                  `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n\n` +
-                  `${variacaoTexto}` +
-                  categoriasTexto +
-                  `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
-              } else {
-                const resumo = await getResumoMes(usuarioId);
-                contextoDados = `Sem dados suficientes para relatório semanal.\n\n` +
-                  `Resumo do mês: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
-              }
-            } else if (tipoRelatorioDetalhes && tipoRelatorioDetalhes.tipo === "mensal") {
-              // Relatório mensal solicitado
-              console.log(`📊 Detectado pedido de relatório mensal em consultar_detalhes`);
-              
-              const relatorioMensal = await getRelatorioMensal(usuarioId);
-              
-              if (relatorioMensal && relatorioMensal.totais) {
-                const periodo = relatorioMensal.periodo;
-                const totais = relatorioMensal.totais;
-                const categorias = relatorioMensal.categorias || [];
-                const maioresGastos = relatorioMensal.maiores_gastos || [];
-                
-                let categoriasTexto = "";
-                if (categorias.length > 0) {
-                  categoriasTexto = "\n\n📊 Por categoria:\n" + 
-                    categorias.slice(0, 5).map((c: any) => 
-                      `• ${c.categoria}: R$ ${Number(c.total).toFixed(2)} (${c.percentual}%)`
-                    ).join("\n");
-                }
-                
-                let maioresTexto = "";
-                if (maioresGastos.length > 0) {
-                  maioresTexto = "\n\n💰 Maiores gastos:\n" + 
-                    maioresGastos.slice(0, 3).map((g: any) => 
-                      `• ${g.descricao}: R$ ${Number(g.valor).toFixed(2)}`
-                    ).join("\n");
-                }
-                
-                contextoDados = `📅 *Relatório de ${periodo.nome_mes}/${periodo.ano}*\n\n` +
-                  `💵 Entradas: *R$ ${Number(totais.entradas).toFixed(2)}*\n` +
-                  `💸 Saídas: *R$ ${Number(totais.saidas).toFixed(2)}*\n` +
-                  `📈 Saldo: *R$ ${Number(totais.saldo).toFixed(2)}*\n` +
-                  `📊 Média diária: R$ ${Number(totais.media_diaria).toFixed(2)}\n` +
-                  `🔁 Despesas fixas: R$ ${Number(totais.despesas_fixas).toFixed(2)}` +
-                  categoriasTexto +
-                  maioresTexto +
-                  `\n\n⚠️ VALORES PRÉ-CALCULADOS - NÃO RECALCULE`;
-              } else {
-                const resumo = await getResumoMes(usuarioId);
-                contextoDados = `Sem dados suficientes para relatório mensal.\n\n` +
-                  `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, Saídas R$ ${resumo.totalSaidas.toFixed(2)}`;
-              }
-            } else {
-              // Detalhes das transações do mês (comportamento original)
-              const resumo = await getResumoMes(usuarioId);
-              
-              if (resumo.transacoes.length > 0) {
-                const transacoesFormatadas = resumo.transacoes
-                  .slice(0, 15)
-                  .map(t => {
-                    const data = new Date(t.data).toLocaleDateString("pt-BR");
-                    const sinal = t.tipo === "entrada" ? "+" : "-";
-                    const desc = t.descricao || t.observacao || t.categoria;
-                    const parcela = t.parcela ? ` (${t.parcela})` : "";
-                    return `• ${data}: ${sinal}R$ ${Number(t.valor).toFixed(2)} - ${desc}${parcela}`;
-                  }).join("\n");
-
-                contextoDados = `📋 Suas transações do mês:\n\n${transacoesFormatadas}\n\n` +
-                  `═══════════════════════════════\n` +
-                  `📊 *TOTAIS PRÉ-CALCULADOS:*\n` +
-                  `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
-                  `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
-                  `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*\n` +
-                  `═══════════════════════════════\n` +
-                  `Total: ${resumo.transacoes.length} transações\n\n` +
-                  `⚠️ NÃO RECALCULE ESTES VALORES`;
-              } else {
-                contextoDados = "Você ainda não tem transações registradas este mês.";
-              }
-            }
-            break;
-          }
-
-          case "iniciar_organizacao": {
-            // Usuário quer organizar cartões/salário/contas
-            console.log("🏗️ Iniciando fluxo de centralização");
-            await iniciarFluxoCentralizacao(phoneNumber, usuarioId, messageSource);
-            
-            return new Response(
-              JSON.stringify({ status: "ok", centralizacao_iniciada: true }),
-              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          }
-
-          case "cancelar_transacao":
-          case "apagar_transacao": {
-            // Busca últimas transações do usuário para mostrar opções
-            const { data: ultimasTransacoes } = await supabase
-              .from("transacoes")
-              .select("id, valor, categoria, descricao, data")
-              .eq("usuario_id", usuarioId)
-              .order("created_at", { ascending: false })
-              .limit(5);
-            
-            if (!ultimasTransacoes || ultimasTransacoes.length === 0) {
-              acaoRealizada = "Você não tem transações recentes para apagar.";
-              break;
-            }
-            
-            // Mostra opções para confirmar qual apagar
-            const listaOpcoes = ultimasTransacoes.map((t, i) => {
+        if (resumo.transacoes.length > 0) {
+          const transacoesFormatadas = resumo.transacoes
+            .slice(0, 10)
+            .map(t => {
               const data = new Date(t.data).toLocaleDateString("pt-BR");
-              const desc = t.descricao || t.categoria;
-              return `${i + 1}. R$ ${Number(t.valor).toFixed(2)} - ${desc} (${data})`;
+              const sinal = t.tipo === "entrada" ? "+" : "-";
+              const desc = t.descricao || t.observacao || t.categoria;
+              return `• ${data}: ${sinal}R$ ${Number(t.valor).toFixed(2)} - ${desc}`;
             }).join("\n");
-            
-            // Se o intent.transacao_alvo estiver definido, tenta encontrar a transação
-            if (intent.transacao_alvo) {
-              const alvo = intent.transacao_alvo.toLowerCase();
-              const transacaoEncontrada = ultimasTransacoes.find(t => 
-                (t.descricao?.toLowerCase().includes(alvo)) ||
-                (t.categoria?.toLowerCase().includes(alvo)) ||
-                (t.valor && alvo.includes(t.valor.toString()))
-              );
-              
-              if (transacaoEncontrada) {
-                // Deleta a transação encontrada
-                const { error } = await supabase
-                  .from("transacoes")
-                  .delete()
-                  .eq("id", transacaoEncontrada.id);
-                
-                if (!error) {
-                  acaoRealizada = `✅ Transação apagada!\n\n` +
-                    `❌ R$ ${Number(transacaoEncontrada.valor).toFixed(2)} - ${transacaoEncontrada.descricao || transacaoEncontrada.categoria}\n\n` +
-                    `Se errei, me avisa que a gente resolve 👍`;
-                } else {
-                  acaoRealizada = "❌ Erro ao apagar a transação. Tente novamente.";
-                }
-                break;
-              }
-            }
-            
-            // Se não encontrou específica, mostra lista
-            contextoDados = `🗑️ *Qual transação você quer apagar?*\n\n${listaOpcoes}\n\n` +
-              `Responde com o número ou me descreve melhor qual é.`;
-            break;
-          }
 
-          case "corrigir_transacao": {
-            // Busca última transação para oferecer correção
-            const { data: ultimaTransacao } = await supabase
+          contextoDados = `📋 Suas transações do mês:\n\n${transacoesFormatadas}\n\n` +
+            `═════════════════════════\n` +
+            `📊 *TOTAIS:*\n` +
+            `💵 Entradas: *R$ ${resumo.totalEntradas.toFixed(2)}*\n` +
+            `💸 Saídas: *R$ ${resumo.totalSaidas.toFixed(2)}*\n` +
+            `📈 Saldo: *R$ ${resumo.saldo.toFixed(2)}*`;
+        } else {
+          contextoDados = "Você ainda não tem transações registradas este mês.";
+        }
+        break;
+      }
+
+      case "cancelar_transacao":
+      case "apagar_transacao": {
+        const { data: ultimasTransacoes } = await supabase
+          .from("transacoes")
+          .select("id, valor, categoria, descricao, data")
+          .eq("usuario_id", usuarioId)
+          .order("created_at", { ascending: false })
+          .limit(5);
+        
+        if (!ultimasTransacoes || ultimasTransacoes.length === 0) {
+          acaoRealizada = "Você não tem transações recentes para apagar.";
+          break;
+        }
+        
+        const listaOpcoes = ultimasTransacoes.map((t, i) => {
+          const data = new Date(t.data).toLocaleDateString("pt-BR");
+          const desc = t.descricao || t.categoria;
+          return `${i + 1}. R$ ${Number(t.valor).toFixed(2)} - ${desc} (${data})`;
+        }).join("\n");
+        
+        if (intent.transacao_alvo) {
+          const alvo = intent.transacao_alvo.toLowerCase();
+          const transacaoEncontrada = ultimasTransacoes.find(t => 
+            (t.descricao?.toLowerCase().includes(alvo)) ||
+            (t.categoria?.toLowerCase().includes(alvo))
+          );
+          
+          if (transacaoEncontrada) {
+            const { error } = await supabase
               .from("transacoes")
-              .select("id, valor, categoria, descricao, data")
-              .eq("usuario_id", usuarioId)
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .single();
+              .delete()
+              .eq("id", transacaoEncontrada.id);
             
-            if (!ultimaTransacao) {
-              acaoRealizada = "Você não tem transações recentes para corrigir.";
-              break;
+            if (!error) {
+              acaoRealizada = `✅ Transação apagada!\n\n` +
+                `❌ R$ ${Number(transacaoEncontrada.valor).toFixed(2)} - ${transacaoEncontrada.descricao || transacaoEncontrada.categoria}`;
             }
-            
-            const data = new Date(ultimaTransacao.data).toLocaleDateString("pt-BR");
-            contextoDados = `📝 *Última transação registrada:*\n\n` +
-              `💰 R$ ${Number(ultimaTransacao.valor).toFixed(2)}\n` +
-              `📂 Categoria: ${ultimaTransacao.categoria}\n` +
-              `📝 Descrição: ${ultimaTransacao.descricao || "sem descrição"}\n` +
-              `📅 Data: ${data}\n\n` +
-              `O que você quer corrigir? Me fala o valor certo, a categoria certa, ou "apaga" pra deletar.`;
-            break;
-          }
-
-          case "saudacao":
-          case "ajuda":
-          case "outro":
-          default: {
-            // Para saudações e ajuda, busca análise consultiva se disponível
-            const analise = await getAnaliseConsultiva(usuarioId);
-            const resumo = await getResumoMes(usuarioId);
-            
-            let alertaConsultivo = "";
-            if (analise && analise.gerar_alerta && analise.alertas?.length > 0) {
-              const alerta = analise.alertas[0];
-              alertaConsultivo = `\n\n💡 Insight: ${alerta.mensagem}`;
-              
-              // Salva que enviou alerta consultivo
-              await supabase.from("historico_conversas").insert({
-                phone_number: phoneNumber,
-                user_id: usuarioId,
-                user_message: "[ANÁLISE CONSULTIVA]",
-                ai_response: alerta.mensagem,
-                tipo: "alerta_consultivo"
-              });
-            }
-            
-            contextoDados = `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, ` +
-              `Saídas R$ ${resumo.totalSaidas.toFixed(2)}, Saldo R$ ${resumo.saldo.toFixed(2)}` +
-              alertaConsultivo;
             break;
           }
         }
+        
+        contextoDados = `🗑️ *Qual transação você quer apagar?*\n\n${listaOpcoes}\n\n` +
+          `Responde com o número ou me descreve melhor.`;
+        break;
+      }
+
+      case "saudacao":
+      case "ajuda":
+      case "outro":
+      default: {
+        const resumo = await getResumoMes(usuarioId);
+        contextoDados = `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, ` +
+          `Saídas R$ ${resumo.totalSaidas.toFixed(2)}, Saldo R$ ${resumo.saldo.toFixed(2)}`;
+        break;
       }
     }
 
@@ -3194,7 +1835,7 @@ serve(async (req) => {
       tipo: intent.intent
     });
 
-    // Envia resposta via WhatsApp
+    // Envia resposta
     await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
 
     return new Response(
