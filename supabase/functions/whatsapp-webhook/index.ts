@@ -65,6 +65,19 @@ interface ExtractedIntent {
   
   // Para cancelamentos/correções
   transacao_alvo?: string; // descrição da transação a ser alterada
+  
+  // Para confirmação pendente (áudio/foto)
+  aguardando_confirmacao?: boolean;
+}
+
+// Interface para fluxo de confirmação de mídia
+interface FluxoConfirmacaoMidia {
+  tipo: "audio" | "imagem";
+  dados_extraidos: Partial<ExtractedIntent>;
+  dados_faltantes: string[];
+  mensagem_original?: string;
+  imagem_tipo?: "comprovante" | "fatura" | "extrato" | "outro";
+  created_at: string;
 }
 
 // Interface ATUALIZADA para fluxo ativo com ultima_pergunta
@@ -158,6 +171,294 @@ async function limparFluxoAtivo(phoneNumber: string): Promise<void> {
     .like("tipo", "fluxo_ativo_%");
     
   console.log("🧹 Fluxo ativo limpo para:", phoneNumber);
+}
+
+// ========== PROCESSAMENTO DE ÁUDIO ==========
+
+// Baixa arquivo de mídia do WhatsApp
+async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
+  try {
+    console.log(`🎵 Baixando mídia ${mediaId}...`);
+    
+    // 1. Obtém URL do arquivo
+    const urlResponse = await fetch(
+      `https://graph.facebook.com/v18.0/${mediaId}`,
+      {
+        headers: {
+          "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+        },
+      }
+    );
+    
+    if (!urlResponse.ok) {
+      console.error("Erro ao obter URL da mídia:", await urlResponse.text());
+      return null;
+    }
+    
+    const urlData = await urlResponse.json();
+    const mediaUrl = urlData.url;
+    
+    // 2. Baixa o arquivo
+    const mediaResponse = await fetch(mediaUrl, {
+      headers: {
+        "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+      },
+    });
+    
+    if (!mediaResponse.ok) {
+      console.error("Erro ao baixar mídia:", await mediaResponse.text());
+      return null;
+    }
+    
+    // 3. Converte para base64
+    const arrayBuffer = await mediaResponse.arrayBuffer();
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    
+    console.log(`✅ Mídia baixada: ${base64.length} chars`);
+    return base64;
+  } catch (error) {
+    console.error("Erro ao baixar mídia:", error);
+    return null;
+  }
+}
+
+// Transcreve áudio usando Lovable AI (Gemini com suporte a áudio)
+async function transcreverAudio(audioBase64: string, mimeType: string): Promise<string | null> {
+  try {
+    console.log("🎤 Transcrevendo áudio via Lovable AI...");
+    
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Transcreva este áudio para texto em português. Retorne APENAS a transcrição, sem explicações adicionais."
+              },
+              {
+                type: "audio",
+                audio: {
+                  data: audioBase64,
+                  mime_type: mimeType || "audio/ogg"
+                }
+              }
+            ]
+          }
+        ]
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("Erro na transcrição:", await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    const transcricao = data.choices?.[0]?.message?.content?.trim();
+    
+    console.log(`📝 Transcrição: "${transcricao}"`);
+    return transcricao;
+  } catch (error) {
+    console.error("Erro ao transcrever áudio:", error);
+    return null;
+  }
+}
+
+// ========== PROCESSAMENTO DE IMAGEM / OCR ==========
+
+// Analisa imagem e extrai informações financeiras via OCR
+interface AnaliseImagem {
+  tipo: "comprovante" | "fatura" | "extrato" | "outro";
+  valor?: number;
+  descricao?: string;
+  forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
+  data?: string;
+  estabelecimento?: string;
+  itens?: { descricao: string; valor: number }[];
+  confianca: number;
+}
+
+async function analisarImagem(imageBase64: string, mimeType: string): Promise<AnaliseImagem | null> {
+  try {
+    console.log("📷 Analisando imagem via Lovable AI Vision...");
+    
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Analise esta imagem e extraia informações financeiras.
+
+IDENTIFIQUE O TIPO:
+- "comprovante": Comprovante de pagamento (PIX, cartão, boleto, recibo)
+- "fatura": Print de fatura de cartão de crédito
+- "extrato": Print de extrato bancário
+- "outro": Imagem não relacionada a finanças
+
+EXTRAIA (se visível):
+- valor: Valor numérico principal (ex: 87.90)
+- descricao: O que foi comprado ou descrição do pagamento
+- forma_pagamento: "pix", "dinheiro", "debito" ou "credito"
+- data: Data do pagamento se visível (formato YYYY-MM-DD)
+- estabelecimento: Nome do estabelecimento se visível
+- itens: Lista de itens se for nota fiscal/cupom
+
+REGRAS:
+- Se não conseguir identificar algo, deixe null
+- O valor mais importante é o TOTAL
+- Priorize identificar o valor mesmo que outros dados não estejam claros
+
+Responda APENAS com JSON válido:
+{
+  "tipo": "comprovante" | "fatura" | "extrato" | "outro",
+  "valor": number ou null,
+  "descricao": "string" ou null,
+  "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null,
+  "data": "YYYY-MM-DD" ou null,
+  "estabelecimento": "string" ou null,
+  "itens": [{"descricao": "string", "valor": number}] ou null,
+  "confianca": 0.0 a 1.0
+}`
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:${mimeType || "image/jpeg"};base64,${imageBase64}`
+                }
+              }
+            ]
+          }
+        ]
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("Erro na análise de imagem:", await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '{"tipo": "outro", "confianca": 0}';
+    
+    // Limpa markdown do JSON
+    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    console.log("📷 Análise da imagem:", cleanJson);
+    
+    return JSON.parse(cleanJson) as AnaliseImagem;
+  } catch (error) {
+    console.error("Erro ao analisar imagem:", error);
+    return null;
+  }
+}
+
+// ========== FLUXO DE CONFIRMAÇÃO DE MÍDIA ==========
+
+// Salva fluxo de confirmação pendente
+async function salvarFluxoConfirmacaoMidia(
+  phoneNumber: string,
+  userId: string,
+  tipo: "audio" | "imagem",
+  dadosExtraidos: Partial<ExtractedIntent>,
+  dadosFaltantes: string[],
+  imagemTipo?: "comprovante" | "fatura" | "extrato" | "outro"
+): Promise<void> {
+  const fluxo: FluxoConfirmacaoMidia = {
+    tipo,
+    dados_extraidos: dadosExtraidos,
+    dados_faltantes: dadosFaltantes,
+    imagem_tipo: imagemTipo,
+    created_at: new Date().toISOString()
+  };
+
+  await supabase.from("historico_conversas").insert({
+    phone_number: phoneNumber,
+    user_id: userId,
+    user_message: `[${tipo.toUpperCase()} RECEBIDO]`,
+    ai_response: "[AGUARDANDO CONFIRMAÇÃO]",
+    tipo: `fluxo_confirmacao_${tipo}`,
+    resumo: JSON.stringify(fluxo)
+  });
+
+  console.log(`💾 Fluxo de confirmação ${tipo} salvo`);
+}
+
+// Busca fluxo de confirmação pendente
+async function getFluxoConfirmacaoMidia(phoneNumber: string): Promise<FluxoConfirmacaoMidia | null> {
+  try {
+    const { data } = await supabase
+      .from("historico_conversas")
+      .select("resumo, created_at")
+      .eq("phone_number", phoneNumber)
+      .like("tipo", "fluxo_confirmacao_%")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!data || !data.resumo) return null;
+
+    // Verifica se não é muito antigo (máximo 15 minutos)
+    const createdAt = new Date(data.created_at);
+    const agora = new Date();
+    const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
+    
+    if (diffMinutos > 15) return null;
+
+    return JSON.parse(data.resumo) as FluxoConfirmacaoMidia;
+  } catch {
+    return null;
+  }
+}
+
+// Limpa fluxo de confirmação
+async function limparFluxoConfirmacaoMidia(phoneNumber: string): Promise<void> {
+  await supabase
+    .from("historico_conversas")
+    .update({ tipo: "confirmacao_concluida" })
+    .eq("phone_number", phoneNumber)
+    .like("tipo", "fluxo_confirmacao_%");
+    
+  console.log("🧹 Fluxo de confirmação limpo");
+}
+
+// Processa confirmação do usuário
+function detectarConfirmacao(mensagem: string): "sim" | "nao" | "correcao" | null {
+  const msg = mensagem.toLowerCase().trim();
+  
+  // Confirmações positivas
+  if (/^(sim|s|ok|pode|confirma|isso|certo|exato|tá|ta|blz|beleza|isso mesmo|pode salvar|salva|registra)$/i.test(msg)) {
+    return "sim";
+  }
+  
+  // Negações
+  if (/^(não|nao|n|cancela|para|desiste|deixa|errado|não é isso)$/i.test(msg)) {
+    return "nao";
+  }
+  
+  // Provavelmente uma correção
+  if (msg.includes("era") || msg.includes("foi") || msg.includes("valor") || 
+      msg.includes("categoria") || msg.includes("cartão") || msg.includes("débito") ||
+      msg.includes("crédito") || msg.includes("pix")) {
+    return "correcao";
+  }
+  
+  return null;
 }
 
 // ========== NOVA FUNÇÃO: IA COMO ORQUESTRADORA COGNITIVA ==========
@@ -1353,9 +1654,12 @@ serve(async (req) => {
     const json = await req.json();
     console.log("Webhook payload:", JSON.stringify(json));
 
-    let phoneNumber: string;
-    let messageText: string;
-    let messageSource: MessageSource;
+    let phoneNumber: string = "";
+    let messageText: string = "";
+    let messageSource: MessageSource = "meta";
+    let messageType: "text" | "audio" | "image" = "text";
+    let mediaId: string | null = null;
+    let mediaMimeType: string = "";
 
     // ========== DETECTAR ORIGEM: VONAGE ou META ==========
     
@@ -1389,9 +1693,22 @@ serve(async (req) => {
 
       const message = value.messages[0];
       phoneNumber = message.from;
-      messageText = message.text?.body || "";
       
-      if (message.type !== "text" || !messageText) {
+      // ========== DETECTAR TIPO DE MENSAGEM (TEXTO, ÁUDIO, IMAGEM) ==========
+      if (message.type === "text") {
+        messageType = "text";
+        messageText = message.text?.body || "";
+      } else if (message.type === "audio") {
+        messageType = "audio";
+        mediaId = message.audio?.id || null;
+        mediaMimeType = message.audio?.mime_type || "audio/ogg";
+        console.log(`🎵 Áudio recebido: ${mediaId} (${mediaMimeType})`);
+      } else if (message.type === "image") {
+        messageType = "image";
+        mediaId = message.image?.id || null;
+        mediaMimeType = message.image?.mime_type || "image/jpeg";
+        console.log(`📷 Imagem recebida: ${mediaId} (${mediaMimeType})`);
+      } else {
         console.log(`Ignorando mensagem Meta do tipo: ${message.type}`);
         return new Response(JSON.stringify({ status: "ok" }), {
           status: 200,
@@ -1407,9 +1724,9 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[${messageSource.toUpperCase()}] Mensagem de ${phoneNumber}: ${messageText}`);
+    console.log(`[${messageSource.toUpperCase()}] Tipo: ${messageType} | De: ${phoneNumber}`);
 
-    if (!phoneNumber || !messageText) {
+    if (!phoneNumber) {
       return new Response(JSON.stringify({ status: "ok" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1500,6 +1817,334 @@ serve(async (req) => {
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // ========== PROCESSAMENTO DE ÁUDIO ==========
+    if (messageType === "audio" && mediaId) {
+      console.log("🎵 Processando mensagem de áudio...");
+      
+      // 1. Baixa o áudio
+      const audioBase64 = await downloadWhatsAppMedia(mediaId);
+      
+      if (!audioBase64) {
+        await sendWhatsAppMessage(phoneNumber, 
+          "Não consegui baixar o áudio 😕\nPode tentar enviar de novo?", 
+          messageSource
+        );
+        return new Response(
+          JSON.stringify({ status: "ok", error: "audio_download_failed" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // 2. Transcreve o áudio
+      const transcricao = await transcreverAudio(audioBase64, mediaMimeType);
+      
+      if (!transcricao) {
+        await sendWhatsAppMessage(phoneNumber, 
+          "Não consegui entender o áudio 😕\nPode tentar falar mais devagar ou escrever?", 
+          messageSource
+        );
+        return new Response(
+          JSON.stringify({ status: "ok", error: "transcription_failed" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // Usa a transcrição como texto da mensagem
+      messageText = transcricao;
+      console.log(`📝 Áudio transcrito: "${messageText}"`);
+      
+      // Registra no histórico
+      await supabase.from("historico_conversas").insert({
+        phone_number: phoneNumber,
+        user_id: usuarioId,
+        user_message: `[ÁUDIO] ${transcricao}`,
+        ai_response: "[PROCESSANDO ÁUDIO]",
+        tipo: "audio_recebido"
+      });
+    }
+
+    // ========== PROCESSAMENTO DE IMAGEM ==========
+    if (messageType === "image" && mediaId) {
+      console.log("📷 Processando mensagem de imagem...");
+      
+      // 1. Baixa a imagem
+      const imageBase64 = await downloadWhatsAppMedia(mediaId);
+      
+      if (!imageBase64) {
+        await sendWhatsAppMessage(phoneNumber, 
+          "Não consegui baixar a imagem 😕\nPode tentar enviar de novo?", 
+          messageSource
+        );
+        return new Response(
+          JSON.stringify({ status: "ok", error: "image_download_failed" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // 2. Analisa a imagem (OCR)
+      const analise = await analisarImagem(imageBase64, mediaMimeType);
+      
+      if (!analise || analise.tipo === "outro") {
+        await sendWhatsAppMessage(phoneNumber, 
+          "Não consegui identificar informações financeiras nessa imagem 🤔\n\n" +
+          "Pode me contar o que era? Por exemplo:\n" +
+          "_\"Gastei 50 no mercado\"_", 
+          messageSource
+        );
+        return new Response(
+          JSON.stringify({ status: "ok", image_type: "outro" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      console.log(`📷 Imagem analisada: ${analise.tipo}, valor: ${analise.valor}`);
+      
+      // 3. Processa de acordo com o tipo
+      if (analise.tipo === "comprovante") {
+        // Comprovante de pagamento - pede confirmação
+        if (analise.valor) {
+          const dadosExtraidos: Partial<ExtractedIntent> = {
+            intent: "registrar_gasto",
+            valor: analise.valor,
+            descricao: analise.descricao || analise.estabelecimento,
+            categoria: analise.descricao?.toLowerCase().includes("mercado") ? "alimentação" : "outros",
+            forma_pagamento: analise.forma_pagamento
+          };
+          
+          // Verifica o que está faltando
+          const dadosFaltantes: string[] = [];
+          if (!dadosExtraidos.descricao) dadosFaltantes.push("descricao");
+          if (!dadosExtraidos.forma_pagamento) dadosFaltantes.push("forma_pagamento");
+          
+          // Salva fluxo de confirmação
+          await salvarFluxoConfirmacaoMidia(
+            phoneNumber, usuarioId, "imagem", 
+            dadosExtraidos, dadosFaltantes, "comprovante"
+          );
+          
+          // Monta mensagem de confirmação
+          let msgConfirmacao = `Vi aqui um pagamento de *R$ ${analise.valor.toFixed(2)}* 💸`;
+          
+          if (analise.estabelecimento) {
+            msgConfirmacao += `\n📍 ${analise.estabelecimento}`;
+          }
+          
+          if (dadosFaltantes.includes("descricao")) {
+            msgConfirmacao += "\n\n👉 Me conta rapidinho: o que você comprou?";
+          } else if (dadosFaltantes.includes("forma_pagamento")) {
+            msgConfirmacao += "\n\nE foi pago como?\n1️⃣ Pix\n2️⃣ Dinheiro\n3️⃣ Débito\n4️⃣ Crédito";
+          } else {
+            // Tem todos os dados - pede confirmação final
+            msgConfirmacao += `\n\n📝 ${dadosExtraidos.descricao}`;
+            if (dadosExtraidos.forma_pagamento) {
+              msgConfirmacao += `\n💳 ${dadosExtraidos.forma_pagamento.toUpperCase()}`;
+            }
+            msgConfirmacao += "\n\nPosso registrar assim?";
+          }
+          
+          await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
+          
+          return new Response(
+            JSON.stringify({ status: "ok", image_processed: true, type: "comprovante" }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        } else {
+          await sendWhatsAppMessage(phoneNumber, 
+            "Recebi a imagem mas não consegui identificar o valor 🤔\n\n" +
+            "Pode me dizer quanto foi?", 
+            messageSource
+          );
+          
+          await salvarFluxoConfirmacaoMidia(
+            phoneNumber, usuarioId, "imagem", 
+            { intent: "registrar_gasto" }, ["valor", "descricao"], "comprovante"
+          );
+          
+          return new Response(
+            JSON.stringify({ status: "ok", image_processed: true, needs_value: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      } else if (analise.tipo === "fatura") {
+        // Print de fatura - oferece ajuda para organizar
+        await sendWhatsAppMessage(phoneNumber, 
+          "Percebi que isso é um print da fatura do cartão 📄\n\n" +
+          "Quer que eu te ajude a organizar esses gastos aqui no Finax?\n\n" +
+          "Responde *sim* se quiser começar, ou me manda os gastos que quer registrar.", 
+          messageSource
+        );
+        
+        await salvarFluxoConfirmacaoMidia(
+          phoneNumber, usuarioId, "imagem", 
+          {}, [], "fatura"
+        );
+        
+        return new Response(
+          JSON.stringify({ status: "ok", image_processed: true, type: "fatura" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      } else if (analise.tipo === "extrato") {
+        // Print de extrato
+        await sendWhatsAppMessage(phoneNumber, 
+          "Recebi um print do extrato 📊\n\n" +
+          "Me diz: qual transação desse extrato você quer registrar?", 
+          messageSource
+        );
+        
+        return new Response(
+          JSON.stringify({ status: "ok", image_processed: true, type: "extrato" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // ========== VERIFICAR FLUXO DE CONFIRMAÇÃO PENDENTE (ÁUDIO/FOTO) ==========
+    const fluxoConfirmacao = await getFluxoConfirmacaoMidia(phoneNumber);
+    
+    if (fluxoConfirmacao && messageType === "text") {
+      console.log("📋 Fluxo de confirmação de mídia ativo:", fluxoConfirmacao.tipo);
+      
+      const confirmacao = detectarConfirmacao(messageText);
+      
+      if (confirmacao === "sim") {
+        // Usuário confirmou - registra a transação
+        const dados = fluxoConfirmacao.dados_extraidos;
+        
+        if (dados.valor && (dados.intent === "registrar_gasto" || !dados.intent)) {
+          const { error } = await supabase.from("transacoes").insert({
+            usuario_id: usuarioId,
+            valor: dados.valor,
+            categoria: dados.categoria || "outros",
+            tipo: "saida",
+            descricao: dados.descricao,
+            observacao: dados.descricao,
+            data: new Date().toISOString(),
+            origem: "whatsapp"
+          });
+          
+          if (!error) {
+            await limparFluxoConfirmacaoMidia(phoneNumber);
+            await sendWhatsAppMessage(phoneNumber, 
+              `✅ Registrado!\n\n` +
+              `💰 R$ ${dados.valor.toFixed(2)}\n` +
+              `📂 ${dados.categoria || "outros"}\n` +
+              `${dados.descricao ? `📝 ${dados.descricao}` : ""}\n\n` +
+              `Assim fica tudo organizado aqui e você não precisa lembrar depois 😉`, 
+              messageSource
+            );
+          } else {
+            await sendWhatsAppMessage(phoneNumber, 
+              "Ops, deu um erro ao salvar 😕 Pode tentar de novo?", 
+              messageSource
+            );
+          }
+          
+          return new Response(
+            JSON.stringify({ status: "ok", transaction_saved: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      } else if (confirmacao === "nao") {
+        // Usuário cancelou
+        await limparFluxoConfirmacaoMidia(phoneNumber);
+        await sendWhatsAppMessage(phoneNumber, 
+          "Ok, cancelei! 👍\n\nComo posso te ajudar?", 
+          messageSource
+        );
+        
+        return new Response(
+          JSON.stringify({ status: "ok", cancelled: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      } else {
+        // Usuário está corrigindo ou fornecendo dados faltantes
+        const dadosFaltantes = fluxoConfirmacao.dados_faltantes;
+        const dadosAtuais = { ...fluxoConfirmacao.dados_extraidos };
+        
+        // Tenta extrair dados da mensagem
+        if (dadosFaltantes.includes("descricao")) {
+          dadosAtuais.descricao = messageText;
+          const idx = dadosFaltantes.indexOf("descricao");
+          dadosFaltantes.splice(idx, 1);
+        } else if (dadosFaltantes.includes("valor")) {
+          const valorMatch = messageText.match(/(\d+(?:[.,]\d{2})?)/);
+          if (valorMatch) {
+            dadosAtuais.valor = parseFloat(valorMatch[1].replace(",", "."));
+            const idx = dadosFaltantes.indexOf("valor");
+            dadosFaltantes.splice(idx, 1);
+          }
+        } else if (dadosFaltantes.includes("forma_pagamento")) {
+          const msgLower = messageText.toLowerCase();
+          if (msgLower.includes("pix") || msgLower === "1") {
+            dadosAtuais.forma_pagamento = "pix";
+          } else if (msgLower.includes("dinheiro") || msgLower === "2") {
+            dadosAtuais.forma_pagamento = "dinheiro";
+          } else if (msgLower.includes("débito") || msgLower.includes("debito") || msgLower === "3") {
+            dadosAtuais.forma_pagamento = "debito";
+          } else if (msgLower.includes("crédito") || msgLower.includes("credito") || msgLower.includes("cartão") || msgLower === "4") {
+            dadosAtuais.forma_pagamento = "credito";
+          }
+          if (dadosAtuais.forma_pagamento) {
+            const idx = dadosFaltantes.indexOf("forma_pagamento");
+            dadosFaltantes.splice(idx, 1);
+          }
+        }
+        
+        // Verifica se ainda falta algo
+        if (dadosFaltantes.length > 0 || !dadosAtuais.valor) {
+          // Atualiza fluxo e pergunta próximo dado
+          await salvarFluxoConfirmacaoMidia(
+            phoneNumber, usuarioId, fluxoConfirmacao.tipo,
+            dadosAtuais, dadosFaltantes, fluxoConfirmacao.imagem_tipo
+          );
+          
+          if (dadosFaltantes.includes("valor")) {
+            await sendWhatsAppMessage(phoneNumber, "Qual foi o valor? 💰", messageSource);
+          } else if (dadosFaltantes.includes("descricao")) {
+            await sendWhatsAppMessage(phoneNumber, "O que você comprou?", messageSource);
+          } else if (dadosFaltantes.includes("forma_pagamento")) {
+            await sendWhatsAppMessage(phoneNumber, 
+              "E foi pago como?\n1️⃣ Pix\n2️⃣ Dinheiro\n3️⃣ Débito\n4️⃣ Crédito", 
+              messageSource
+            );
+          }
+          
+          return new Response(
+            JSON.stringify({ status: "ok", awaiting_data: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        // Tem todos os dados - pede confirmação final
+        await salvarFluxoConfirmacaoMidia(
+          phoneNumber, usuarioId, fluxoConfirmacao.tipo,
+          dadosAtuais, [], fluxoConfirmacao.imagem_tipo
+        );
+        
+        let msgFinal = `Vou registrar assim 👇\n\n`;
+        msgFinal += `💰 R$ ${dadosAtuais.valor?.toFixed(2)}\n`;
+        if (dadosAtuais.descricao) msgFinal += `📝 ${dadosAtuais.descricao}\n`;
+        if (dadosAtuais.forma_pagamento) msgFinal += `💳 ${dadosAtuais.forma_pagamento.toUpperCase()}\n`;
+        msgFinal += `\nPosso salvar?`;
+        
+        await sendWhatsAppMessage(phoneNumber, msgFinal, messageSource);
+        
+        return new Response(
+          JSON.stringify({ status: "ok", awaiting_confirmation: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // Se não tem messageText ainda (áudio/imagem foi processado), sai
+    if (!messageText && messageType !== "text") {
+      return new Response(
+        JSON.stringify({ status: "ok" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // 2. Busca histórico recente para contexto
     const historicoRecente = await getHistoricoRecente(phoneNumber);
 
