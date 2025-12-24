@@ -402,6 +402,36 @@ export type Database = {
         }
         Relationships: []
       }
+      messages_outbox: {
+        Row: {
+          created_at: string | null
+          id: string
+          message: string
+          phone: string
+          processed_at: string | null
+          status: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          message: string
+          phone: string
+          processed_at?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          message?: string
+          phone?: string
+          processed_at?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       parcelamentos: {
         Row: {
           ativa: boolean | null
