@@ -28,16 +28,24 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 type MessageSource = "meta" | "vonage";
 
 // ============================================================================
-// 🎯 ARQUITETURA FINAX: 5 CAMADAS
+// 🧠 MÁQUINA DE ESTADOS DO FINAX
 // ============================================================================
-// 1. PERCEPÇÃO: Transcrição de áudio, OCR de imagem (sem interpretação)
-// 2. INTERPRETAÇÃO: IA analisa e gera hipótese (tipo, valor, descrição)
-// 3. HIPÓTESE: Sistema cria proposta de registro
-// 4. VALIDAÇÃO: Usuário confirma ou corrige (OBRIGATÓRIO)
-// 5. EXECUÇÃO: Só após confirmação explícita
+// 
+// TODO USUÁRIO TEM UM ESTADO GLOBAL:
+// - modo: "onboarding" | "operacional"
+// - etapa_onboarding: null | "bancos" | "cartoes" | "dividas" | "gastos_fixos" | "finalizado"
+//
+// REGRA FUNDAMENTAL: O ESTADO SEMPRE TEM PRIORIDADE SOBRE INTENTS
+// 
 // ============================================================================
 
-// Interface para hipótese pendente (entre interpretação e execução)
+// Estado do usuário
+interface EstadoUsuario {
+  modo: "onboarding" | "operacional";
+  etapa_onboarding: "bancos" | "cartoes" | "dividas" | "gastos_fixos" | "finalizado" | null;
+}
+
+// Interface para hipótese pendente
 interface HipotesePendente {
   origem: "audio" | "imagem" | "texto";
   tipo_operacao: "gasto" | "entrada" | "parcelamento" | "recorrente";
@@ -48,13 +56,23 @@ interface HipotesePendente {
   confianca: number;
   dados_faltantes: string[];
   mensagem_original?: string;
-  // Para imagens com múltiplos itens
   multiplos_itens?: { descricao: string; valor: number }[];
   modo_registro?: "unico" | "separado";
   created_at: string;
 }
 
-// Tipos de intent que a IA pode detectar
+// Interface para dados brutos de imagem
+interface DadosImagemBrutos {
+  tipo: "comprovante" | "fatura" | "extrato" | "outro";
+  valor?: number;
+  descricao?: string;
+  forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
+  estabelecimento?: string;
+  itens?: { descricao: string; valor: number }[];
+  confianca: number;
+}
+
+// Tipos de intent
 interface ExtractedIntent {
   intent: 
     | "registrar_gasto" 
@@ -86,29 +104,272 @@ interface ExtractedIntent {
   transacao_alvo?: string;
 }
 
-// Interface para fluxo ativo
-interface FluxoAtivo {
-  intent: string;
-  dados_coletados: Partial<ExtractedIntent>;
-  dados_faltantes: string[];
-  ultima_pergunta: string;
-  created_at: string;
+// ============================================================================
+// 🎯 FUNÇÕES DE ESTADO (PRIORIDADE MÁXIMA)
+// ============================================================================
+
+// Busca estado completo do usuário
+async function getEstadoUsuario(usuarioId: string): Promise<EstadoUsuario> {
+  const { data } = await supabase
+    .from("usuarios")
+    .select("onboarding_status, onboarding_step")
+    .eq("id", usuarioId)
+    .single();
+  
+  // Se está em onboarding (status = "iniciado" e step não é "finalizado")
+  if (data?.onboarding_status === "iniciado" && data?.onboarding_step !== "finalizado") {
+    return {
+      modo: "onboarding",
+      etapa_onboarding: data.onboarding_step || "bancos"
+    };
+  }
+  
+  // Usuário operacional
+  return {
+    modo: "operacional",
+    etapa_onboarding: null
+  };
 }
 
-// Interface para resposta da IA cognitiva
-interface InterpretacaoIA {
-  campo?: string;
-  valor?: any;
-  confianca: number;
-  intencao: "continuar_fluxo" | "cancelar" | "novo_comando" | "indefinida";
-  mensagem_clarificacao?: string;
+// Atualiza etapa do onboarding
+async function setOnboardingStep(
+  usuarioId: string, 
+  step: "bancos" | "cartoes" | "dividas" | "gastos_fixos" | "finalizado"
+): Promise<void> {
+  const updates: Record<string, string> = { onboarding_step: step };
+  
+  if (step === "finalizado") {
+    updates.onboarding_status = "concluido";
+  }
+  
+  await supabase
+    .from("usuarios")
+    .update(updates)
+    .eq("id", usuarioId);
+  
+  console.log(`📋 Onboarding step atualizado para: ${step}`);
+}
+
+// Inicia onboarding
+async function iniciarOnboarding(usuarioId: string): Promise<void> {
+  await supabase
+    .from("usuarios")
+    .update({ 
+      onboarding_status: "iniciado",
+      onboarding_step: "bancos"
+    })
+    .eq("id", usuarioId);
+  
+  console.log(`🚀 Onboarding iniciado para: ${usuarioId}`);
 }
 
 // ============================================================================
-// 🧠 CAMADA 1: PERCEPÇÃO (SEM INTELIGÊNCIA)
+// 🧠 PROCESSADOR DE ONBOARDING (MÁQUINA DE ESTADOS)
 // ============================================================================
 
-// Baixa arquivo de mídia do WhatsApp
+interface OnboardingResult {
+  mensagem: string;
+  proxima_etapa: "bancos" | "cartoes" | "dividas" | "gastos_fixos" | "finalizado";
+  dados_salvos?: any;
+}
+
+async function processarEtapaOnboarding(
+  etapaAtual: string,
+  mensagemUsuario: string,
+  usuarioId: string
+): Promise<OnboardingResult> {
+  console.log(`🔄 [ONBOARDING] Processando etapa: ${etapaAtual}`);
+  console.log(`💬 [ONBOARDING] Mensagem: ${mensagemUsuario}`);
+  
+  switch (etapaAtual) {
+    case "bancos": {
+      // Extrai bancos/instituições da mensagem
+      const bancos = await extrairDadosOnboarding(mensagemUsuario, "bancos");
+      console.log(`🏦 [ONBOARDING] Bancos extraídos:`, bancos);
+      
+      // Salva cartões/bancos no banco de dados
+      if (bancos.items && bancos.items.length > 0) {
+        for (const banco of bancos.items) {
+          await supabase.from("cartoes_credito").insert({
+            usuario_id: usuarioId,
+            nome: banco,
+            ativo: true
+          });
+        }
+      }
+      
+      const qtdBancos = bancos.items?.length || 0;
+      const msgConfirmacao = qtdBancos > 0 
+        ? `Ótimo! Adicionei ${qtdBancos} instituição(ões) 🏦\n\n`
+        : `Entendi!\n\n`;
+      
+      return {
+        mensagem: msgConfirmacao + `Você usa cartões de crédito? Se sim, de quais bancos?`,
+        proxima_etapa: "cartoes",
+        dados_salvos: bancos.items
+      };
+    }
+    
+    case "cartoes": {
+      const cartoes = await extrairDadosOnboarding(mensagemUsuario, "cartoes");
+      console.log(`💳 [ONBOARDING] Cartões extraídos:`, cartoes);
+      
+      // Salva cartões de crédito
+      if (cartoes.items && cartoes.items.length > 0) {
+        for (const cartao of cartoes.items) {
+          await supabase.from("cartoes_credito").insert({
+            usuario_id: usuarioId,
+            nome: cartao + " Crédito",
+            ativo: true
+          });
+        }
+      }
+      
+      const temCartoes = cartoes.items && cartoes.items.length > 0;
+      const msgConfirmacao = temCartoes
+        ? `Anotei ${cartoes.items.length} cartão(ões) de crédito 💳\n\n`
+        : `Sem cartões de crédito, entendido!\n\n`;
+      
+      return {
+        mensagem: msgConfirmacao + `Hoje você tem alguma dívida ou parcelamento ativo?`,
+        proxima_etapa: "dividas",
+        dados_salvos: cartoes.items
+      };
+    }
+    
+    case "dividas": {
+      const dividas = await extrairDadosOnboarding(mensagemUsuario, "dividas");
+      console.log(`💸 [ONBOARDING] Dívidas extraídas:`, dividas);
+      
+      // Salva parcelamentos
+      if (dividas.parcelamentos && dividas.parcelamentos.length > 0) {
+        for (const parc of dividas.parcelamentos) {
+          await supabase.from("parcelamentos").insert({
+            usuario_id: usuarioId,
+            descricao: parc.descricao,
+            valor_total: parc.valor_total || 0,
+            num_parcelas: parc.num_parcelas || 1,
+            parcela_atual: 1,
+            ativa: true
+          });
+        }
+      }
+      
+      const temDividas = dividas.parcelamentos && dividas.parcelamentos.length > 0;
+      const msgConfirmacao = temDividas
+        ? `Registrei ${dividas.parcelamentos.length} parcelamento(s) 📝\n\n`
+        : `Sem dívidas ativas, ótimo!\n\n`;
+      
+      return {
+        mensagem: msgConfirmacao + `Quais gastos fixos você já tem todo mês?\n\n_(aluguel, internet, academia, streaming, etc)_`,
+        proxima_etapa: "gastos_fixos",
+        dados_salvos: dividas.parcelamentos
+      };
+    }
+    
+    case "gastos_fixos": {
+      const gastos = await extrairDadosOnboarding(mensagemUsuario, "gastos_fixos");
+      console.log(`🔄 [ONBOARDING] Gastos fixos extraídos:`, gastos);
+      
+      // Salva gastos recorrentes
+      if (gastos.recorrentes && gastos.recorrentes.length > 0) {
+        for (const gasto of gastos.recorrentes) {
+          await supabase.from("gastos_recorrentes").insert({
+            usuario_id: usuarioId,
+            descricao: gasto.descricao,
+            categoria: gasto.categoria || "outros",
+            valor_parcela: gasto.valor || 0,
+            tipo_recorrencia: "mensal",
+            ativo: true
+          });
+        }
+      }
+      
+      const temGastos = gastos.recorrentes && gastos.recorrentes.length > 0;
+      const msgConfirmacao = temGastos
+        ? `Salvei ${gastos.recorrentes.length} gasto(s) fixo(s) 📌\n\n`
+        : `Sem gastos fixos por enquanto, tudo bem!\n\n`;
+      
+      return {
+        mensagem: msgConfirmacao + `Perfeito. Agora eu já consigo te ajudar de verdade no dia a dia 😊\n\nA partir de agora, pode me mandar gastos, dúvidas ou pedir análises.`,
+        proxima_etapa: "finalizado",
+        dados_salvos: gastos.recorrentes
+      };
+    }
+    
+    default:
+      return {
+        mensagem: "Algo deu errado no onboarding. Vamos recomeçar?\n\nQuais bancos ou cartões você usa hoje?",
+        proxima_etapa: "bancos"
+      };
+  }
+}
+
+// Extrai dados estruturados da mensagem de onboarding usando IA
+async function extrairDadosOnboarding(mensagem: string, tipo: string): Promise<any> {
+  try {
+    const prompts: Record<string, string> = {
+      bancos: `Extraia os nomes de bancos/instituições financeiras mencionados nesta mensagem.
+Exemplos: Nubank, Itaú, Bradesco, Santander, Caixa, BB, Inter, C6, PicPay, Mercado Pago, Sicredi, etc.
+Responda APENAS JSON: {"items": ["banco1", "banco2"]}
+Se não mencionar nenhum banco ou disser "não" ou "nenhum", retorne {"items": []}`,
+      
+      cartoes: `Extraia os cartões de crédito mencionados nesta mensagem.
+Se a pessoa disser que não tem cartão ou "não", retorne lista vazia.
+Responda APENAS JSON: {"items": ["cartao1", "cartao2"]}`,
+      
+      dividas: `Extraia dívidas/parcelamentos mencionados nesta mensagem.
+Se a pessoa disser que não tem dívidas ou "não", retorne lista vazia.
+Responda APENAS JSON: {"parcelamentos": [{"descricao": "nome", "valor_total": numero_ou_null, "num_parcelas": numero_ou_null}]}`,
+      
+      gastos_fixos: `Extraia gastos fixos mensais mencionados nesta mensagem.
+Exemplos: aluguel, internet, celular, academia, Netflix, Spotify, etc.
+Se a pessoa disser que não tem gastos fixos ou "não", retorne lista vazia.
+Responda APENAS JSON: {"recorrentes": [{"descricao": "nome", "categoria": "categoria", "valor": numero_ou_null}]}`
+    };
+    
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: prompts[tipo] || prompts.bancos },
+          { role: "user", content: mensagem }
+        ]
+      }),
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "{}";
+    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    
+    console.log(`🤖 [ONBOARDING] Extração ${tipo}:`, cleanJson);
+    return JSON.parse(cleanJson);
+  } catch (error) {
+    console.error(`❌ [ONBOARDING] Erro ao extrair ${tipo}:`, error);
+    return {};
+  }
+}
+
+// Mensagem inicial do onboarding
+function getMensagemInicialOnboarding(nome: string): string[] {
+  const primeiroNome = nome.split(" ")[0];
+  
+  return [
+    `Perfeito, ${primeiroNome}! 🎯\n\nSe a ideia é centralizar tudo aqui, eu consigo te ajudar a organizar cartões, bancos, gastos e recorrências em um só lugar.\n\nVou te guiar passo a passo — nada é registrado sem sua confirmação.`,
+    `💡 *Dica importante*\n\nFixa o Finax no WhatsApp pra não perder seus registros no dia a dia.\n\nAssim seu controle financeiro fica sempre a um toque. 📌`,
+    `Vamos começar? 🚀\n\nQuais bancos ou instituições você usa hoje?\n\nPode me contar naturalmente, tipo:\n_"Uso Nubank e Itaú"_ ou _"Tenho conta no Inter"_`
+  ];
+}
+
+// ============================================================================
+// 🎤 CAMADA 1: PERCEPÇÃO (SEM INTELIGÊNCIA)
+// ============================================================================
+
 async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
   try {
     console.log(`🎵 [PERCEPÇÃO] Baixando mídia ${mediaId}...`);
@@ -152,19 +413,16 @@ async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
   }
 }
 
-// Transcreve áudio via AssemblyAI (APENAS transcrição, sem interpretação)
 async function transcreverAudioPuro(audioBase64: string, mimeType: string): Promise<string | null> {
   try {
     console.log("🎤 [PERCEPÇÃO] Transcrevendo áudio via AssemblyAI...");
     
-    // Converter base64 para Uint8Array
     const binaryString = atob(audioBase64);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
     
-    // 1. Upload do áudio para AssemblyAI
     console.log("📤 [ASSEMBLYAI] Fazendo upload do áudio...");
     const uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
       method: "POST",
@@ -176,16 +434,13 @@ async function transcreverAudioPuro(audioBase64: string, mimeType: string): Prom
     });
     
     if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text();
-      console.error("❌ [ASSEMBLYAI] Erro no upload:", errorText);
+      console.error("❌ [ASSEMBLYAI] Erro no upload:", await uploadResponse.text());
       return null;
     }
     
     const uploadData = await uploadResponse.json();
     const uploadUrl = uploadData.upload_url;
-    console.log("✅ [ASSEMBLYAI] Upload concluído:", uploadUrl);
     
-    // 2. Solicitar transcrição
     console.log("📝 [ASSEMBLYAI] Solicitando transcrição...");
     const transcriptResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
       method: "POST",
@@ -201,32 +456,25 @@ async function transcreverAudioPuro(audioBase64: string, mimeType: string): Prom
     });
     
     if (!transcriptResponse.ok) {
-      const errorText = await transcriptResponse.text();
-      console.error("❌ [ASSEMBLYAI] Erro ao solicitar transcrição:", errorText);
+      console.error("❌ [ASSEMBLYAI] Erro ao solicitar transcrição:", await transcriptResponse.text());
       return null;
     }
     
     const transcriptData = await transcriptResponse.json();
     const transcriptId = transcriptData.id;
-    console.log("🆔 [ASSEMBLYAI] ID da transcrição:", transcriptId);
     
-    // 3. Polling para aguardar resultado
     let status = "queued";
     let transcricaoFinal: string | null = null;
     let tentativas = 0;
-    const maxTentativas = 30; // Máximo 30 segundos
     
-    while ((status === "queued" || status === "processing") && tentativas < maxTentativas) {
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Aguarda 1 segundo
+    while ((status === "queued" || status === "processing") && tentativas < 30) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
       
       const pollingResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
-        headers: {
-          "Authorization": ASSEMBLYAI_API_KEY!,
-        },
+        headers: { "Authorization": ASSEMBLYAI_API_KEY! },
       });
       
       if (!pollingResponse.ok) {
-        console.error("❌ [ASSEMBLYAI] Erro no polling:", await pollingResponse.text());
         tentativas++;
         continue;
       }
@@ -234,46 +482,27 @@ async function transcreverAudioPuro(audioBase64: string, mimeType: string): Prom
       const pollingData = await pollingResponse.json();
       status = pollingData.status;
       
-      console.log(`⏳ [ASSEMBLYAI] Status: ${status} (tentativa ${tentativas + 1})`);
-      
       if (status === "completed") {
         transcricaoFinal = pollingData.text;
         break;
       } else if (status === "error") {
-        console.error("❌ [ASSEMBLYAI] Erro na transcrição:", pollingData.error);
         return null;
       }
       
       tentativas++;
     }
     
-    if (!transcricaoFinal) {
-      console.error("❌ [ASSEMBLYAI] Timeout ou sem resultado");
-      return null;
-    }
-    
-    console.log(`✅ [PERCEPÇÃO] Transcrição AssemblyAI: "${transcricaoFinal}"`);
+    console.log(`✅ [PERCEPÇÃO] Transcrição: "${transcricaoFinal}"`);
     return transcricaoFinal;
   } catch (error) {
-    console.error("❌ [PERCEPÇÃO] Erro ao transcrever áudio:", error);
+    console.error("❌ [PERCEPÇÃO] Erro ao transcrever:", error);
     return null;
   }
 }
 
-// Extrai dados brutos de imagem (OCR puro)
-interface DadosImagemBrutos {
-  tipo: "comprovante" | "fatura" | "extrato" | "outro";
-  valor?: number;
-  descricao?: string;
-  forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
-  estabelecimento?: string;
-  itens?: { descricao: string; valor: number }[];
-  confianca: number;
-}
-
 async function extrairDadosImagemPuro(imageBase64: string, mimeType: string): Promise<DadosImagemBrutos | null> {
   try {
-    console.log("📷 [PERCEPÇÃO] Extraindo dados da imagem (OCR)...");
+    console.log("📷 [PERCEPÇÃO] Extraindo dados da imagem...");
     
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -322,16 +551,9 @@ Responda APENAS JSON:
       }),
     });
 
-    if (!response.ok) {
-      console.error("Erro na análise de imagem:", await response.text());
-      return null;
-    }
-
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '{"tipo": "outro", "confianca": 0}';
-    
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    console.log("📷 [PERCEPÇÃO] Dados extraídos:", cleanJson);
     
     return JSON.parse(cleanJson) as DadosImagemBrutos;
   } catch (error) {
@@ -341,95 +563,9 @@ Responda APENAS JSON:
 }
 
 // ============================================================================
-// 🧠 CAMADA 2: INTERPRETAÇÃO (IA ANALISA E CRIA HIPÓTESE)
+// 💡 HIPÓTESE E VALIDAÇÃO
 // ============================================================================
 
-interface InterpretacaoFinanceira {
-  eh_financeiro: boolean;
-  tipo_operacao?: "gasto" | "entrada" | "parcelamento" | "recorrente" | "consulta";
-  valor?: number;
-  descricao?: string;
-  categoria?: string;
-  forma_pagamento?: "pix" | "dinheiro" | "debito" | "credito";
-  confianca: number;
-  motivo?: string;
-}
-
-async function interpretarMensagem(mensagem: string): Promise<InterpretacaoFinanceira> {
-  try {
-    console.log("🧠 [INTERPRETAÇÃO] Analisando mensagem...");
-    
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content: `Você é um intérprete financeiro do Finax.
-Analise a mensagem e identifique se é sobre finanças pessoais.
-
-EXEMPLOS DE MENSAGENS FINANCEIRAS:
-- "gastei 50 no mercado" → gasto
-- "comprei açaí de 25 reais" → gasto
-- "recebi 1500 hoje" → entrada
-- "paguei 100 de luz" → gasto
-- "parcelei TV em 10x" → parcelamento
-
-NÚMEROS POR EXTENSO:
-- "vinte e cinco" = 25
-- "cem reais" = 100
-- "mil e quinhentos" = 1500
-
-CATEGORIAS: alimentação, transporte, lazer, moradia, saúde, educação, compras, tecnologia, assinaturas, salário, outros
-
-FORMAS DE PAGAMENTO:
-- "pix", "via pix" → pix
-- "dinheiro", "espécie" → dinheiro
-- "débito" → debito
-- "crédito", "cartão" → credito
-
-Se NÃO for sobre finanças (receita de comida, conversa aleatória, etc), marque eh_financeiro: false
-
-Responda APENAS JSON:
-{
-  "eh_financeiro": boolean,
-  "tipo_operacao": "gasto" | "entrada" | "parcelamento" | "recorrente" | "consulta" | null,
-  "valor": number ou null,
-  "descricao": "string" ou null,
-  "categoria": "string" ou null,
-  "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null,
-  "confianca": 0.0 a 1.0,
-  "motivo": "explicação breve" ou null
-}`
-          },
-          { role: "user", content: mensagem }
-        ]
-      }),
-    });
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '{"eh_financeiro": false, "confianca": 0}';
-    
-    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    console.log("🧠 [INTERPRETAÇÃO] Resultado:", cleanJson);
-    
-    return JSON.parse(cleanJson) as InterpretacaoFinanceira;
-  } catch (error) {
-    console.error("Erro ao interpretar mensagem:", error);
-    return { eh_financeiro: false, confianca: 0 };
-  }
-}
-
-// ============================================================================
-// 🎯 CAMADA 3: HIPÓTESE (SISTEMA CRIA PROPOSTA)
-// ============================================================================
-
-// Salva hipótese pendente de confirmação
 async function salvarHipotesePendente(
   phoneNumber: string,
   userId: string,
@@ -443,11 +579,8 @@ async function salvarHipotesePendente(
     tipo: "hipotese_pendente",
     resumo: JSON.stringify(hipotese)
   });
-
-  console.log(`💡 [HIPÓTESE] Salva para validação: ${JSON.stringify(hipotese)}`);
 }
 
-// Busca hipótese pendente
 async function getHipotesePendente(phoneNumber: string): Promise<HipotesePendente | null> {
   try {
     const { data } = await supabase
@@ -461,7 +594,6 @@ async function getHipotesePendente(phoneNumber: string): Promise<HipotesePendent
 
     if (!data || !data.resumo) return null;
 
-    // Verifica validade (máximo 15 minutos)
     const createdAt = new Date(data.created_at);
     const agora = new Date();
     const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
@@ -474,20 +606,13 @@ async function getHipotesePendente(phoneNumber: string): Promise<HipotesePendent
   }
 }
 
-// Limpa hipótese pendente (após confirmação, cancelamento ou novo comando)
 async function limparHipotesePendente(phoneNumber: string): Promise<void> {
   await supabase
     .from("historico_conversas")
     .update({ tipo: "hipotese_processada" })
     .eq("phone_number", phoneNumber)
     .eq("tipo", "hipotese_pendente");
-    
-  console.log("🧹 [HIPÓTESE] Limpa");
 }
-
-// ============================================================================
-// ✅ CAMADA 4: VALIDAÇÃO (DETECÇÃO DE RESPOSTA DO USUÁRIO)
-// ============================================================================
 
 interface RespostaValidacao {
   tipo: "confirmar" | "cancelar" | "corrigir" | "dados_novos" | "indefinido";
@@ -497,7 +622,6 @@ interface RespostaValidacao {
 function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente): RespostaValidacao {
   const msg = mensagem.toLowerCase().trim();
   
-  // 🚨 REGRA CRÍTICA: Cancelamentos SEMPRE limpam contexto
   const padroesCancel = [
     /^(não|nao|n)$/,
     /^cancela/,
@@ -514,11 +638,9 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
   ];
   
   if (padroesCancel.some(p => p.test(msg))) {
-    console.log("❌ [VALIDAÇÃO] Usuário CANCELOU - descartando hipótese");
     return { tipo: "cancelar" };
   }
   
-  // Confirmações positivas
   const padroesConfirm = [
     /^(sim|s|ok|pode|confirma|isso|certo|exato|t[áa]|blz|beleza)$/,
     /isso mesmo/,
@@ -531,15 +653,12 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
   ];
   
   if (padroesConfirm.some(p => p.test(msg))) {
-    console.log("✅ [VALIDAÇÃO] Usuário CONFIRMOU");
     return { tipo: "confirmar" };
   }
   
-  // Detecta correções
   const correcoes: Partial<HipotesePendente> = {};
   let temCorrecao = false;
   
-  // Correção de valor
   const valorMatch = msg.match(/(?:era|foi|valor[:]?\s*)?r?\$?\s*(\d+(?:[.,]\d{2})?)/);
   if (valorMatch && hipotese.valor) {
     const novoValor = parseFloat(valorMatch[1].replace(",", "."));
@@ -549,7 +668,6 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
     }
   }
   
-  // Correção de forma de pagamento
   if (msg.includes("pix") && hipotese.forma_pagamento !== "pix") {
     correcoes.forma_pagamento = "pix";
     temCorrecao = true;
@@ -564,7 +682,6 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
     temCorrecao = true;
   }
   
-  // Seleção de forma de pagamento por número
   if (hipotese.dados_faltantes?.includes("forma_pagamento")) {
     if (msg === "1") correcoes.forma_pagamento = "pix";
     else if (msg === "2") correcoes.forma_pagamento = "dinheiro";
@@ -574,13 +691,11 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
     if (correcoes.forma_pagamento) temCorrecao = true;
   }
   
-  // Se está fornecendo descrição faltante
   if (hipotese.dados_faltantes?.includes("descricao") && msg.length > 2 && !temCorrecao) {
     correcoes.descricao = mensagem.trim();
     temCorrecao = true;
   }
   
-  // Se está fornecendo valor faltante
   if (hipotese.dados_faltantes?.includes("valor")) {
     const valorPuro = msg.match(/(\d+(?:[.,]\d{2})?)/);
     if (valorPuro) {
@@ -589,7 +704,6 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
     }
   }
   
-  // Seleção de modo de registro para múltiplos itens
   if (hipotese.multiplos_itens && hipotese.multiplos_itens.length > 1) {
     if (msg === "1" || msg.includes("único") || msg.includes("unico") || msg.includes("junto")) {
       correcoes.modo_registro = "unico";
@@ -601,11 +715,9 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
   }
   
   if (temCorrecao) {
-    console.log("🔄 [VALIDAÇÃO] Correção/dados detectados:", JSON.stringify(correcoes));
     return { tipo: "corrigir", dados_corrigidos: correcoes };
   }
   
-  // Se a mensagem parece ser dados novos (descrição)
   if (msg.length > 3 && !msg.includes("?")) {
     return { tipo: "dados_novos", dados_corrigidos: { descricao: mensagem.trim() } };
   }
@@ -614,16 +726,13 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
 }
 
 // ============================================================================
-// 🚀 CAMADA 5: EXECUÇÃO (SOMENTE APÓS CONFIRMAÇÃO)
+// 🚀 EXECUÇÃO
 // ============================================================================
 
 async function executarRegistro(
   usuarioId: string,
   hipotese: HipotesePendente
 ): Promise<{ sucesso: boolean; mensagem: string }> {
-  console.log("🚀 [EXECUÇÃO] Registrando após confirmação...");
-  
-  // Múltiplos itens registrados separadamente
   if (hipotese.multiplos_itens && hipotese.modo_registro === "separado") {
     const transacoes = hipotese.multiplos_itens.map(item => ({
       usuario_id: usuarioId,
@@ -639,7 +748,6 @@ async function executarRegistro(
     const { error } = await supabase.from("transacoes").insert(transacoes);
     
     if (error) {
-      console.error("Erro ao registrar múltiplos:", error);
       return { sucesso: false, mensagem: "Erro ao salvar os registros 😕" };
     }
     
@@ -652,7 +760,6 @@ async function executarRegistro(
     };
   }
   
-  // Registro único
   const tipoTransacao = hipotese.tipo_operacao === "entrada" ? "entrada" : "saida";
   
   const { error } = await supabase.from("transacoes").insert({
@@ -667,7 +774,6 @@ async function executarRegistro(
   });
   
   if (error) {
-    console.error("Erro ao registrar:", error);
     return { sucesso: false, mensagem: "Erro ao salvar o registro 😕" };
   }
   
@@ -685,15 +791,9 @@ async function executarRegistro(
   };
 }
 
-// ============================================================================
-// 📨 FUNÇÕES DE MENSAGEM
-// ============================================================================
-
-// Monta mensagem de confirmação (SEMPRE antes de registrar)
 function montarMensagemConfirmacao(hipotese: HipotesePendente): string {
   let msg = "";
   
-  // Se tem múltiplos itens na imagem
   if (hipotese.multiplos_itens && hipotese.multiplos_itens.length > 1) {
     const total = hipotese.multiplos_itens.reduce((s, i) => s + i.valor, 0);
     msg = `📋 Identifiquei ${hipotese.multiplos_itens.length} itens nesse comprovante:\n\n`;
@@ -703,7 +803,6 @@ function montarMensagemConfirmacao(hipotese: HipotesePendente): string {
     return msg;
   }
   
-  // Se falta dados
   if (hipotese.dados_faltantes.length > 0) {
     if (hipotese.dados_faltantes.includes("descricao")) {
       if (hipotese.valor) {
@@ -730,7 +829,6 @@ function montarMensagemConfirmacao(hipotese: HipotesePendente): string {
     }
   }
   
-  // Tem todos os dados - pede confirmação final
   const tipoTexto = hipotese.tipo_operacao === "entrada" ? "Entrada" : "Gasto";
   const emoji = hipotese.tipo_operacao === "entrada" ? "📈" : "💸";
   
@@ -745,7 +843,6 @@ function montarMensagemConfirmacao(hipotese: HipotesePendente): string {
   return msg;
 }
 
-// Mensagem após cancelamento (empática, sem insistir)
 function mensagemPosCancelamento(): string {
   const respostas = [
     "Sem problemas! 👍 Já descartei.\n\nMe conta novamente como foi, ou faz outra coisa.",
@@ -757,13 +854,12 @@ function mensagemPosCancelamento(): string {
 }
 
 // ============================================================================
-// 📱 FUNÇÕES DE ENVIO
+// 📱 ENVIO DE MENSAGENS
 // ============================================================================
 
 async function sendWhatsAppMeta(to: string, text: string): Promise<boolean> {
   try {
     const cleanNumber = to.replace(/\D/g, "");
-    console.log(`[Meta] Enviando mensagem para ${cleanNumber}...`);
     
     const response = await fetch(
       `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
@@ -782,13 +878,6 @@ async function sendWhatsAppMeta(to: string, text: string): Promise<boolean> {
       }
     );
 
-    const result = await response.json();
-    console.log("[Meta] Response:", JSON.stringify(result));
-    
-    if (!response.ok) {
-      console.error("[Meta] Erro na API:", result);
-    }
-
     return response.ok;
   } catch (error) {
     console.error("[Meta] Erro ao enviar:", error);
@@ -799,7 +888,6 @@ async function sendWhatsAppMeta(to: string, text: string): Promise<boolean> {
 async function sendWhatsAppVonage(to: string, text: string): Promise<boolean> {
   try {
     const cleanNumber = to.replace(/\D/g, "");
-    console.log(`[Vonage] Enviando mensagem para ${cleanNumber}...`);
     
     const response = await fetch("https://messages-sandbox.nexmo.com/v1/messages", {
       method: "POST",
@@ -815,13 +903,6 @@ async function sendWhatsAppVonage(to: string, text: string): Promise<boolean> {
         channel: "whatsapp",
       }),
     });
-
-    const result = await response.json();
-    console.log("[Vonage] Response:", JSON.stringify(result));
-
-    if (!response.ok) {
-      console.error("[Vonage] Erro na API:", result);
-    }
 
     return response.ok;
   } catch (error) {
@@ -841,87 +922,6 @@ async function sendWhatsAppMessage(to: string, text: string, source: MessageSour
 // 🔧 FUNÇÕES AUXILIARES
 // ============================================================================
 
-// Busca fluxo ativo para o usuário
-async function getFluxoAtivo(phoneNumber: string): Promise<FluxoAtivo | null> {
-  try {
-    const { data } = await supabase
-      .from("historico_conversas")
-      .select("resumo, created_at")
-      .eq("phone_number", phoneNumber)
-      .like("tipo", "fluxo_ativo_%")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    if (!data || !data.resumo) return null;
-
-    const createdAt = new Date(data.created_at);
-    const agora = new Date();
-    const diffMinutos = (agora.getTime() - createdAt.getTime()) / 1000 / 60;
-    
-    if (diffMinutos > 10) {
-      console.log("⏰ Fluxo ativo expirado (mais de 10 min)");
-      return null;
-    }
-
-    return JSON.parse(data.resumo) as FluxoAtivo;
-  } catch {
-    return null;
-  }
-}
-
-// Salva fluxo ativo
-async function salvarFluxoAtivo(
-  phoneNumber: string, 
-  userId: string,
-  intentOriginal: string,
-  dadosColetados: Partial<ExtractedIntent>,
-  dadosFaltantes: string[],
-  mensagemUsuario: string,
-  respostaBot: string,
-  ultimaPergunta: string
-): Promise<void> {
-  const fluxo: FluxoAtivo = {
-    intent: intentOriginal,
-    dados_coletados: dadosColetados,
-    dados_faltantes: dadosFaltantes,
-    ultima_pergunta: ultimaPergunta,
-    created_at: new Date().toISOString()
-  };
-
-  await supabase.from("historico_conversas").insert({
-    phone_number: phoneNumber,
-    user_id: userId,
-    user_message: mensagemUsuario,
-    ai_response: respostaBot,
-    tipo: `fluxo_ativo_${intentOriginal}`,
-    resumo: JSON.stringify(fluxo)
-  });
-
-  console.log("💾 Fluxo ativo salvo:", JSON.stringify(fluxo));
-}
-
-// Limpa fluxo ativo após conclusão
-async function limparFluxoAtivo(phoneNumber: string): Promise<void> {
-  await supabase
-    .from("historico_conversas")
-    .update({ tipo: "fluxo_concluido" })
-    .eq("phone_number", phoneNumber)
-    .like("tipo", "fluxo_ativo_%");
-    
-  console.log("🧹 Fluxo ativo limpo para:", phoneNumber);
-}
-
-// Limpa TUDO (hipótese + fluxo) - usado em cancelamentos
-async function limparTodoContexto(phoneNumber: string): Promise<void> {
-  await Promise.all([
-    limparHipotesePendente(phoneNumber),
-    limparFluxoAtivo(phoneNumber)
-  ]);
-  console.log("🧹 Todo contexto limpo para:", phoneNumber);
-}
-
-// Busca histórico recente de conversa
 async function getHistoricoRecente(phoneNumber: string): Promise<string> {
   const { data: historico } = await supabase
     .from("historico_conversas")
@@ -939,151 +939,15 @@ async function getHistoricoRecente(phoneNumber: string): Promise<string> {
   ).join("\n\n");
 }
 
-// Verifica se usuário precisa de onboarding
 async function verificarSeNovoUsuario(phoneNumber: string): Promise<boolean> {
-  const { count, error } = await supabase
+  const { count } = await supabase
     .from("historico_conversas")
     .select("id", { count: "exact", head: true })
     .eq("phone_number", phoneNumber);
   
-  if (error) {
-    console.error("Erro ao verificar histórico:", error);
-    return false;
-  }
-  
   return count === 0;
 }
 
-// Verifica status do onboarding do usuário
-async function getOnboardingStatus(usuarioId: string): Promise<string | null> {
-  const { data } = await supabase
-    .from("usuarios")
-    .select("onboarding_status")
-    .eq("id", usuarioId)
-    .single();
-  
-  return data?.onboarding_status || null;
-}
-
-// Atualiza status do onboarding
-async function setOnboardingStatus(usuarioId: string, status: "iniciado" | "concluido"): Promise<void> {
-  await supabase
-    .from("usuarios")
-    .update({ onboarding_status: status })
-    .eq("id", usuarioId);
-  
-  console.log(`📋 Onboarding status atualizado para: ${status}`);
-}
-
-// Onboarding CONTEXTUAL (para quando usuário demonstra intenção de centralizar)
-async function enviarOnboardingContextual(
-  phoneNumber: string, 
-  messageSource: MessageSource,
-  usuarioId: string,
-  nomeUsuario: string
-): Promise<void> {
-  const primeiroNome = nomeUsuario.split(" ")[0];
-  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-  
-  // Marca como iniciado ANTES de enviar
-  await setOnboardingStatus(usuarioId, "iniciado");
-  
-  const msg1 = `Perfeito, ${primeiroNome}! 🎯
-
-Se a ideia é centralizar tudo aqui, eu consigo te ajudar a organizar cartões, bancos, gastos e recorrências em um só lugar.
-
-Vou te guiar passo a passo — nada é registrado sem sua confirmação.`;
-
-  await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
-  await delay(2500);
-  
-  const msg2 = `💡 *Dica importante*
-
-Fixa o Finax no WhatsApp pra não perder seus registros no dia a dia.
-
-Assim seu controle financeiro fica sempre a um toque. 📌`;
-
-  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
-  await delay(2000);
-  
-  const msg3 = `Vamos começar? 🚀
-
-Quais bancos ou cartões você usa hoje?
-
-Pode me contar naturalmente, tipo:
-_"Uso Nubank e Itaú"_ ou _"Tenho dois cartões"_`;
-
-  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
-  
-  // Salva no histórico
-  await supabase.from("historico_conversas").insert({
-    phone_number: phoneNumber,
-    user_id: usuarioId,
-    user_message: "[INTENT: iniciar_organizacao]",
-    ai_response: "[ONBOARDING CONTEXTUAL ENVIADO]",
-    tipo: "onboarding_contextual"
-  });
-  
-  console.log(`✅ Onboarding contextual enviado para ${phoneNumber}`);
-}
-
-// Onboarding para novos usuários
-async function enviarOnboarding(
-  phoneNumber: string, 
-  messageSource: MessageSource, 
-  dados: { nome: string; urlPainel: string }
-): Promise<void> {
-  const primeiroNome = dados.nome.split(" ")[0];
-  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-  
-  const msg1 = `Oi, ${primeiroNome}! 👋
-
-Prazer, eu sou o *Finax* — seu assistente financeiro pessoal.
-
-Estou aqui pra te ajudar a organizar suas finanças de um jeito simples, direto pelo WhatsApp.`;
-
-  await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
-  await delay(2500);
-  
-  const msg2 = `Comigo você organiza tudo em um só lugar: gastos do dia a dia, cartões, dívidas e salário.
-
-Sem planilha. Sem complicação. Só mandar mensagem como se fosse um amigo.`;
-
-  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
-  await delay(2000);
-  
-  const msg3 = `💡 *Dica importante*
-
-Fixa o Finax no WhatsApp pra não perder seus registros no dia a dia.
-
-Assim seu controle financeiro fica sempre a um toque.`;
-
-  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
-  await delay(2500);
-  
-  const msg4 = `🎁 *Acesso liberado*
-
-Você tem acesso completo ao Finax — todas as funcionalidades estão liberadas.
-
-Pode registrar gastos, entradas, parcelamentos, ver resumos...
-
-Mais pra frente te aviso sobre a continuidade 😊`;
-
-  await sendWhatsAppMessage(phoneNumber, msg4, messageSource);
-  await delay(2500);
-  
-  const msg5 = `Quer que eu te ajude agora a organizar seus cartões, dívidas e salário?
-
-Fazendo isso, fica muito mais fácil registrar gastos depois.
-
-Responde *sim* se quiser começar, ou pode mandar direto seu primeiro gasto 💰`;
-
-  await sendWhatsAppMessage(phoneNumber, msg5, messageSource);
-  
-  console.log(`✅ Onboarding completo enviado para ${phoneNumber}`);
-}
-
-// Verificar status do plano
 interface StatusPlano {
   status: "trial" | "expired" | "pro";
   permitido: boolean;
@@ -1104,23 +968,19 @@ async function verificarStatusPlano(usuarioId: string): Promise<StatusPlano> {
     }
     
     const plano = usuario.plano || "trial";
-    const agora = new Date();
     
     if (plano === "pro") {
       return { status: "pro", permitido: true, bloqueiaEscrita: false };
     }
     
     const trialFim = usuario.trial_fim ? new Date(usuario.trial_fim) : null;
+    const agora = new Date();
     
     if (trialFim) {
       const diasRestantes = Math.ceil((trialFim.getTime() - agora.getTime()) / (1000 * 60 * 60 * 24));
       
       if (diasRestantes > 0) {
-        return { 
-          status: "trial", 
-          permitido: true, 
-          bloqueiaEscrita: false 
-        };
+        return { status: "trial", permitido: true, bloqueiaEscrita: false };
       } else {
         if (plano !== "expired") {
           await supabase.from("usuarios").update({ plano: "expired" }).eq("id", usuarioId);
@@ -1130,21 +990,17 @@ async function verificarStatusPlano(usuarioId: string): Promise<StatusPlano> {
           status: "expired", 
           permitido: true,
           bloqueiaEscrita: true,
-          mensagem: `Seu período de teste do Finax Pro terminou 😔\n\n` +
-            `Você ainda pode consultar seus resumos, mas para registrar novos gastos, ` +
-            `ative sua assinatura no site.`
+          mensagem: `Seu período de teste do Finax Pro terminou 😔\n\nVocê ainda pode consultar seus resumos, mas para registrar novos gastos, ative sua assinatura.`
         };
       }
     }
     
     return { status: "trial", permitido: true, bloqueiaEscrita: false };
   } catch (error) {
-    console.error("Erro ao verificar status do plano:", error);
     return { status: "trial", permitido: true, bloqueiaEscrita: false };
   }
 }
 
-// Busca resumo financeiro do mês
 async function getResumoMes(usuarioId: string) {
   const inicioMes = new Date();
   inicioMes.setDate(1);
@@ -1185,7 +1041,6 @@ async function getResumoMes(usuarioId: string) {
   };
 }
 
-// Gera resposta conversacional com contexto
 async function generateResponse(
   userMessage: string, 
   context: string, 
@@ -1238,14 +1093,12 @@ ${context ? `\n📊 CONTEXTO:\n${context}` : ""}`
     });
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || "Desculpe, não consegui processar sua mensagem.";
+    return data.choices?.[0]?.message?.content || "Desculpe, não consegui processar.";
   } catch (error) {
-    console.error("Erro ao gerar resposta:", error);
     return "Desculpe, ocorreu um erro. Tente novamente.";
   }
 }
 
-// Extrai intent da mensagem
 async function extractIntent(message: string, historicoRecente: string): Promise<ExtractedIntent> {
   try {
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -1270,7 +1123,7 @@ INTENTS:
 - "consultar_categoria": gastos de categoria específica
 - "cancelar_transacao": cancelar/apagar algo
 - "corrigir_transacao": corrigir algo registrado
-- "iniciar_organizacao": organizar cartões/salário
+- "iniciar_organizacao": organizar cartões/salário/centralizar
 - "saudacao": cumprimento
 - "ajuda": pedindo ajuda
 - "outro": não se encaixa
@@ -1305,12 +1158,62 @@ ${historicoRecente ? `CONTEXTO:\n${historicoRecente}` : ""}`
     const content = data.choices?.[0]?.message?.content || '{"intent": "outro"}';
     
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    console.log("Intent extraído:", cleanJson);
     return JSON.parse(cleanJson);
   } catch (error) {
-    console.error("Erro ao extrair intent:", error);
     return { intent: "outro" };
   }
+}
+
+// Envia onboarding para novo usuário
+async function enviarOnboardingNovoUsuario(
+  phoneNumber: string,
+  messageSource: MessageSource,
+  nome: string
+): Promise<void> {
+  const primeiroNome = nome.split(" ")[0];
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  
+  const msg1 = `Oi, ${primeiroNome}! 👋
+
+Prazer, eu sou o *Finax* — seu assistente financeiro pessoal.
+
+Estou aqui pra te ajudar a organizar suas finanças de um jeito simples, direto pelo WhatsApp.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
+  await delay(2500);
+  
+  const msg2 = `Comigo você organiza tudo em um só lugar: gastos do dia a dia, cartões, dívidas e salário.
+
+Sem planilha. Sem complicação. Só mandar mensagem como se fosse um amigo.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
+  await delay(2000);
+  
+  const msg3 = `💡 *Dica importante*
+
+Fixa o Finax no WhatsApp pra não perder seus registros no dia a dia.
+
+Assim seu controle financeiro fica sempre a um toque.`;
+
+  await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
+  await delay(2500);
+  
+  const msg4 = `🎁 *Acesso liberado*
+
+Você tem acesso completo ao Finax — todas as funcionalidades estão liberadas.
+
+Pode registrar gastos, entradas, parcelamentos, ver resumos...`;
+
+  await sendWhatsAppMessage(phoneNumber, msg4, messageSource);
+  await delay(2500);
+  
+  const msg5 = `Quer que eu te ajude agora a organizar seus cartões, dívidas e salário?
+
+Fazendo isso, fica muito mais fácil registrar gastos depois.
+
+Responde *sim* se quiser começar, ou pode mandar direto seu primeiro gasto 💰`;
+
+  await sendWhatsAppMessage(phoneNumber, msg5, messageSource);
 }
 
 // ============================================================================
@@ -1344,7 +1247,7 @@ serve(async (req) => {
   // Processamento POST
   try {
     const json = await req.json();
-    console.log("Webhook payload:", JSON.stringify(json));
+    console.log("📨 Webhook payload recebido");
 
     let phoneNumber: string = "";
     let messageText: string = "";
@@ -1355,7 +1258,6 @@ serve(async (req) => {
 
     // Detectar origem: Vonage ou Meta
     if (json.channel === "whatsapp" && json.from && json.text !== undefined) {
-      console.log("📱 Detectado formato VONAGE");
       messageSource = "vonage";
       phoneNumber = json.from;
       messageText = json.text || "";
@@ -1368,13 +1270,11 @@ serve(async (req) => {
       }
     }
     else if (json.entry?.[0]?.changes?.[0]?.value) {
-      console.log("📱 Detectado formato META");
       messageSource = "meta";
       
       const value = json.entry[0].changes[0].value;
       
       if (!value.messages || value.messages.length === 0) {
-        console.log("Ignorando: não é mensagem de usuário");
         return new Response(JSON.stringify({ status: "ok" }), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1391,12 +1291,10 @@ serve(async (req) => {
         messageType = "audio";
         mediaId = message.audio?.id || null;
         mediaMimeType = message.audio?.mime_type || "audio/ogg";
-        console.log(`🎵 Áudio recebido: ${mediaId}`);
       } else if (message.type === "image") {
         messageType = "image";
         mediaId = message.image?.id || null;
         mediaMimeType = message.image?.mime_type || "image/jpeg";
-        console.log(`📷 Imagem recebida: ${mediaId}`);
       } else {
         return new Response(JSON.stringify({ status: "ok" }), {
           status: 200,
@@ -1420,7 +1318,9 @@ serve(async (req) => {
       });
     }
 
-    // Busca ou cria usuário
+    // ========================================================================
+    // BUSCAR OU CRIAR USUÁRIO
+    // ========================================================================
     let { data: usuario } = await supabase
       .from("usuarios")
       .select("*")
@@ -1446,27 +1346,27 @@ serve(async (req) => {
         .single();
       usuario = newUser;
       isNovoUsuario = true;
-      console.log(`👤 Novo usuário: ${phoneNumber} - ${nomeContato || 'sem nome'}`);
+      console.log(`👤 Novo usuário: ${phoneNumber}`);
     } else {
       isNovoUsuario = await verificarSeNovoUsuario(phoneNumber);
     }
 
     const usuarioId = usuario?.id;
+    const nomeUsuario = usuario?.nome || "amigo(a)";
 
-    // Onboarding para novos usuários
+    // ========================================================================
+    // ONBOARDING PARA NOVOS USUÁRIOS
+    // ========================================================================
     if (isNovoUsuario) {
-      console.log(`🎉 Iniciando onboarding para ${phoneNumber}`);
+      console.log(`🎉 Enviando boas-vindas para ${phoneNumber}`);
       
-      await enviarOnboarding(phoneNumber, messageSource, {
-        nome: usuario?.nome || "amigo(a)",
-        urlPainel: "finax.app"
-      });
+      await enviarOnboardingNovoUsuario(phoneNumber, messageSource, nomeUsuario);
       
       await supabase.from("historico_conversas").insert({
         phone_number: phoneNumber,
         user_id: usuarioId,
         user_message: messageText,
-        ai_response: "[ONBOARDING ENVIADO]",
+        ai_response: "[ONBOARDING NOVO USUÁRIO]",
         tipo: "onboarding"
       });
       
@@ -1476,23 +1376,59 @@ serve(async (req) => {
       );
     }
 
-    // Verificar status do plano
-    const statusPlano = await verificarStatusPlano(usuarioId);
-    console.log(`📋 Plano: ${statusPlano.status}, bloqueiaEscrita: ${statusPlano.bloqueiaEscrita}`);
+    // ========================================================================
+    // 🧠 VERIFICAR ESTADO DO USUÁRIO (PRIORIDADE MÁXIMA)
+    // ========================================================================
+    const estadoUsuario = await getEstadoUsuario(usuarioId);
+    console.log(`🎯 [ESTADO] Modo: ${estadoUsuario.modo} | Etapa: ${estadoUsuario.etapa_onboarding}`);
 
     // ========================================================================
-    // 🎯 VERIFICAR HIPÓTESE PENDENTE (ANTES DE TUDO)
+    // MODO ONBOARDING - ESTADO TEM PRIORIDADE ABSOLUTA
     // ========================================================================
+    if (estadoUsuario.modo === "onboarding" && messageType === "text") {
+      console.log(`📋 [ONBOARDING] Processando etapa: ${estadoUsuario.etapa_onboarding}`);
+      
+      // Processa a etapa atual
+      const resultado = await processarEtapaOnboarding(
+        estadoUsuario.etapa_onboarding || "bancos",
+        messageText,
+        usuarioId
+      );
+      
+      // Atualiza para próxima etapa
+      await setOnboardingStep(usuarioId, resultado.proxima_etapa);
+      
+      // Envia resposta
+      await sendWhatsAppMessage(phoneNumber, resultado.mensagem, messageSource);
+      
+      // Salva no histórico
+      await supabase.from("historico_conversas").insert({
+        phone_number: phoneNumber,
+        user_id: usuarioId,
+        user_message: messageText,
+        ai_response: resultado.mensagem,
+        tipo: `onboarding_${estadoUsuario.etapa_onboarding}`
+      });
+      
+      return new Response(
+        JSON.stringify({ status: "ok", onboarding_step: resultado.proxima_etapa }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ========================================================================
+    // MODO OPERACIONAL - VERIFICAR HIPÓTESE PENDENTE
+    // ========================================================================
+    const statusPlano = await verificarStatusPlano(usuarioId);
     const hipotesePendente = await getHipotesePendente(phoneNumber);
     
     if (hipotesePendente && messageType === "text") {
-      console.log("💡 Hipótese pendente encontrada:", JSON.stringify(hipotesePendente));
+      console.log("💡 Processando hipótese pendente...");
       
       const resposta = analisarRespostaValidacao(messageText, hipotesePendente);
       
-      // 🚨 CANCELAMENTO: Limpa tudo e responde empaticamente
       if (resposta.tipo === "cancelar") {
-        await limparTodoContexto(phoneNumber);
+        await limparHipotesePendente(phoneNumber);
         const msg = mensagemPosCancelamento();
         await sendWhatsAppMessage(phoneNumber, msg, messageSource);
         
@@ -1510,9 +1446,7 @@ serve(async (req) => {
         );
       }
       
-      // ✅ CONFIRMAÇÃO: Executa o registro
       if (resposta.tipo === "confirmar") {
-        // Verifica bloqueio de escrita
         if (statusPlano.bloqueiaEscrita) {
           await limparHipotesePendente(phoneNumber);
           await sendWhatsAppMessage(phoneNumber, statusPlano.mensagem!, messageSource);
@@ -1540,7 +1474,6 @@ serve(async (req) => {
         );
       }
       
-      // 🔄 CORREÇÃO/DADOS: Atualiza hipótese e pede confirmação novamente
       if (resposta.tipo === "corrigir" || resposta.tipo === "dados_novos") {
         const novaHipotese: HipotesePendente = {
           ...hipotesePendente,
@@ -1553,7 +1486,6 @@ serve(async (req) => {
           })
         };
         
-        // Se escolheu modo de registro para múltiplos itens
         if (novaHipotese.multiplos_itens && novaHipotese.modo_registro) {
           if (novaHipotese.modo_registro === "unico") {
             const total = novaHipotese.multiplos_itens.reduce((s, i) => s + i.valor, 0);
@@ -1574,12 +1506,8 @@ serve(async (req) => {
         );
       }
       
-      // ❓ INDEFINIDO: Repete a pergunta
       const msgRepete = montarMensagemConfirmacao(hipotesePendente);
-      await sendWhatsAppMessage(phoneNumber, 
-        `Não entendi 🤔\n\n${msgRepete}`,
-        messageSource
-      );
+      await sendWhatsAppMessage(phoneNumber, `Não entendi 🤔\n\n${msgRepete}`, messageSource);
       
       return new Response(
         JSON.stringify({ status: "ok", awaiting: true }),
@@ -1588,136 +1516,57 @@ serve(async (req) => {
     }
 
     // ========================================================================
-    // 🎤 PROCESSAMENTO DE ÁUDIO (CAMADAS 1-3)
+    // PROCESSAMENTO DE ÁUDIO
     // ========================================================================
     if (messageType === "audio" && mediaId) {
-      console.log("🎵 [PIPELINE] Processando áudio...");
-      
-      // CAMADA 1: Percepção - Download e transcrição pura
       const audioBase64 = await downloadWhatsAppMedia(mediaId);
       
       if (!audioBase64) {
-        await sendWhatsAppMessage(phoneNumber, 
-          "Não consegui baixar o áudio 😕\nPode tentar enviar de novo?", 
-          messageSource
-        );
-        return new Response(
-          JSON.stringify({ status: "ok", error: "download_failed" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        await sendWhatsAppMessage(phoneNumber, "Não consegui baixar o áudio 😕\nPode tentar enviar de novo?", messageSource);
+        return new Response(JSON.stringify({ status: "ok", error: "download_failed" }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
       
       const transcricao = await transcreverAudioPuro(audioBase64, mediaMimeType);
       
       if (!transcricao) {
-        await sendWhatsAppMessage(phoneNumber, 
-          "Não consegui entender o áudio 😕\nPode tentar falar mais devagar ou escrever?", 
-          messageSource
-        );
-        return new Response(
-          JSON.stringify({ status: "ok", error: "transcription_failed" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      // CAMADA 2: Interpretação
-      const interpretacao = await interpretarMensagem(transcricao);
-      
-      if (!interpretacao.eh_financeiro) {
-        await sendWhatsAppMessage(phoneNumber, 
-          "Hmm, parece que esse áudio não é sobre finanças 🤔\n\n" +
-          "Eu sou focado em te ajudar com dinheiro! 💰\n" +
-          "Quer registrar um gasto, ver seu resumo ou organizar algo?", 
-          messageSource
-        );
-        
-        await supabase.from("historico_conversas").insert({
-          phone_number: phoneNumber,
-          user_id: usuarioId,
-          user_message: `[ÁUDIO] ${transcricao}`,
-          ai_response: "Áudio não financeiro",
-          tipo: "audio_nao_financeiro"
+        await sendWhatsAppMessage(phoneNumber, "Não consegui entender o áudio 😕\nPode tentar falar mais devagar ou escrever?", messageSource);
+        return new Response(JSON.stringify({ status: "ok", error: "transcription_failed" }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
-        
-        return new Response(
-          JSON.stringify({ status: "ok", not_financial: true }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
       }
       
-      // CAMADA 3: Hipótese
-      const hipotese: HipotesePendente = {
-        origem: "audio",
-        tipo_operacao: interpretacao.tipo_operacao === "entrada" ? "entrada" : "gasto",
-        valor: interpretacao.valor,
-        descricao: interpretacao.descricao,
-        categoria: interpretacao.categoria,
-        forma_pagamento: interpretacao.forma_pagamento,
-        confianca: interpretacao.confianca,
-        dados_faltantes: [],
-        mensagem_original: transcricao,
-        created_at: new Date().toISOString()
-      };
-      
-      if (!hipotese.valor) hipotese.dados_faltantes.push("valor");
-      if (!hipotese.descricao) hipotese.dados_faltantes.push("descricao");
-      
-      await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
-      
-      // CAMADA 4: Pedir validação (NUNCA registra direto)
-      const msgConfirmacao = montarMensagemConfirmacao(hipotese);
-      await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
-      
-      await supabase.from("historico_conversas").insert({
-        phone_number: phoneNumber,
-        user_id: usuarioId,
-        user_message: `[ÁUDIO] ${transcricao}`,
-        ai_response: msgConfirmacao,
-        tipo: "audio_aguardando_validacao"
-      });
-      
-      return new Response(
-        JSON.stringify({ status: "ok", awaiting_validation: true }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      // Usa o texto transcrito como mensagem
+      messageText = transcricao;
+      messageType = "text";
     }
 
     // ========================================================================
-    // 📷 PROCESSAMENTO DE IMAGEM (CAMADAS 1-3)
+    // PROCESSAMENTO DE IMAGEM
     // ========================================================================
     if (messageType === "image" && mediaId) {
-      console.log("📷 [PIPELINE] Processando imagem...");
-      
-      // CAMADA 1: Percepção - Download e OCR
       const imageBase64 = await downloadWhatsAppMedia(mediaId);
       
       if (!imageBase64) {
-        await sendWhatsAppMessage(phoneNumber, 
-          "Não consegui baixar a imagem 😕\nPode tentar enviar de novo?", 
-          messageSource
-        );
-        return new Response(
-          JSON.stringify({ status: "ok", error: "download_failed" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        await sendWhatsAppMessage(phoneNumber, "Não consegui baixar a imagem 😕\nPode tentar enviar de novo?", messageSource);
+        return new Response(JSON.stringify({ status: "ok", error: "download_failed" }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
       
       const dadosImagem = await extrairDadosImagemPuro(imageBase64, mediaMimeType);
       
       if (!dadosImagem || dadosImagem.tipo === "outro") {
         await sendWhatsAppMessage(phoneNumber, 
-          "Não consegui identificar informações financeiras nessa imagem 🤔\n\n" +
-          "Pode me contar o que era? Por exemplo:\n" +
-          "_\"Gastei 50 no mercado\"_", 
+          "Não consegui identificar informações financeiras nessa imagem 🤔\n\nPode me contar o que era?", 
           messageSource
         );
-        return new Response(
-          JSON.stringify({ status: "ok", image_type: "outro" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ status: "ok", image_type: "outro" }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
       
-      // CAMADA 3: Hipótese
       const hipotese: HipotesePendente = {
         origem: "imagem",
         tipo_operacao: "gasto",
@@ -1734,79 +1583,88 @@ serve(async (req) => {
       if (!hipotese.valor && !hipotese.multiplos_itens) hipotese.dados_faltantes.push("valor");
       if (!hipotese.descricao && !hipotese.multiplos_itens) hipotese.dados_faltantes.push("descricao");
       
-      // Se é fatura, oferece ajuda diferente
-      if (dadosImagem.tipo === "fatura") {
-        await sendWhatsAppMessage(phoneNumber, 
-          "Percebi que isso é um print da fatura do cartão 📄\n\n" +
-          "Quer que eu te ajude a organizar esses gastos aqui no Finax?\n\n" +
-          "Responde *sim* se quiser começar, ou me manda os gastos que quer registrar.", 
-          messageSource
-        );
-        return new Response(
-          JSON.stringify({ status: "ok", image_type: "fatura" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      // Se é extrato
-      if (dadosImagem.tipo === "extrato") {
-        await sendWhatsAppMessage(phoneNumber, 
-          "Recebi um print do extrato 📊\n\n" +
-          "Me diz: qual transação desse extrato você quer registrar?", 
-          messageSource
-        );
-        return new Response(
-          JSON.stringify({ status: "ok", image_type: "extrato" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
       await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
-      
-      // CAMADA 4: Pedir validação
       const msgConfirmacao = montarMensagemConfirmacao(hipotese);
       await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
       
-      await supabase.from("historico_conversas").insert({
-        phone_number: phoneNumber,
-        user_id: usuarioId,
-        user_message: "[IMAGEM RECEBIDA]",
-        ai_response: msgConfirmacao,
-        tipo: "imagem_aguardando_validacao"
+      return new Response(JSON.stringify({ status: "ok", awaiting_validation: true }), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
-      
-      return new Response(
-        JSON.stringify({ status: "ok", awaiting_validation: true }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
     }
 
     // ========================================================================
-    // 💬 PROCESSAMENTO DE TEXTO (CAMADAS 2-4)
+    // PROCESSAMENTO DE TEXTO (MODO OPERACIONAL)
     // ========================================================================
     if (!messageText) {
-      return new Response(
-        JSON.stringify({ status: "ok" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ status: "ok" }), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // Busca histórico para contexto
     const historicoRecente = await getHistoricoRecente(phoneNumber);
-    
-    // Extrai intent
     const intent = await extractIntent(messageText, historicoRecente);
-    console.log("Intent:", JSON.stringify(intent));
+    console.log("🎯 Intent:", JSON.stringify(intent));
 
     let acaoRealizada = "";
     let contextoDados = "";
 
-    // Processa baseado no intent
     switch (intent.intent) {
+      // ========================================================================
+      // INICIAR ORGANIZAÇÃO (DISPARA ONBOARDING)
+      // ========================================================================
+      case "iniciar_organizacao": {
+        // Verifica se já completou onboarding
+        const { data: usr } = await supabase
+          .from("usuarios")
+          .select("onboarding_status")
+          .eq("id", usuarioId)
+          .single();
+        
+        if (usr?.onboarding_status === "concluido") {
+          const msg = "Você já fez a organização inicial comigo 😊\n\nQuer adicionar mais alguma coisa? Me conta o que você precisa.";
+          await sendWhatsAppMessage(phoneNumber, msg, messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: phoneNumber,
+            user_id: usuarioId,
+            user_message: messageText,
+            ai_response: msg,
+            tipo: "onboarding_ja_concluido"
+          });
+          
+          return new Response(
+            JSON.stringify({ status: "ok", onboarding_already_done: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        // Inicia onboarding
+        await iniciarOnboarding(usuarioId);
+        
+        const mensagens = getMensagemInicialOnboarding(nomeUsuario);
+        const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        
+        for (let i = 0; i < mensagens.length; i++) {
+          await sendWhatsAppMessage(phoneNumber, mensagens[i], messageSource);
+          if (i < mensagens.length - 1) await delay(2500);
+        }
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: messageText,
+          ai_response: "[ONBOARDING INICIADO]",
+          tipo: "onboarding_contextual"
+        });
+        
+        return new Response(
+          JSON.stringify({ status: "ok", onboarding_started: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       case "registrar_gasto":
       case "registrar_entrada": {
-        // CAMADA 2: Interpretação já feita pelo extractIntent
-        // CAMADA 3: Criar hipótese
         const hipotese: HipotesePendente = {
           origem: "texto",
           tipo_operacao: intent.intent === "registrar_entrada" ? "entrada" : "gasto",
@@ -1823,27 +1681,6 @@ serve(async (req) => {
         if (!hipotese.valor) hipotese.dados_faltantes.push("valor");
         if (!hipotese.descricao) hipotese.dados_faltantes.push("descricao");
         
-        // Se falta dados críticos
-        if (hipotese.dados_faltantes.length > 0) {
-          await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
-          const msgConfirmacao = montarMensagemConfirmacao(hipotese);
-          await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
-          
-          await supabase.from("historico_conversas").insert({
-            phone_number: phoneNumber,
-            user_id: usuarioId,
-            user_message: messageText,
-            ai_response: msgConfirmacao,
-            tipo: "texto_aguardando_dados"
-          });
-          
-          return new Response(
-            JSON.stringify({ status: "ok", awaiting_data: true }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-        
-        // Tem todos os dados - pede confirmação (NUNCA registra direto)
         await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
         const msgConfirmacao = montarMensagemConfirmacao(hipotese);
         await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
@@ -1901,12 +1738,6 @@ serve(async (req) => {
           break;
         }
         
-        const listaOpcoes = ultimasTransacoes.map((t, i) => {
-          const data = new Date(t.data).toLocaleDateString("pt-BR");
-          const desc = t.descricao || t.categoria;
-          return `${i + 1}. R$ ${Number(t.valor).toFixed(2)} - ${desc} (${data})`;
-        }).join("\n");
-        
         if (intent.transacao_alvo) {
           const alvo = intent.transacao_alvo.toLowerCase();
           const transacaoEncontrada = ultimasTransacoes.find(t => 
@@ -1921,84 +1752,63 @@ serve(async (req) => {
               .eq("id", transacaoEncontrada.id);
             
             if (!error) {
-              acaoRealizada = `✅ Transação apagada!\n\n` +
-                `❌ R$ ${Number(transacaoEncontrada.valor).toFixed(2)} - ${transacaoEncontrada.descricao || transacaoEncontrada.categoria}`;
+              acaoRealizada = `✅ Transação apagada!\n\nR$ ${Number(transacaoEncontrada.valor).toFixed(2)} - ${transacaoEncontrada.descricao || transacaoEncontrada.categoria}`;
             }
-            break;
           }
+        } else {
+          const listaOpcoes = ultimasTransacoes.map((t, i) => {
+            const data = new Date(t.data).toLocaleDateString("pt-BR");
+            const desc = t.descricao || t.categoria;
+            return `${i + 1}. R$ ${Number(t.valor).toFixed(2)} - ${desc} (${data})`;
+          }).join("\n");
+          
+          acaoRealizada = `Qual transação você quer apagar?\n\n${listaOpcoes}\n\nResponde com o número ou descreve qual é.`;
         }
-        
-        contextoDados = `🗑️ *Qual transação você quer apagar?*\n\n${listaOpcoes}\n\n` +
-          `Responde com o número ou me descreve melhor.`;
         break;
       }
 
-      case "iniciar_organizacao": {
-        // 🎯 ONBOARDING CONTEXTUAL: Detectou intenção de centralizar
-        const onboardingStatus = await getOnboardingStatus(usuarioId);
-        
-        // Só dispara se ainda não concluiu onboarding
-        if (onboardingStatus !== "concluido") {
-          console.log(`🎯 [ONBOARDING] Intent iniciar_organizacao detectado, status atual: ${onboardingStatus}`);
-          
-          await enviarOnboardingContextual(phoneNumber, messageSource, usuarioId, usuario?.nome || "amigo(a)");
-          
-          return new Response(
-            JSON.stringify({ status: "ok", onboarding_contextual: true }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-        
-        // Se já concluiu, apenas responde normalmente
-        contextoDados = "Você já está com o Finax configurado! Como posso te ajudar hoje?";
+      case "saudacao": {
+        const primeiroNome = nomeUsuario.split(" ")[0];
+        acaoRealizada = `Olá, ${primeiroNome}! 👋\n\nComo posso te ajudar hoje?\n\n💰 Registrar um gasto\n📊 Ver resumo do mês\n🔄 Organizar finanças`;
         break;
       }
 
-      case "saudacao":
-      case "ajuda":
-      case "outro":
-      default: {
-        const resumo = await getResumoMes(usuarioId);
-        contextoDados = `Resumo atual: Entradas R$ ${resumo.totalEntradas.toFixed(2)}, ` +
-          `Saídas R$ ${resumo.totalSaidas.toFixed(2)}, Saldo R$ ${resumo.saldo.toFixed(2)}`;
+      case "ajuda": {
+        acaoRealizada = `Posso te ajudar com:\n\n💸 *Registrar gastos*\n_"Gastei 50 no mercado"_\n\n📊 *Ver resumo*\n_"Quanto gastei esse mês?"_\n\n🔄 *Organizar tudo*\n_"Quero centralizar minhas finanças"_\n\nÉ só me contar naturalmente! 😊`;
         break;
       }
+
+      default:
+        break;
     }
 
-    // Gera resposta com AI
-    const contextoCompleto = contextoDados || acaoRealizada 
-      ? `${acaoRealizada}\n\n${contextoDados}`.trim() 
-      : "";
-    
-    const aiResponse = await generateResponse(messageText, contextoCompleto, acaoRealizada);
+    // Gera resposta com contexto
+    const resposta = await generateResponse(
+      messageText,
+      contextoDados,
+      acaoRealizada
+    );
 
-    // Salva histórico
+    await sendWhatsAppMessage(phoneNumber, resposta, messageSource);
+
     await supabase.from("historico_conversas").insert({
       phone_number: phoneNumber,
       user_id: usuarioId,
       user_message: messageText,
-      ai_response: aiResponse,
-      tipo: intent.intent
+      ai_response: resposta,
+      tipo: "mensagem"
     });
 
-    // Envia resposta
-    await sendWhatsAppMessage(phoneNumber, aiResponse, messageSource);
-
     return new Response(
-      JSON.stringify({ status: "ok", message_sent: true }),
-      {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      JSON.stringify({ status: "ok" }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+
   } catch (error) {
-    console.error("Webhook error:", error);
+    console.error("❌ Erro no webhook:", error);
     return new Response(
-      JSON.stringify({ status: "error", message: error instanceof Error ? error.message : "Unknown error" }),
-      {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      JSON.stringify({ status: "error", message: String(error) }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
