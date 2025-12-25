@@ -54,6 +54,103 @@ interface EstadoUsuario {
   cartao_atual?: string;
 }
 
+// ============================================================================
+// 🛡️ SISTEMA DE AUTORREPARO (ANTI-QUEBRA)
+// ============================================================================
+// 
+// Quando algo dá errado, o Finax se recupera graciosamente.
+// NUNCA diz "erro", "não entendi" ou mensagens genéricas.
+// Sempre oferece um próximo passo claro e objetivo.
+//
+// ============================================================================
+
+type TipoProblema = 
+  | "imagem_ilegivel"
+  | "audio_confuso" 
+  | "dados_incompletos"
+  | "intent_ambiguo"
+  | "estado_invalido"
+  | "resposta_fora_contexto";
+
+interface RecuperacaoGraciosa {
+  mensagem: string;
+  pergunta_direta: string;
+  tipo: TipoProblema;
+}
+
+function gerarRecuperacao(tipo: TipoProblema, contexto?: any): RecuperacaoGraciosa {
+  const recuperacoes: Record<TipoProblema, () => RecuperacaoGraciosa> = {
+    imagem_ilegivel: () => ({
+      tipo: "imagem_ilegivel",
+      mensagem: "Vi a imagem, mas não consegui ler os detalhes 📷",
+      pergunta_direta: "Me conta: *quanto foi* e *o que era*?"
+    }),
+    audio_confuso: () => ({
+      tipo: "audio_confuso", 
+      mensagem: "Não peguei o áudio direito 🎤",
+      pergunta_direta: "Pode escrever rapidinho o que você disse?"
+    }),
+    dados_incompletos: () => {
+      const faltando = contexto?.faltando || ["valor"];
+      if (faltando.includes("valor") && faltando.includes("descricao")) {
+        return {
+          tipo: "dados_incompletos",
+          mensagem: "Quase lá 👌",
+          pergunta_direta: "Quanto foi e o que era?"
+        };
+      }
+      if (faltando.includes("valor")) {
+        return {
+          tipo: "dados_incompletos",
+          mensagem: `Entendi: *${contexto?.descricao || "gasto"}* 👍`,
+          pergunta_direta: "Qual foi o valor?"
+        };
+      }
+      if (faltando.includes("descricao")) {
+        return {
+          tipo: "dados_incompletos",
+          mensagem: `Vi *R$ ${contexto?.valor?.toFixed(2) || "0,00"}* 💰`,
+          pergunta_direta: "O que foi essa compra?"
+        };
+      }
+      if (faltando.includes("forma_pagamento")) {
+        return {
+          tipo: "dados_incompletos",
+          mensagem: `*R$ ${contexto?.valor?.toFixed(2)}* - ${contexto?.descricao}`,
+          pergunta_direta: "Como você pagou?\n\n1️⃣ Pix\n2️⃣ Dinheiro\n3️⃣ Débito\n4️⃣ Crédito"
+        };
+      }
+      return {
+        tipo: "dados_incompletos",
+        mensagem: "Só falta uma informação 👌",
+        pergunta_direta: `Qual é ${faltando[0] === "valor" ? "o valor" : faltando[0]}?`
+      };
+    },
+    intent_ambiguo: () => ({
+      tipo: "intent_ambiguo",
+      mensagem: "Deixa eu te ajudar melhor 🤔",
+      pergunta_direta: "O que você quer fazer agora?\n\n💸 Registrar gasto\n📊 Ver resumo\n🔄 Organizar finanças"
+    }),
+    estado_invalido: () => ({
+      tipo: "estado_invalido",
+      mensagem: "Vamos simplificar 👍",
+      pergunta_direta: "Como posso te ajudar agora?"
+    }),
+    resposta_fora_contexto: () => ({
+      tipo: "resposta_fora_contexto",
+      mensagem: "Hmm, não entendi bem 🤔",
+      pergunta_direta: contexto?.pergunta_anterior || "O que você quis dizer?"
+    })
+  };
+
+  return recuperacoes[tipo]();
+}
+
+// Formata mensagem de recuperação
+function formatarRecuperacao(rec: RecuperacaoGraciosa): string {
+  return `${rec.mensagem}\n\n👉 ${rec.pergunta_direta}`;
+}
+
 // Interface para hipótese pendente
 interface HipotesePendente {
   origem: "audio" | "imagem" | "texto";
@@ -862,10 +959,59 @@ function analisarRespostaValidacao(mensagem: string, hipotese: HipotesePendente)
 // 🚀 EXECUÇÃO
 // ============================================================================
 
+// Gera ID único para transação (formato premium)
+function gerarIdTransacao(): string {
+  const agora = new Date();
+  const data = agora.toISOString().slice(0, 10).replace(/-/g, "");
+  const random = Math.floor(Math.random() * 9999).toString().padStart(4, "0");
+  return `TRX-${data}-${random}`;
+}
+
+// Emoji por categoria
+function getEmojiCategoria(categoria: string): string {
+  const emojis: Record<string, string> = {
+    alimentacao: "🍔",
+    transporte: "🚗",
+    moradia: "🏠",
+    saude: "💊",
+    educacao: "📚",
+    lazer: "🎮",
+    compras: "🛒",
+    servicos: "🔧",
+    mercado: "🛒",
+    restaurante: "🍽️",
+    uber: "🚕",
+    ifood: "🍕",
+    streaming: "📺",
+    salario: "💼",
+    freelance: "💻",
+    investimentos: "📈",
+    outros: "📦"
+  };
+  return emojis[categoria.toLowerCase()] || "📦";
+}
+
+// Formata forma de pagamento
+function formatarFormaPagamento(forma?: string, cartao?: string): string {
+  if (!forma) return "";
+  const formas: Record<string, string> = {
+    pix: "Pix",
+    dinheiro: "Dinheiro",
+    debito: "Débito",
+    credito: cartao ? `Crédito — ${cartao}` : "Crédito"
+  };
+  return formas[forma] || forma;
+}
+
 async function executarRegistro(
   usuarioId: string,
   hipotese: HipotesePendente
 ): Promise<{ sucesso: boolean; mensagem: string }> {
+  const transacaoId = gerarIdTransacao();
+  const agora = new Date();
+  const dataFormatada = agora.toLocaleDateString("pt-BR");
+  const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  
   if (hipotese.multiplos_itens && hipotese.modo_registro === "separado") {
     const transacoes = hipotese.multiplos_itens.map(item => ({
       usuario_id: usuarioId,
@@ -881,15 +1027,28 @@ async function executarRegistro(
     const { error } = await supabase.from("transacoes").insert(transacoes);
     
     if (error) {
-      return { sucesso: false, mensagem: "Erro ao salvar os registros 😕" };
+      console.error("❌ Erro ao salvar transações:", error);
+      return { 
+        sucesso: false, 
+        mensagem: "Hmm, algo deu errado ao salvar 😕\n\nVamos tentar de novo? Me conta o gasto novamente." 
+      };
     }
     
     const total = hipotese.multiplos_itens.reduce((s, i) => s + i.valor, 0);
+    const itensFormatados = hipotese.multiplos_itens
+      .map(i => `   • R$ ${i.valor.toFixed(2)} — ${i.descricao}`)
+      .join("\n");
+    
     return {
       sucesso: true,
-      mensagem: `✅ ${hipotese.multiplos_itens.length} itens registrados!\n\n` +
-        hipotese.multiplos_itens.map(i => `• R$ ${i.valor.toFixed(2)} - ${i.descricao}`).join("\n") +
-        `\n\n💰 Total: R$ ${total.toFixed(2)}`
+      mensagem: `✅ *${hipotese.multiplos_itens.length} itens registrados!*\n\n` +
+        `🧾 *Detalhes*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `${itensFormatados}\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `💰 *Total: R$ ${total.toFixed(2)}*\n` +
+        `📅 ${dataFormatada} às ${horaFormatada}\n\n` +
+        `Se precisar corrigir algo, é só avisar 🙂`
     };
   }
   
@@ -907,71 +1066,87 @@ async function executarRegistro(
   });
   
   if (error) {
-    return { sucesso: false, mensagem: "Erro ao salvar o registro 😕" };
+    console.error("❌ Erro ao salvar transação:", error);
+    return { 
+      sucesso: false, 
+      mensagem: "Hmm, algo deu errado ao salvar 😕\n\nVamos tentar de novo? Me conta o gasto novamente." 
+    };
   }
   
-  const emoji = tipoTransacao === "entrada" ? "📈" : "💸";
-  const sinal = tipoTransacao === "entrada" ? "+" : "-";
+  const categoria = hipotese.categoria || "outros";
+  const emojiCategoria = getEmojiCategoria(categoria);
+  const formaPagamento = formatarFormaPagamento(hipotese.forma_pagamento);
+  
+  if (tipoTransacao === "entrada") {
+    return {
+      sucesso: true,
+      mensagem: `✅ *Entrada registrada!*\n\n` +
+        `🧾 *Detalhes da transação #${transacaoId}*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📈 Valor: *+R$ ${hipotese.valor?.toFixed(2)}*\n` +
+        `📂 Categoria: ${emojiCategoria} ${categoria}\n` +
+        (hipotese.descricao ? `📝 Descrição: ${hipotese.descricao}\n` : "") +
+        `📅 Data: ${dataFormatada} às ${horaFormatada}\n` +
+        `🆔 ID: ${transacaoId}\n\n` +
+        `Se precisar corrigir algo, é só avisar 🙂`
+    };
+  }
   
   return {
     sucesso: true,
-    mensagem: `✅ Registrado!\n\n` +
-      `${emoji} ${sinal}R$ ${hipotese.valor?.toFixed(2)}\n` +
-      `📂 ${hipotese.categoria || "outros"}\n` +
-      (hipotese.descricao ? `📝 ${hipotese.descricao}\n` : "") +
-      (hipotese.forma_pagamento ? `💳 ${hipotese.forma_pagamento.toUpperCase()}\n` : "") +
-      `\nAssim fica tudo organizado aqui 😉`
+    mensagem: `✅ *Gasto registrado!*\n\n` +
+      `🧾 *Detalhes da transação #${transacaoId}*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `💸 Valor: *-R$ ${hipotese.valor?.toFixed(2)}*\n` +
+      `📂 Categoria: ${emojiCategoria} ${categoria}\n` +
+      (hipotese.descricao ? `📝 Descrição: ${hipotese.descricao}\n` : "") +
+      (formaPagamento ? `💳 Pagamento: ${formaPagamento}\n` : "") +
+      `📅 Data: ${dataFormatada} às ${horaFormatada}\n` +
+      `🆔 ID: ${transacaoId}\n\n` +
+      `Se precisar corrigir algo, é só avisar 🙂`
   };
 }
 
 function montarMensagemConfirmacao(hipotese: HipotesePendente): string {
-  let msg = "";
-  
+  // Múltiplos itens detectados
   if (hipotese.multiplos_itens && hipotese.multiplos_itens.length > 1) {
     const total = hipotese.multiplos_itens.reduce((s, i) => s + i.valor, 0);
-    msg = `📋 Identifiquei ${hipotese.multiplos_itens.length} itens nesse comprovante:\n\n`;
-    msg += hipotese.multiplos_itens.map(i => `• R$ ${i.valor.toFixed(2)} - ${i.descricao}`).join("\n");
-    msg += `\n\n💰 Total: R$ ${total.toFixed(2)}`;
-    msg += `\n\nVocê prefere:\n1️⃣ Registrar tudo como um único gasto de R$ ${total.toFixed(2)}\n2️⃣ Registrar cada item separadamente`;
-    return msg;
+    const itensFormatados = hipotese.multiplos_itens
+      .map(i => `   • R$ ${i.valor.toFixed(2)} — ${i.descricao}`)
+      .join("\n");
+    
+    return `📋 *Identifiquei ${hipotese.multiplos_itens.length} itens:*\n\n` +
+      `${itensFormatados}\n\n` +
+      `💰 *Total: R$ ${total.toFixed(2)}*\n\n` +
+      `Como prefere registrar?\n\n` +
+      `1️⃣ Tudo junto (R$ ${total.toFixed(2)})\n` +
+      `2️⃣ Cada item separado`;
   }
   
+  // Falta dados - usar sistema de recuperação
   if (hipotese.dados_faltantes.length > 0) {
-    if (hipotese.dados_faltantes.includes("descricao")) {
-      if (hipotese.valor) {
-        msg = `Vi o valor de *R$ ${hipotese.valor.toFixed(2)}* 💰\n\nMe conta: o que você comprou?`;
-      } else {
-        msg = `Não consegui identificar bem 🤔\n\nO que foi essa compra e quanto custou?`;
-      }
-      return msg;
-    }
-    
-    if (hipotese.dados_faltantes.includes("valor")) {
-      if (hipotese.descricao) {
-        msg = `Entendi que foi *${hipotese.descricao}*\n\nQuanto custou?`;
-      } else {
-        msg = `Quanto foi esse gasto? 💰`;
-      }
-      return msg;
-    }
-    
-    if (hipotese.dados_faltantes.includes("forma_pagamento")) {
-      msg = `Vi *R$ ${hipotese.valor?.toFixed(2)}* - ${hipotese.descricao}\n\n`;
-      msg += `Como você pagou?\n1️⃣ Pix\n2️⃣ Dinheiro\n3️⃣ Débito\n4️⃣ Crédito`;
-      return msg;
-    }
+    const rec = gerarRecuperacao("dados_incompletos", {
+      valor: hipotese.valor,
+      descricao: hipotese.descricao,
+      faltando: hipotese.dados_faltantes
+    });
+    return formatarRecuperacao(rec);
   }
   
+  // Confirmação completa - formato premium
   const tipoTexto = hipotese.tipo_operacao === "entrada" ? "Entrada" : "Gasto";
   const emoji = hipotese.tipo_operacao === "entrada" ? "📈" : "💸";
+  const emojiCategoria = getEmojiCategoria(hipotese.categoria || "outros");
+  const formaPagamento = formatarFormaPagamento(hipotese.forma_pagamento);
   
-  msg = `Entendi assim 👇\n\n`;
-  msg += `${emoji} ${tipoTexto} de *R$ ${hipotese.valor?.toFixed(2)}*\n`;
-  if (hipotese.descricao) msg += `📝 ${hipotese.descricao}\n`;
-  if (hipotese.categoria) msg += `📂 ${hipotese.categoria}\n`;
-  if (hipotese.forma_pagamento) msg += `💳 ${hipotese.forma_pagamento.toUpperCase()}\n`;
-  
-  msg += `\nPosso registrar assim? 😊`;
+  let msg = `Entendi assim 👇\n\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `${emoji} *${tipoTexto}*: R$ ${hipotese.valor?.toFixed(2)}\n`;
+  if (hipotese.descricao) msg += `📝 *O quê*: ${hipotese.descricao}\n`;
+  if (hipotese.categoria) msg += `📂 *Categoria*: ${emojiCategoria} ${hipotese.categoria}\n`;
+  if (formaPagamento) msg += `💳 *Pagamento*: ${formaPagamento}\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  msg += `Posso registrar? *Sim* ou *Não*`;
   
   return msg;
 }
@@ -1662,8 +1837,14 @@ serve(async (req) => {
         );
       }
       
+      // Recuperação graciosa quando não entende
       const msgRepete = montarMensagemConfirmacao(hipotesePendente);
-      await sendWhatsAppMessage(phoneNumber, `Não entendi 🤔\n\n${msgRepete}`, messageSource);
+      const recuperacao = gerarRecuperacao("resposta_fora_contexto", { 
+        pergunta_anterior: hipotesePendente.dados_faltantes.length > 0 
+          ? `Me ajuda aqui: ${hipotesePendente.dados_faltantes[0] === "valor" ? "quanto foi?" : "o que era?"}`
+          : "Sim ou Não?"
+      });
+      await sendWhatsAppMessage(phoneNumber, `${recuperacao.mensagem}\n\n${msgRepete}`, messageSource);
       
       return new Response(
         JSON.stringify({ status: "ok", awaiting: true }),
@@ -1678,7 +1859,8 @@ serve(async (req) => {
       const audioBase64 = await downloadWhatsAppMedia(mediaId);
       
       if (!audioBase64) {
-        await sendWhatsAppMessage(phoneNumber, "Não consegui baixar o áudio 😕\nPode tentar enviar de novo?", messageSource);
+        const rec = gerarRecuperacao("audio_confuso");
+        await sendWhatsAppMessage(phoneNumber, formatarRecuperacao(rec), messageSource);
         return new Response(JSON.stringify({ status: "ok", error: "download_failed" }), {
           status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -1687,7 +1869,8 @@ serve(async (req) => {
       const transcricao = await transcreverAudioPuro(audioBase64, mediaMimeType);
       
       if (!transcricao) {
-        await sendWhatsAppMessage(phoneNumber, "Não consegui entender o áudio 😕\nPode tentar falar mais devagar ou escrever?", messageSource);
+        const rec = gerarRecuperacao("audio_confuso");
+        await sendWhatsAppMessage(phoneNumber, formatarRecuperacao(rec), messageSource);
         return new Response(JSON.stringify({ status: "ok", error: "transcription_failed" }), {
           status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -1713,12 +1896,24 @@ serve(async (req) => {
       
       const dadosImagem = await extrairDadosImagemPuro(imageBase64, mediaMimeType);
       
-      if (!dadosImagem || dadosImagem.tipo === "outro") {
-        await sendWhatsAppMessage(phoneNumber, 
-          "Não consegui identificar informações financeiras nessa imagem 🤔\n\nPode me contar o que era?", 
-          messageSource
-        );
-        return new Response(JSON.stringify({ status: "ok", image_type: "outro" }), {
+      // Fallback inteligente para imagem não reconhecida
+      if (!dadosImagem || dadosImagem.tipo === "outro" || dadosImagem.confianca < 0.3) {
+        const recuperacao = gerarRecuperacao("imagem_ilegivel");
+        const msgFallback = formatarRecuperacao(recuperacao);
+        
+        await sendWhatsAppMessage(phoneNumber, msgFallback, messageSource);
+        
+        // Salva contexto para retomada
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: "[IMAGEM]",
+          ai_response: msgFallback,
+          tipo: "imagem_fallback",
+          resumo: JSON.stringify({ aguardando: "dados_manuais", origem: "imagem" })
+        });
+        
+        return new Response(JSON.stringify({ status: "ok", image_type: "fallback" }), {
           status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
@@ -1776,8 +1971,33 @@ serve(async (req) => {
           .eq("id", usuarioId)
           .single();
         
+        // NÃO BLOQUEAR - detectar o que o usuário realmente quer
         if (usr?.onboarding_status === "concluido") {
-          const msg = "Você já fez a organização inicial comigo 😊\n\nQuer adicionar mais alguma coisa? Me conta o que você precisa.";
+          // Detectar intenção real
+          const msgLower = messageText.toLowerCase();
+          
+          // Quer detalhar cartões?
+          if (msgLower.includes("cartão") || msgLower.includes("cartao") || msgLower.includes("detalhar")) {
+            const msg = `Claro! 💳\n\nVamos atualizar seus cartões.\n\nMe manda um print das faturas ou me conta:\n• Qual cartão?\n• Qual o limite?`;
+            await sendWhatsAppMessage(phoneNumber, msg, messageSource);
+            return new Response(
+              JSON.stringify({ status: "ok", action: "detalhar_cartoes" }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          
+          // Quer adicionar recorrente?
+          if (msgLower.includes("recorrente") || msgLower.includes("fixo") || msgLower.includes("mensal")) {
+            const msg = `Vamos adicionar gastos fixos 📌\n\nMe conta: qual gasto e quanto custa por mês?`;
+            await sendWhatsAppMessage(phoneNumber, msg, messageSource);
+            return new Response(
+              JSON.stringify({ status: "ok", action: "adicionar_recorrente" }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          
+          // Genérico - oferecer opções
+          const msg = `Você já organizou comigo antes 👍\n\nO que quer fazer agora?\n\n💳 *Atualizar cartões*\n📌 *Adicionar gasto fixo*\n🔄 *Recomeçar do zero*\n\n_Ou me manda um gasto que eu registro!_`;
           await sendWhatsAppMessage(phoneNumber, msg, messageSource);
           
           await supabase.from("historico_conversas").insert({
@@ -1925,12 +2145,27 @@ serve(async (req) => {
 
       case "saudacao": {
         const primeiroNome = nomeUsuario.split(" ")[0];
-        acaoRealizada = `Olá, ${primeiroNome}! 👋\n\nComo posso te ajudar hoje?\n\n💰 Registrar um gasto\n📊 Ver resumo do mês\n🔄 Organizar finanças`;
+        const saudacoes = [
+          `E aí, ${primeiroNome}! 👋\n\nO que você precisa?\n\n💸 Registrar gasto\n📊 Ver resumo\n🎤 Manda um áudio que eu entendo`,
+          `Fala, ${primeiroNome}! 👋\n\nComo posso ajudar?\n\n💰 Manda um gasto\n📊 Quer ver o resumo do mês?\n📷 Manda print de comprovante`,
+          `Opa, ${primeiroNome}! 🙂\n\nPode mandar gasto, áudio ou foto que eu organizo pra você.`
+        ];
+        acaoRealizada = saudacoes[Math.floor(Math.random() * saudacoes.length)];
         break;
       }
 
       case "ajuda": {
-        acaoRealizada = `Posso te ajudar com:\n\n💸 *Registrar gastos*\n_"Gastei 50 no mercado"_\n\n📊 *Ver resumo*\n_"Quanto gastei esse mês?"_\n\n🔄 *Organizar tudo*\n_"Quero centralizar minhas finanças"_\n\nÉ só me contar naturalmente! 😊`;
+        acaoRealizada = `*Como usar o Finax* 📱\n\n` +
+          `💸 *Registrar gasto*\n` +
+          `   _"Gastei 50 no mercado"_\n` +
+          `   _"120 reais de uber"_\n\n` +
+          `📷 *Enviar comprovante*\n` +
+          `   _Manda foto do Pix, fatura ou cupom_\n\n` +
+          `🎤 *Áudio funciona*\n` +
+          `   _Manda áudio contando o gasto_\n\n` +
+          `📊 *Ver resumo*\n` +
+          `   _"Quanto gastei esse mês?"_\n\n` +
+          `É só mandar naturalmente que eu entendo! 🙂`;
         break;
       }
 
