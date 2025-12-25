@@ -28,21 +28,30 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 type MessageSource = "meta" | "vonage";
 
 // ============================================================================
-// 🧠 MÁQUINA DE ESTADOS DO FINAX
+// 🧠 FINAX - IA FINANCEIRA ADAPTÁVEL E RESILIENTE
 // ============================================================================
 // 
-// TODO USUÁRIO TEM UM ESTADO GLOBAL:
-// - modo: "onboarding" | "operacional"
-// - etapa_onboarding: null | "bancos" | "cartoes" | "dividas" | "gastos_fixos" | "finalizado"
+// PRINCÍPIO FUNDAMENTAL:
+// A Finax NÃO é um chatbot de regras fixas.
+// É uma IA consciente de contexto, estado e objetivo do usuário.
 //
-// REGRA FUNDAMENTAL: O ESTADO SEMPRE TEM PRIORIDADE SOBRE INTENTS
-// 
+// REGRA DE OURO:
+// - Estado orienta, não engessa
+// - Responder é mais importante que avançar etapa
+// - SEMPRE pode registrar gastos, mesmo durante onboarding
+// - Recuperação suave após desvios
+//
+// ETAPAS DO ONBOARDING (ordem sugerida, não obrigatória):
+// renda → cartoes → cartoes_detalhe → recorrentes → dividas → organizar_mes → finalizado
+//
 // ============================================================================
 
-// Estado do usuário
+// Estado completo do usuário
 interface EstadoUsuario {
   modo: "onboarding" | "operacional";
-  etapa_onboarding: "bancos" | "cartoes" | "dividas" | "gastos_fixos" | "finalizado" | null;
+  etapa_onboarding: "renda" | "cartoes" | "cartoes_detalhe" | "recorrentes" | "dividas" | "organizar_mes" | "finalizado" | null;
+  onboarding_em_pausa: boolean;
+  cartao_atual?: string;
 }
 
 // Interface para hipótese pendente
@@ -120,21 +129,23 @@ async function getEstadoUsuario(usuarioId: string): Promise<EstadoUsuario> {
   if (data?.onboarding_status === "iniciado" && data?.onboarding_step !== "finalizado") {
     return {
       modo: "onboarding",
-      etapa_onboarding: data.onboarding_step || "bancos"
+      etapa_onboarding: data.onboarding_step || "renda",
+      onboarding_em_pausa: false
     };
   }
   
   // Usuário operacional
   return {
     modo: "operacional",
-    etapa_onboarding: null
+    etapa_onboarding: null,
+    onboarding_em_pausa: false
   };
 }
 
 // Atualiza etapa do onboarding
 async function setOnboardingStep(
   usuarioId: string, 
-  step: "bancos" | "cartoes" | "dividas" | "gastos_fixos" | "finalizado"
+  step: "renda" | "cartoes" | "cartoes_detalhe" | "recorrentes" | "dividas" | "organizar_mes" | "finalizado"
 ): Promise<void> {
   const updates: Record<string, string> = { onboarding_step: step };
   
@@ -156,7 +167,7 @@ async function iniciarOnboarding(usuarioId: string): Promise<void> {
     .from("usuarios")
     .update({ 
       onboarding_status: "iniciado",
-      onboarding_step: "bancos"
+      onboarding_step: "renda"
     })
     .eq("id", usuarioId);
   
@@ -164,13 +175,67 @@ async function iniciarOnboarding(usuarioId: string): Promise<void> {
 }
 
 // ============================================================================
-// 🧠 PROCESSADOR DE ONBOARDING (MÁQUINA DE ESTADOS)
+// 🧠 PROCESSADOR DE ONBOARDING HUMANIZADO
+// ============================================================================
+// 
+// Seguindo o Prompt Mestre:
+// - Perguntas naturais, não robóticas
+// - Sempre pode registrar gastos, mesmo durante onboarding
+// - Recuperação suave após desvios
+// - Não bloqueia, não força, não repete
+//
 // ============================================================================
 
 interface OnboardingResult {
   mensagem: string;
-  proxima_etapa: "bancos" | "cartoes" | "dividas" | "gastos_fixos" | "finalizado";
+  proxima_etapa: "renda" | "cartoes" | "cartoes_detalhe" | "recorrentes" | "dividas" | "organizar_mes" | "finalizado";
   dados_salvos?: any;
+  desvio?: boolean; // Se o usuário desviou do fluxo (ex: registrou um gasto)
+}
+
+// Detecta se a mensagem é um gasto ou algo fora do onboarding
+async function detectarDesvio(mensagem: string): Promise<{ ehDesvio: boolean; tipoDesvio?: string; dados?: any }> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Analise se esta mensagem é:
+1. Uma resposta de onboarding (sobre renda, cartões, gastos fixos, dívidas)
+2. Um registro de gasto/entrada (ex: "gastei 50 no mercado")
+3. Uma pergunta/conversa fora do contexto
+
+Responda APENAS JSON:
+{
+  "tipo": "resposta_onboarding" | "registro_gasto" | "registro_entrada" | "pergunta" | "outro",
+  "valor": number ou null (se for gasto/entrada),
+  "descricao": "string" ou null
+}`
+          },
+          { role: "user", content: mensagem }
+        ]
+      }),
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '{"tipo": "resposta_onboarding"}';
+    const parsed = JSON.parse(content.replace(/```json\n?|\n?```/g, "").trim());
+    
+    if (parsed.tipo === "registro_gasto" || parsed.tipo === "registro_entrada") {
+      return { ehDesvio: true, tipoDesvio: parsed.tipo, dados: parsed };
+    }
+    
+    return { ehDesvio: false };
+  } catch {
+    return { ehDesvio: false };
+  }
 }
 
 async function processarEtapaOnboarding(
@@ -181,32 +246,40 @@ async function processarEtapaOnboarding(
   console.log(`🔄 [ONBOARDING] Processando etapa: ${etapaAtual}`);
   console.log(`💬 [ONBOARDING] Mensagem: ${mensagemUsuario}`);
   
+  // Detectar se é um desvio (gasto, pergunta, etc)
+  const desvio = await detectarDesvio(mensagemUsuario);
+  
+  if (desvio.ehDesvio && desvio.tipoDesvio?.includes("registro")) {
+    console.log(`↪️ [ONBOARDING] Desvio detectado: ${desvio.tipoDesvio}`);
+    // Não bloqueia - vamos processar o gasto e depois retomar suavemente
+    return {
+      mensagem: "", // Será tratado pelo fluxo de gastos
+      proxima_etapa: etapaAtual as any, // Mantém a mesma etapa
+      desvio: true,
+      dados_salvos: desvio.dados
+    };
+  }
+  
   switch (etapaAtual) {
-    case "bancos": {
-      // Extrai bancos/instituições da mensagem
-      const bancos = await extrairDadosOnboarding(mensagemUsuario, "bancos");
-      console.log(`🏦 [ONBOARDING] Bancos extraídos:`, bancos);
+    case "renda": {
+      const dados = await extrairDadosOnboarding(mensagemUsuario, "renda");
+      console.log(`💰 [ONBOARDING] Renda extraída:`, dados);
       
-      // Salva cartões/bancos no banco de dados
-      if (bancos.items && bancos.items.length > 0) {
-        for (const banco of bancos.items) {
-          await supabase.from("cartoes_credito").insert({
-            usuario_id: usuarioId,
-            nome: banco,
-            ativo: true
-          });
-        }
+      // Salva saldo mensal se informado
+      if (dados.valor) {
+        await supabase.from("usuarios")
+          .update({ saldo_mensal: dados.valor })
+          .eq("id", usuarioId);
       }
       
-      const qtdBancos = bancos.items?.length || 0;
-      const msgConfirmacao = qtdBancos > 0 
-        ? `Ótimo! Adicionei ${qtdBancos} instituição(ões) 🏦\n\n`
-        : `Entendi!\n\n`;
+      const temValor = dados.valor && dados.valor > 0;
+      const msgRenda = temValor
+        ? `Entendi, cerca de R$ ${dados.valor.toLocaleString('pt-BR')} por mês 👍`
+        : `Tranquilo, podemos ver isso depois`;
       
       return {
-        mensagem: msgConfirmacao + `Você usa cartões de crédito? Se sim, de quais bancos?`,
-        proxima_etapa: "cartoes",
-        dados_salvos: bancos.items
+        mensagem: `${msgRenda}\n\nVocê usa cartão de crédito? Se sim, de quais bancos?`,
+        proxima_etapa: "cartoes"
       };
     }
     
@@ -214,26 +287,81 @@ async function processarEtapaOnboarding(
       const cartoes = await extrairDadosOnboarding(mensagemUsuario, "cartoes");
       console.log(`💳 [ONBOARDING] Cartões extraídos:`, cartoes);
       
-      // Salva cartões de crédito
+      // Salva cartões
       if (cartoes.items && cartoes.items.length > 0) {
         for (const cartao of cartoes.items) {
           await supabase.from("cartoes_credito").insert({
             usuario_id: usuarioId,
-            nome: cartao + " Crédito",
+            nome: cartao,
+            ativo: true
+          });
+        }
+        
+        const primeiroCartao = cartoes.items[0];
+        return {
+          mensagem: `Anotei ${cartoes.items.length} cartão(ões) 💳\n\nVamos ver os detalhes do *${primeiroCartao}*:\nQual é o limite dele?`,
+          proxima_etapa: "cartoes_detalhe",
+          dados_salvos: { cartoes: cartoes.items, cartao_atual: primeiroCartao }
+        };
+      }
+      
+      // Não tem cartões - pula para recorrentes
+      return {
+        mensagem: `Sem cartões, entendi 👍\n\nQuais gastos fixos você tem todo mês?\n\n_Por exemplo: aluguel, internet, celular, Netflix..._`,
+        proxima_etapa: "recorrentes"
+      };
+    }
+    
+    case "cartoes_detalhe": {
+      const detalhes = await extrairDadosOnboarding(mensagemUsuario, "cartao_detalhe");
+      console.log(`💳 [ONBOARDING] Detalhes cartão:`, detalhes);
+      
+      // Atualiza o último cartão com limite
+      if (detalhes.limite) {
+        await supabase.from("cartoes_credito")
+          .update({ 
+            limite_total: detalhes.limite,
+            limite_disponivel: detalhes.limite,
+            dia_fechamento: detalhes.dia_fechamento || null,
+            dia_vencimento: detalhes.dia_vencimento || null
+          })
+          .eq("usuario_id", usuarioId)
+          .order("created_at", { ascending: false })
+          .limit(1);
+      }
+      
+      return {
+        mensagem: `Anotado! 👍\n\nAgora me conta: quais gastos fixos você tem todo mês?\n\n_Tipo aluguel, internet, celular, streaming..._`,
+        proxima_etapa: "recorrentes"
+      };
+    }
+    
+    case "recorrentes": {
+      const gastos = await extrairDadosOnboarding(mensagemUsuario, "gastos_fixos");
+      console.log(`🔄 [ONBOARDING] Gastos fixos extraídos:`, gastos);
+      
+      // Salva gastos recorrentes
+      if (gastos.recorrentes && gastos.recorrentes.length > 0) {
+        for (const gasto of gastos.recorrentes) {
+          await supabase.from("gastos_recorrentes").insert({
+            usuario_id: usuarioId,
+            descricao: gasto.descricao,
+            categoria: gasto.categoria || "outros",
+            valor_parcela: gasto.valor || 0,
+            tipo_recorrencia: "mensal",
             ativo: true
           });
         }
       }
       
-      const temCartoes = cartoes.items && cartoes.items.length > 0;
-      const msgConfirmacao = temCartoes
-        ? `Anotei ${cartoes.items.length} cartão(ões) de crédito 💳\n\n`
-        : `Sem cartões de crédito, entendido!\n\n`;
+      const temGastos = gastos.recorrentes && gastos.recorrentes.length > 0;
+      const msgGastos = temGastos
+        ? `Salvei ${gastos.recorrentes.length} gasto(s) fixo(s) 📌`
+        : `Ok, sem gastos fixos por enquanto`;
       
       return {
-        mensagem: msgConfirmacao + `Hoje você tem alguma dívida ou parcelamento ativo?`,
-        proxima_etapa: "dividas",
-        dados_salvos: cartoes.items
+        mensagem: `${msgGastos}\n\nHoje você tem alguma dívida ou parcelamento ativo?`,
+        proxima_etapa: "dividas"
       };
     }
     
@@ -256,51 +384,28 @@ async function processarEtapaOnboarding(
       }
       
       const temDividas = dividas.parcelamentos && dividas.parcelamentos.length > 0;
-      const msgConfirmacao = temDividas
-        ? `Registrei ${dividas.parcelamentos.length} parcelamento(s) 📝\n\n`
-        : `Sem dívidas ativas, ótimo!\n\n`;
+      const msgDividas = temDividas
+        ? `Registrei ${dividas.parcelamentos.length} parcelamento(s) 📝`
+        : `Ótimo, sem dívidas ativas!`;
       
       return {
-        mensagem: msgConfirmacao + `Quais gastos fixos você já tem todo mês?\n\n_(aluguel, internet, academia, streaming, etc)_`,
-        proxima_etapa: "gastos_fixos",
-        dados_salvos: dividas.parcelamentos
+        mensagem: `${msgDividas}\n\nPerfeito! Agora eu já consigo te ajudar de verdade no dia a dia 😊\n\nA partir de agora, pode me mandar gastos, dúvidas ou pedir análises.`,
+        proxima_etapa: "finalizado"
       };
     }
     
-    case "gastos_fixos": {
-      const gastos = await extrairDadosOnboarding(mensagemUsuario, "gastos_fixos");
-      console.log(`🔄 [ONBOARDING] Gastos fixos extraídos:`, gastos);
-      
-      // Salva gastos recorrentes
-      if (gastos.recorrentes && gastos.recorrentes.length > 0) {
-        for (const gasto of gastos.recorrentes) {
-          await supabase.from("gastos_recorrentes").insert({
-            usuario_id: usuarioId,
-            descricao: gasto.descricao,
-            categoria: gasto.categoria || "outros",
-            valor_parcela: gasto.valor || 0,
-            tipo_recorrencia: "mensal",
-            ativo: true
-          });
-        }
-      }
-      
-      const temGastos = gastos.recorrentes && gastos.recorrentes.length > 0;
-      const msgConfirmacao = temGastos
-        ? `Salvei ${gastos.recorrentes.length} gasto(s) fixo(s) 📌\n\n`
-        : `Sem gastos fixos por enquanto, tudo bem!\n\n`;
-      
+    case "organizar_mes": {
+      // Etapa final opcional
       return {
-        mensagem: msgConfirmacao + `Perfeito. Agora eu já consigo te ajudar de verdade no dia a dia 😊\n\nA partir de agora, pode me mandar gastos, dúvidas ou pedir análises.`,
-        proxima_etapa: "finalizado",
-        dados_salvos: gastos.recorrentes
+        mensagem: `Perfeito! Sua organização está pronta 🎉\n\nAgora é só ir mandando seus gastos no dia a dia que eu cuido do resto.`,
+        proxima_etapa: "finalizado"
       };
     }
     
     default:
       return {
-        mensagem: "Algo deu errado no onboarding. Vamos recomeçar?\n\nQuais bancos ou cartões você usa hoje?",
-        proxima_etapa: "bancos"
+        mensagem: "Vamos continuar? Me conta sua renda mensal aproximada 💰",
+        proxima_etapa: "renda"
       };
   }
 }
@@ -309,23 +414,30 @@ async function processarEtapaOnboarding(
 async function extrairDadosOnboarding(mensagem: string, tipo: string): Promise<any> {
   try {
     const prompts: Record<string, string> = {
-      bancos: `Extraia os nomes de bancos/instituições financeiras mencionados nesta mensagem.
-Exemplos: Nubank, Itaú, Bradesco, Santander, Caixa, BB, Inter, C6, PicPay, Mercado Pago, Sicredi, etc.
-Responda APENAS JSON: {"items": ["banco1", "banco2"]}
-Se não mencionar nenhum banco ou disser "não" ou "nenhum", retorne {"items": []}`,
+      renda: `Extraia o valor de renda/salário mencionado.
+Responda APENAS JSON: {"valor": number ou null}
+Exemplos válidos: "ganho 3000", "minha renda é 5k", "recebo 4.500"`,
+
+      cartoes: `Extraia os cartões de crédito ou bancos mencionados.
+Se a pessoa disser que não tem cartão, "não", ou "nenhum", retorne lista vazia.
+Responda APENAS JSON: {"items": ["nome1", "nome2"]}
+Exemplos: Nubank, Itaú, Bradesco, C6, Inter, Santander, etc.`,
       
-      cartoes: `Extraia os cartões de crédito mencionados nesta mensagem.
-Se a pessoa disser que não tem cartão ou "não", retorne lista vazia.
-Responda APENAS JSON: {"items": ["cartao1", "cartao2"]}`,
+      cartao_detalhe: `Extraia detalhes do cartão: limite, dia de fechamento, dia de vencimento.
+Responda APENAS JSON: {
+  "limite": number ou null,
+  "dia_fechamento": number ou null,
+  "dia_vencimento": number ou null
+}`,
       
-      dividas: `Extraia dívidas/parcelamentos mencionados nesta mensagem.
-Se a pessoa disser que não tem dívidas ou "não", retorne lista vazia.
-Responda APENAS JSON: {"parcelamentos": [{"descricao": "nome", "valor_total": numero_ou_null, "num_parcelas": numero_ou_null}]}`,
+      gastos_fixos: `Extraia gastos fixos mensais mencionados.
+Se a pessoa disser "não" ou "nenhum", retorne lista vazia.
+Responda APENAS JSON: {"recorrentes": [{"descricao": "nome", "categoria": "categoria", "valor": number ou null}]}
+Categorias: moradia, transporte, alimentacao, lazer, saude, educacao, servicos, outros`,
       
-      gastos_fixos: `Extraia gastos fixos mensais mencionados nesta mensagem.
-Exemplos: aluguel, internet, celular, academia, Netflix, Spotify, etc.
-Se a pessoa disser que não tem gastos fixos ou "não", retorne lista vazia.
-Responda APENAS JSON: {"recorrentes": [{"descricao": "nome", "categoria": "categoria", "valor": numero_ou_null}]}`
+      dividas: `Extraia dívidas/parcelamentos mencionados.
+Se a pessoa disser "não" ou "nenhum", retorne lista vazia.
+Responda APENAS JSON: {"parcelamentos": [{"descricao": "nome", "valor_total": number ou null, "num_parcelas": number ou null}]}`
     };
     
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -337,7 +449,7 @@ Responda APENAS JSON: {"recorrentes": [{"descricao": "nome", "categoria": "categ
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: prompts[tipo] || prompts.bancos },
+          { role: "system", content: prompts[tipo] || prompts.renda },
           { role: "user", content: mensagem }
         ]
       }),
@@ -503,6 +615,7 @@ async function transcreverAudioPuro(audioBase64: string, mimeType: string): Prom
 async function extrairDadosImagemPuro(imageBase64: string, mimeType: string): Promise<DadosImagemBrutos | null> {
   try {
     console.log("📷 [PERCEPÇÃO] Extraindo dados da imagem...");
+    console.log(`📷 [PERCEPÇÃO] MimeType: ${mimeType}, Base64 length: ${imageBase64.length}`);
     
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -511,33 +624,42 @@ async function extrairDadosImagemPuro(imageBase64: string, mimeType: string): Pr
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "google/gemini-2.5-pro",
         messages: [
           {
             role: "user",
             content: [
               {
                 type: "text",
-                text: `Extraia dados visuais desta imagem. NÃO tome decisões, apenas extraia.
+                text: `Analise esta imagem e extraia informações financeiras.
 
-IDENTIFIQUE:
-- tipo: "comprovante" (pagamento), "fatura" (cartão), "extrato" (banco), "outro"
-- valor: número principal se visível
-- descricao: texto descritivo se visível
-- forma_pagamento: "pix", "dinheiro", "debito", "credito" se identificável
-- estabelecimento: nome do local se visível
-- itens: lista de produtos/itens se for nota fiscal
+TIPOS DE IMAGEM:
+- "comprovante": comprovante de Pix, transferência, pagamento
+- "fatura": fatura de cartão de crédito
+- "extrato": extrato bancário
+- "nota_fiscal": cupom fiscal, nota de compra
+- "outro": não é documento financeiro
 
-Responda APENAS JSON:
+EXTRAIA O QUE CONSEGUIR VER:
+- valor: o valor principal (R$)
+- descricao: o que foi comprado ou a quem foi pago
+- forma_pagamento: "pix", "dinheiro", "debito" ou "credito"
+- estabelecimento: nome da loja/local
+- itens: lista de produtos se for nota fiscal
+
+RESPONDA APENAS EM JSON:
 {
-  "tipo": "comprovante" | "fatura" | "extrato" | "outro",
-  "valor": number ou null,
-  "descricao": "string" ou null,
-  "forma_pagamento": "pix" | "dinheiro" | "debito" | "credito" ou null,
-  "estabelecimento": "string" ou null,
-  "itens": [{"descricao": "string", "valor": number}] ou null,
-  "confianca": 0.0 a 1.0
-}`
+  "tipo": "comprovante",
+  "valor": 150.00,
+  "descricao": "Pagamento fulano",
+  "forma_pagamento": "pix",
+  "estabelecimento": "Mercado XYZ",
+  "itens": null,
+  "confianca": 0.9
+}
+
+Se não conseguir identificar, responda:
+{"tipo": "outro", "confianca": 0.1}`
               },
               {
                 type: "image_url",
@@ -551,13 +673,24 @@ Responda APENAS JSON:
       }),
     });
 
+    if (!response.ok) {
+      console.error("❌ [PERCEPÇÃO] Erro na API:", response.status, await response.text());
+      return null;
+    }
+
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '{"tipo": "outro", "confianca": 0}';
-    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    console.log("📷 [PERCEPÇÃO] Resposta bruta:", JSON.stringify(data).substring(0, 500));
     
-    return JSON.parse(cleanJson) as DadosImagemBrutos;
+    const content = data.choices?.[0]?.message?.content || '{"tipo": "outro", "confianca": 0}';
+    console.log("📷 [PERCEPÇÃO] Content:", content);
+    
+    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    const parsed = JSON.parse(cleanJson) as DadosImagemBrutos;
+    
+    console.log(`📷 [PERCEPÇÃO] Dados extraídos:`, JSON.stringify(parsed));
+    return parsed;
   } catch (error) {
-    console.error("Erro ao analisar imagem:", error);
+    console.error("❌ [PERCEPÇÃO] Erro ao analisar imagem:", error);
     return null;
   }
 }
@@ -1164,7 +1297,7 @@ ${historicoRecente ? `CONTEXTO:\n${historicoRecente}` : ""}`
   }
 }
 
-// Envia onboarding para novo usuário
+// Envia onboarding para novo usuário (humanizado)
 async function enviarOnboardingNovoUsuario(
   phoneNumber: string,
   messageSource: MessageSource,
@@ -1173,47 +1306,32 @@ async function enviarOnboardingNovoUsuario(
   const primeiroNome = nome.split(" ")[0];
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   
+  // Mensagem 1 - Apresentação calorosa
   const msg1 = `Oi, ${primeiroNome}! 👋
 
-Prazer, eu sou o *Finax* — seu assistente financeiro pessoal.
+Prazer, eu sou a *Finax* — sua assistente financeira pessoal.
 
-Estou aqui pra te ajudar a organizar suas finanças de um jeito simples, direto pelo WhatsApp.`;
+Vou te ajudar a organizar suas finanças de um jeito leve, sem complicação.`;
 
   await sendWhatsAppMessage(phoneNumber, msg1, messageSource);
-  await delay(2500);
+  await delay(2000);
   
-  const msg2 = `Comigo você organiza tudo em um só lugar: gastos do dia a dia, cartões, dívidas e salário.
+  // Mensagem 2 - Proposta de valor
+  const msg2 = `Pode me mandar gastos por texto, áudio ou foto de comprovante.
 
-Sem planilha. Sem complicação. Só mandar mensagem como se fosse um amigo.`;
+Eu organizo tudo pra você — é só ir vivendo a vida e mandando os gastos quando lembrar 😊`;
 
   await sendWhatsAppMessage(phoneNumber, msg2, messageSource);
   await delay(2000);
   
-  const msg3 = `💡 *Dica importante*
+  // Mensagem 3 - Início do onboarding de forma natural
+  const msg3 = `Pra eu te conhecer melhor e conseguir te ajudar de verdade...
 
-Fixa o Finax no WhatsApp pra não perder seus registros no dia a dia.
+Me conta: quanto você costuma ganhar por mês? 💰
 
-Assim seu controle financeiro fica sempre a um toque.`;
+_Pode ser aproximado, tipo "uns 3 mil" ou "varia entre 4 e 5k"_`;
 
   await sendWhatsAppMessage(phoneNumber, msg3, messageSource);
-  await delay(2500);
-  
-  const msg4 = `🎁 *Acesso liberado*
-
-Você tem acesso completo ao Finax — todas as funcionalidades estão liberadas.
-
-Pode registrar gastos, entradas, parcelamentos, ver resumos...`;
-
-  await sendWhatsAppMessage(phoneNumber, msg4, messageSource);
-  await delay(2500);
-  
-  const msg5 = `Quer que eu te ajude agora a organizar seus cartões, dívidas e salário?
-
-Fazendo isso, fica muito mais fácil registrar gastos depois.
-
-Responde *sim* se quiser começar, ou pode mandar direto seu primeiro gasto 💰`;
-
-  await sendWhatsAppMessage(phoneNumber, msg5, messageSource);
 }
 
 // ============================================================================
@@ -1383,17 +1501,55 @@ serve(async (req) => {
     console.log(`🎯 [ESTADO] Modo: ${estadoUsuario.modo} | Etapa: ${estadoUsuario.etapa_onboarding}`);
 
     // ========================================================================
-    // MODO ONBOARDING - ESTADO TEM PRIORIDADE ABSOLUTA
+    // MODO ONBOARDING - FLEXÍVEL (PERMITE DESVIOS)
     // ========================================================================
     if (estadoUsuario.modo === "onboarding" && messageType === "text") {
       console.log(`📋 [ONBOARDING] Processando etapa: ${estadoUsuario.etapa_onboarding}`);
       
       // Processa a etapa atual
       const resultado = await processarEtapaOnboarding(
-        estadoUsuario.etapa_onboarding || "bancos",
+        estadoUsuario.etapa_onboarding || "renda",
         messageText,
         usuarioId
       );
+      
+      // Se houve desvio (usuário mandou gasto no meio do onboarding)
+      if (resultado.desvio && resultado.dados_salvos) {
+        console.log(`↪️ [ONBOARDING] Tratando desvio - registro de gasto`);
+        
+        // Cria hipótese para o gasto
+        const hipotese: HipotesePendente = {
+          origem: "texto",
+          tipo_operacao: resultado.dados_salvos.tipo === "registro_entrada" ? "entrada" : "gasto",
+          valor: resultado.dados_salvos.valor,
+          descricao: resultado.dados_salvos.descricao,
+          categoria: "outros",
+          confianca: 0.7,
+          dados_faltantes: [],
+          mensagem_original: messageText,
+          created_at: new Date().toISOString()
+        };
+        
+        if (!hipotese.valor) hipotese.dados_faltantes.push("valor");
+        if (!hipotese.descricao) hipotese.dados_faltantes.push("descricao");
+        
+        await salvarHipotesePendente(phoneNumber, usuarioId, hipotese);
+        const msgConfirmacao = montarMensagemConfirmacao(hipotese);
+        await sendWhatsAppMessage(phoneNumber, msgConfirmacao, messageSource);
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: usuarioId,
+          user_message: messageText,
+          ai_response: msgConfirmacao,
+          tipo: "onboarding_desvio_gasto"
+        });
+        
+        return new Response(
+          JSON.stringify({ status: "ok", desvio: true, awaiting_validation: true }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
       
       // Atualiza para próxima etapa
       await setOnboardingStep(usuarioId, resultado.proxima_etapa);
