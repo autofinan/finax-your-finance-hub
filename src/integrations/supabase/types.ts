@@ -152,63 +152,6 @@ export type Database = {
           },
         ]
       }
-      conversas_ativas: {
-        Row: {
-          atualizado_em: string | null
-          campos_pendentes: string[] | null
-          criado_em: string | null
-          dados_coletados: Json | null
-          estado: string
-          expira_em: string | null
-          id: string
-          mensagens_usuario: string[] | null
-          tipo_operacao: string
-          ultima_pergunta_ia: string | null
-          usuario_id: string | null
-        }
-        Insert: {
-          atualizado_em?: string | null
-          campos_pendentes?: string[] | null
-          criado_em?: string | null
-          dados_coletados?: Json | null
-          estado: string
-          expira_em?: string | null
-          id?: string
-          mensagens_usuario?: string[] | null
-          tipo_operacao: string
-          ultima_pergunta_ia?: string | null
-          usuario_id?: string | null
-        }
-        Update: {
-          atualizado_em?: string | null
-          campos_pendentes?: string[] | null
-          criado_em?: string | null
-          dados_coletados?: Json | null
-          estado?: string
-          expira_em?: string | null
-          id?: string
-          mensagens_usuario?: string[] | null
-          tipo_operacao?: string
-          ultima_pergunta_ia?: string | null
-          usuario_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "conversas_ativas_usuario_id_fkey"
-            columns: ["usuario_id"]
-            isOneToOne: false
-            referencedRelation: "usuarios"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "conversas_ativas_usuario_id_fkey"
-            columns: ["usuario_id"]
-            isOneToOne: false
-            referencedRelation: "vw_dashboard_usuario"
-            referencedColumns: ["usuario_id"]
-          },
-        ]
-      }
       employees: {
         Row: {
           created_at: string | null
@@ -684,17 +627,13 @@ export type Database = {
       transacoes: {
         Row: {
           atualizado_em: string | null
-          cartao_id: string | null
           categoria: string
           created_at: string | null
           data: string
-          data_transacao: string | null
           descricao: string | null
           essencial: boolean | null
           fatura_id: string | null
-          forma_pagamento: string | null
           hash_unico: string | null
-          hora_transacao: string | null
           id: string
           id_cartao: string | null
           id_recorrente: string | null
@@ -706,7 +645,6 @@ export type Database = {
           parcelamento_id: string | null
           recorrente: boolean | null
           status: string | null
-          tags: string[] | null
           tipo: string
           total_parcelas: number | null
           usuario_id: string | null
@@ -714,17 +652,13 @@ export type Database = {
         }
         Insert: {
           atualizado_em?: string | null
-          cartao_id?: string | null
           categoria: string
           created_at?: string | null
           data?: string
-          data_transacao?: string | null
           descricao?: string | null
           essencial?: boolean | null
           fatura_id?: string | null
-          forma_pagamento?: string | null
           hash_unico?: string | null
-          hora_transacao?: string | null
           id?: string
           id_cartao?: string | null
           id_recorrente?: string | null
@@ -736,7 +670,6 @@ export type Database = {
           parcelamento_id?: string | null
           recorrente?: boolean | null
           status?: string | null
-          tags?: string[] | null
           tipo: string
           total_parcelas?: number | null
           usuario_id?: string | null
@@ -744,17 +677,13 @@ export type Database = {
         }
         Update: {
           atualizado_em?: string | null
-          cartao_id?: string | null
           categoria?: string
           created_at?: string | null
           data?: string
-          data_transacao?: string | null
           descricao?: string | null
           essencial?: boolean | null
           fatura_id?: string | null
-          forma_pagamento?: string | null
           hash_unico?: string | null
-          hora_transacao?: string | null
           id?: string
           id_cartao?: string | null
           id_recorrente?: string | null
@@ -766,20 +695,12 @@ export type Database = {
           parcelamento_id?: string | null
           recorrente?: boolean | null
           status?: string | null
-          tags?: string[] | null
           tipo?: string
           total_parcelas?: number | null
           usuario_id?: string | null
           valor?: number
         }
         Relationships: [
-          {
-            foreignKeyName: "transacoes_cartao_id_fkey"
-            columns: ["cartao_id"]
-            isOneToOne: false
-            referencedRelation: "cartoes_credito"
-            referencedColumns: ["id"]
-          },
           {
             foreignKeyName: "transacoes_id_cartao_fkey"
             columns: ["id_cartao"]
@@ -921,31 +842,6 @@ export type Database = {
           },
           {
             foreignKeyName: "faturas_cartao_usuario_id_fkey"
-            columns: ["usuario_id"]
-            isOneToOne: false
-            referencedRelation: "vw_dashboard_usuario"
-            referencedColumns: ["usuario_id"]
-          },
-        ]
-      }
-      vw_gastos_categoria: {
-        Row: {
-          categoria: string | null
-          mes: string | null
-          quantidade: number | null
-          total: number | null
-          usuario_id: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "transacoes_usuario_id_fkey"
-            columns: ["usuario_id"]
-            isOneToOne: false
-            referencedRelation: "usuarios"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
@@ -1120,32 +1016,6 @@ export type Database = {
           },
           {
             foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
-            columns: ["usuario_id"]
-            isOneToOne: false
-            referencedRelation: "vw_dashboard_usuario"
-            referencedColumns: ["usuario_id"]
-          },
-        ]
-      }
-      vw_resumo_mensal: {
-        Row: {
-          mes: string | null
-          saldo: number | null
-          total_entradas: number | null
-          total_saidas: number | null
-          total_transacoes: number | null
-          usuario_id: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "transacoes_usuario_id_fkey"
-            columns: ["usuario_id"]
-            isOneToOne: false
-            referencedRelation: "usuarios"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
@@ -1334,7 +1204,6 @@ export type Database = {
         Args: { p_ano: number; p_mes: number; p_user_id: string }
         Returns: undefined
       }
-      limpar_conversas_expiradas: { Args: never; Returns: undefined }
       rpc_criar_parcelamento: {
         Args: {
           p_categoria?: string
