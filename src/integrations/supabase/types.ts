@@ -290,8 +290,11 @@ export type Database = {
           created_at: string | null
           id: string
           interpretacao: Json | null
+          message_id: string | null
           origem: string
+          phone_number: string | null
           status: string | null
+          tipo_midia: string | null
           user_id: string | null
         }
         Insert: {
@@ -299,8 +302,11 @@ export type Database = {
           created_at?: string | null
           id?: string
           interpretacao?: Json | null
+          message_id?: string | null
           origem: string
+          phone_number?: string | null
           status?: string | null
+          tipo_midia?: string | null
           user_id?: string | null
         }
         Update: {
@@ -308,8 +314,11 @@ export type Database = {
           created_at?: string | null
           id?: string
           interpretacao?: Json | null
+          message_id?: string | null
           origem?: string
+          phone_number?: string | null
           status?: string | null
+          tipo_midia?: string | null
           user_id?: string | null
         }
         Relationships: [
@@ -762,6 +771,30 @@ export type Database = {
             referencedColumns: ["usuario_id"]
           },
         ]
+      }
+      processed_messages: {
+        Row: {
+          id: string
+          message_id: string
+          phone_number: string
+          processed_at: string | null
+          source: string | null
+        }
+        Insert: {
+          id?: string
+          message_id: string
+          phone_number: string
+          processed_at?: string | null
+          source?: string | null
+        }
+        Update: {
+          id?: string
+          message_id?: string
+          phone_number?: string
+          processed_at?: string | null
+          source?: string | null
+        }
+        Relationships: []
       }
       resumo_mensal: {
         Row: {
