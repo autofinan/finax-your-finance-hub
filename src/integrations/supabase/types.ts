@@ -156,40 +156,64 @@ export type Database = {
         Row: {
           atualizado_em: string | null
           campos_pendentes: string[] | null
+          contexto: Json | null
           criado_em: string | null
           dados_coletados: Json | null
           estado: string
+          etapa: string | null
           expira_em: string | null
+          expires_at: string | null
           id: string
+          lock_acao: string | null
           mensagens_usuario: string[] | null
           tipo_operacao: string
           ultima_pergunta_ia: string | null
+          ultima_resposta: string | null
+          ultimo_evento_id: string | null
+          ultimo_intent: string | null
+          ultimo_intent_at: string | null
           usuario_id: string | null
         }
         Insert: {
           atualizado_em?: string | null
           campos_pendentes?: string[] | null
+          contexto?: Json | null
           criado_em?: string | null
           dados_coletados?: Json | null
           estado: string
+          etapa?: string | null
           expira_em?: string | null
+          expires_at?: string | null
           id?: string
+          lock_acao?: string | null
           mensagens_usuario?: string[] | null
           tipo_operacao: string
           ultima_pergunta_ia?: string | null
+          ultima_resposta?: string | null
+          ultimo_evento_id?: string | null
+          ultimo_intent?: string | null
+          ultimo_intent_at?: string | null
           usuario_id?: string | null
         }
         Update: {
           atualizado_em?: string | null
           campos_pendentes?: string[] | null
+          contexto?: Json | null
           criado_em?: string | null
           dados_coletados?: Json | null
           estado?: string
+          etapa?: string | null
           expira_em?: string | null
+          expires_at?: string | null
           id?: string
+          lock_acao?: string | null
           mensagens_usuario?: string[] | null
           tipo_operacao?: string
           ultima_pergunta_ia?: string | null
+          ultima_resposta?: string | null
+          ultimo_evento_id?: string | null
+          ultimo_intent?: string | null
+          ultimo_intent_at?: string | null
           usuario_id?: string | null
         }
         Relationships: [
@@ -232,6 +256,78 @@ export type Database = {
           role?: string | null
         }
         Relationships: []
+      }
+      erros_interpretacao: {
+        Row: {
+          created_at: string | null
+          erro: string | null
+          evento_id: string | null
+          id: string
+          resposta_ia: Json | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          erro?: string | null
+          evento_id?: string | null
+          id?: string
+          resposta_ia?: Json | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          erro?: string | null
+          evento_id?: string | null
+          id?: string
+          resposta_ia?: Json | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      eventos_brutos: {
+        Row: {
+          conteudo: Json
+          created_at: string | null
+          id: string
+          interpretacao: Json | null
+          origem: string
+          status: string | null
+          user_id: string | null
+        }
+        Insert: {
+          conteudo: Json
+          created_at?: string | null
+          id?: string
+          interpretacao?: Json | null
+          origem: string
+          status?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          conteudo?: Json
+          created_at?: string | null
+          id?: string
+          interpretacao?: Json | null
+          origem?: string
+          status?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "eventos_brutos_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "eventos_brutos_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
       }
       faturas: {
         Row: {
@@ -417,6 +513,64 @@ export type Database = {
           {
             foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
             columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
+      hipoteses_registro: {
+        Row: {
+          confianca: number | null
+          created_at: string | null
+          dados: Json | null
+          evento_id: string | null
+          id: string
+          idempotency_key: string | null
+          status: string | null
+          tipo: string | null
+          user_id: string | null
+        }
+        Insert: {
+          confianca?: number | null
+          created_at?: string | null
+          dados?: Json | null
+          evento_id?: string | null
+          id?: string
+          idempotency_key?: string | null
+          status?: string | null
+          tipo?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          confianca?: number | null
+          created_at?: string | null
+          dados?: Json | null
+          evento_id?: string | null
+          id?: string
+          idempotency_key?: string | null
+          status?: string | null
+          tipo?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hipoteses_registro_evento_id_fkey"
+            columns: ["evento_id"]
+            isOneToOne: false
+            referencedRelation: "eventos_brutos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hipoteses_registro_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hipoteses_registro_user_id_fkey"
+            columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
@@ -698,6 +852,7 @@ export type Database = {
           id: string
           id_cartao: string | null
           id_recorrente: string | null
+          idempotency_key: string | null
           merchant: string | null
           observacao: string | null
           origem: string | null
@@ -728,6 +883,7 @@ export type Database = {
           id?: string
           id_cartao?: string | null
           id_recorrente?: string | null
+          idempotency_key?: string | null
           merchant?: string | null
           observacao?: string | null
           origem?: string | null
@@ -758,6 +914,7 @@ export type Database = {
           id?: string
           id_cartao?: string | null
           id_recorrente?: string | null
+          idempotency_key?: string | null
           merchant?: string | null
           observacao?: string | null
           origem?: string | null
