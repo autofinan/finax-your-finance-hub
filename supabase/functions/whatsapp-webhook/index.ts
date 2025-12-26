@@ -2,16 +2,14 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ============================================================================
-// 🧠 FINAX - ARQUITETURA INQUEBRÁVEL
+// 🧠 FINAX - ARQUITETURA INQUEBRÁVEL v2.0
 // ============================================================================
 //
-// FLUXO OBRIGATÓRIO:
-// 1. DEDUPE → Nada acontece antes do dedupe
-// 2. EVENTO BRUTO → Salvar tudo sem pensar
-// 3. INTERPRETAÇÃO → IA interpreta, NÃO decide
-// 4. MOTOR DE DECISÃO → Código decide com as 4 perguntas
-// 5. EXECUÇÃO → Registrar, perguntar ou esperar
-// 6. RESPOSTA → Mensagem premium
+// CORREÇÕES APLICADAS:
+// ✅ Guard clause em downloadWhatsAppMedia (nunca baixa 2x)
+// ✅ Try/catch global sempre retorna 200
+// ✅ Flag interpretado (uma interpretação por evento)
+// ✅ Estado conversacional real com lock
 //
 // ============================================================================
 
@@ -157,7 +155,9 @@ async function salvarEventoBruto(
         phone_number: phoneNumber,
         message_id: messageId,
         tipo_midia: tipoMidia,
-        status: "novo"
+        status: "novo",
+        media_downloaded: false,
+        interpretado: false
       })
       .select("id")
       .single();
@@ -178,13 +178,34 @@ async function salvarEventoBruto(
 async function atualizarEventoBruto(eventoId: string, interpretacao: any): Promise<void> {
   await supabase
     .from("eventos_brutos")
-    .update({ interpretacao, status: "interpretado" })
+    .update({ interpretacao, status: "interpretado", interpretado: true })
     .eq("id", eventoId);
 }
 
 // ============================================================================
-// 3️⃣ INTERPRETAÇÃO - IA INTERPRETA, NÃO DECIDE
+// 3️⃣ INTERPRETAÇÃO - IA INTERPRETA, NÃO DECIDE (COM GUARD CLAUSE)
 // ============================================================================
+
+async function verificarJaInterpretado(eventoId: string): Promise<{ jaInterpretado: boolean; interpretacao?: any }> {
+  if (!eventoId) return { jaInterpretado: false };
+  
+  try {
+    const { data } = await supabase
+      .from("eventos_brutos")
+      .select("interpretado, interpretacao")
+      .eq("id", eventoId)
+      .single();
+    
+    if (data?.interpretado && data?.interpretacao) {
+      console.log(`⚠️ [INTERPRETAÇÃO] Evento ${eventoId} já interpretado - reutilizando`);
+      return { jaInterpretado: true, interpretacao: data.interpretacao };
+    }
+  } catch (e) {
+    console.log(`⚠️ [INTERPRETAÇÃO] Erro ao verificar evento:`, e);
+  }
+  
+  return { jaInterpretado: false };
+}
 
 async function interpretarMensagem(mensagem: string, historicoRecente: string): Promise<{ intent: ExtractedIntent; confianca: number }> {
   try {
@@ -258,15 +279,74 @@ ${historicoRecente ? `HISTÓRICO:\n${historicoRecente}` : ""}`
 }
 
 // ============================================================================
-// 4️⃣ MOTOR DE DECISÃO - AS 4 PERGUNTAS
+// 4️⃣ MOTOR DE DECISÃO - AS 4 PERGUNTAS (COM ESTADO REAL)
 // ============================================================================
+
+async function salvarEstadoConversa(
+  usuarioId: string,
+  fluxo: string,
+  etapa: string,
+  dadosParciais: any
+): Promise<void> {
+  const expiraEm = new Date(Date.now() + 30 * 60 * 1000); // 30 min
+  
+  try {
+    // Primeiro tenta atualizar
+    const { data: existing } = await supabase
+      .from("conversas_ativas")
+      .select("id")
+      .eq("usuario_id", usuarioId)
+      .maybeSingle();
+    
+    if (existing) {
+      await supabase.from("conversas_ativas")
+        .update({
+          tipo_operacao: fluxo,
+          estado: etapa,
+          lock_acao: fluxo,
+          dados_coletados: dadosParciais,
+          ultimo_intent: fluxo,
+          expira_em: expiraEm.toISOString(),
+          atualizado_em: new Date().toISOString()
+        })
+        .eq("usuario_id", usuarioId);
+    } else {
+      await supabase.from("conversas_ativas")
+        .insert({
+          usuario_id: usuarioId,
+          tipo_operacao: fluxo,
+          estado: etapa,
+          lock_acao: fluxo,
+          dados_coletados: dadosParciais,
+          ultimo_intent: fluxo,
+          expira_em: expiraEm.toISOString(),
+          atualizado_em: new Date().toISOString()
+        });
+    }
+    console.log(`💾 [ESTADO] Salvo: ${fluxo} -> ${etapa}`);
+  } catch (e) {
+    console.error(`❌ [ESTADO] Erro ao salvar:`, e);
+  }
+}
+
+async function limparEstadoConversa(usuarioId: string): Promise<void> {
+  try {
+    await supabase.from("conversas_ativas")
+      .delete()
+      .eq("usuario_id", usuarioId);
+    console.log(`🧹 [ESTADO] Limpo para ${usuarioId}`);
+  } catch (e) {
+    console.error(`❌ [ESTADO] Erro ao limpar:`, e);
+  }
+}
 
 async function motorDecisao(
   interpretacao: ExtractedIntent,
   confianca: number,
   origem: TipoMidia,
   estadoUsuario: EstadoUsuario,
-  conversaAtiva: ConversaAtiva | null
+  conversaAtiva: ConversaAtiva | null,
+  usuarioId: string
 ): Promise<DecisaoMotor> {
   
   // PERGUNTA 1: O que o usuário quer?
@@ -276,18 +356,46 @@ async function motorDecisao(
   // PERGUNTA 2: Tenho informação suficiente?
   const temValor = !!interpretacao.valor && interpretacao.valor > 0;
   const temDescricao = !!interpretacao.descricao;
-  const dadosCompletos = temValor && temDescricao;
+  let dadosCompletos = temValor && temDescricao;
   console.log(`🔍 [MOTOR] P2 - Dados completos: ${dadosCompletos} (valor: ${temValor}, desc: ${temDescricao})`);
   
-  // PERGUNTA 3: É continuidade ou novo?
+  // PERGUNTA 3: É continuidade ou novo? (COM MERGE DE DADOS)
   const temLock = !!conversaAtiva?.lock_acao;
-  const ehContinuidade = temLock && conversaAtiva?.ultimo_intent === intencao;
-  console.log(`🔍 [MOTOR] P3 - Continuidade: ${ehContinuidade}`);
+  const mesmoFluxo = conversaAtiva?.tipo_operacao?.includes("registrar") && 
+                     (intencao === "registrar_gasto" || intencao === "registrar_entrada");
+  const ehContinuidade = temLock && mesmoFluxo;
+  console.log(`🔍 [MOTOR] P3 - Continuidade: ${ehContinuidade} (lock: ${temLock}, mesmoFluxo: ${mesmoFluxo})`);
+  
+  // Se é continuidade, mesclar dados antigos com novos
+  let dadosMesclados = { ...interpretacao };
+  if (ehContinuidade && conversaAtiva?.dados_coletados) {
+    const dadosAntigos = conversaAtiva.dados_coletados;
+    dadosMesclados = {
+      ...dadosAntigos,
+      ...interpretacao,
+      // Preservar valor/descricao antigos se novos estão vazios
+      valor: interpretacao.valor || dadosAntigos.valor,
+      descricao: interpretacao.descricao || dadosAntigos.descricao,
+      categoria: interpretacao.categoria || dadosAntigos.categoria,
+      forma_pagamento: interpretacao.forma_pagamento || dadosAntigos.forma_pagamento
+    };
+    console.log(`🔄 [MOTOR] Dados mesclados:`, JSON.stringify(dadosMesclados));
+    
+    // Recalcular se dados estão completos
+    const temValorMesclado = !!dadosMesclados.valor && dadosMesclados.valor > 0;
+    const temDescricaoMesclada = !!dadosMesclados.descricao;
+    dadosCompletos = temValorMesclado && temDescricaoMesclada;
+    console.log(`🔍 [MOTOR] P2 (mesclado) - Dados completos: ${dadosCompletos}`);
+  }
   
   // PERGUNTA 4: O que ajuda MAIS agora?
   
   // Intents que não são de registro
   if (["saudacao", "ajuda", "consultar_resumo", "cancelar_transacao", "iniciar_organizacao", "outro"].includes(intencao)) {
+    // Limpar estado de conversa se existir
+    if (temLock) {
+      await limparEstadoConversa(usuarioId);
+    }
     return {
       acao: "responder_ia",
       dados: interpretacao,
@@ -299,22 +407,27 @@ async function motorDecisao(
   if (origem === "text") {
     // Dados completos → REGISTRA DIRETO
     if (dadosCompletos && confianca >= 0.7) {
+      await limparEstadoConversa(usuarioId);
       return {
         acao: "registrar_direto",
-        dados: interpretacao,
-        motivo: "texto_completo_alta_confianca"
+        dados: dadosMesclados,
+        motivo: ehContinuidade ? "texto_continuidade_completa" : "texto_completo_alta_confianca"
       };
     }
     
-    // Falta dados → PERGUNTA UMA COISA SÓ
+    // Falta dados → PERGUNTA UMA COISA SÓ + SALVAR ESTADO
     if (!dadosCompletos) {
-      const faltando = !temValor ? "valor" : "descricao";
+      const faltando = !dadosMesclados.valor ? "valor" : "descricao";
+      
+      // Salvar estado para continuidade
+      await salvarEstadoConversa(usuarioId, intencao, `aguardando_${faltando}`, dadosMesclados);
+      
       return {
         acao: "perguntar",
-        dados: interpretacao,
+        dados: dadosMesclados,
         pergunta: faltando === "valor" 
-          ? `Entendi: *${interpretacao.descricao}* 👍\n\n👉 Qual foi o valor?`
-          : `Vi *R$ ${interpretacao.valor?.toFixed(2)}* 💰\n\n👉 O que foi essa compra?`,
+          ? `Entendi: *${dadosMesclados.descricao}* 👍\n\n👉 Qual foi o valor?`
+          : `Vi *R$ ${dadosMesclados.valor?.toFixed(2)}* 💰\n\n👉 O que foi essa compra?`,
         motivo: `texto_falta_${faltando}`
       };
     }
@@ -322,7 +435,7 @@ async function motorDecisao(
     // Confiança média → CONFIRMA
     return {
       acao: "criar_hipotese",
-      dados: interpretacao,
+      dados: dadosMesclados,
       motivo: "texto_confianca_media"
     };
   }
@@ -331,9 +444,10 @@ async function motorDecisao(
   if (origem === "audio") {
     // Confiança alta + dados completos → REGISTRA
     if (confianca >= 0.85 && dadosCompletos) {
+      await limparEstadoConversa(usuarioId);
       return {
         acao: "registrar_direto",
-        dados: interpretacao,
+        dados: dadosMesclados,
         motivo: "audio_alta_confianca"
       };
     }
@@ -342,27 +456,30 @@ async function motorDecisao(
     if (confianca >= 0.5 && dadosCompletos) {
       return {
         acao: "criar_hipotese",
-        dados: interpretacao,
+        dados: dadosMesclados,
         motivo: "audio_media_confianca"
       };
     }
     
-    // Falta dados → PERGUNTA
+    // Falta dados → PERGUNTA + SALVAR ESTADO
     if (!dadosCompletos) {
-      const faltando = !temValor ? "valor" : "descricao";
+      const faltando = !dadosMesclados.valor ? "valor" : "descricao";
+      
+      await salvarEstadoConversa(usuarioId, intencao, `aguardando_${faltando}`, dadosMesclados);
+      
       return {
         acao: "perguntar",
-        dados: interpretacao,
+        dados: dadosMesclados,
         pergunta: faltando === "valor"
-          ? `Ouvi: *${interpretacao.descricao}* 🎤\n\n👉 Qual foi o valor?`
-          : `Ouvi *R$ ${interpretacao.valor?.toFixed(2)}* 🎤\n\n👉 O que foi?`,
+          ? `Ouvi: *${dadosMesclados.descricao}* 🎤\n\n👉 Qual foi o valor?`
+          : `Ouvi *R$ ${dadosMesclados.valor?.toFixed(2)}* 🎤\n\n👉 O que foi?`,
         motivo: `audio_falta_${faltando}`
       };
     }
     
     return {
       acao: "criar_hipotese",
-      dados: interpretacao,
+      dados: dadosMesclados,
       motivo: "audio_fallback"
     };
   }
@@ -373,7 +490,7 @@ async function motorDecisao(
     if (confianca >= 0.7 && dadosCompletos) {
       return {
         acao: "criar_hipotese",
-        dados: interpretacao,
+        dados: dadosMesclados,
         motivo: "imagem_alta_confianca"
       };
     }
@@ -381,7 +498,7 @@ async function motorDecisao(
     // Confiança baixa ou dados incompletos → PERGUNTA
     return {
       acao: "perguntar",
-      dados: interpretacao,
+      dados: dadosMesclados,
       pergunta: "Vi a imagem 📷\n\n👉 Me conta: *quanto foi* e *o que era*?",
       motivo: "imagem_baixa_confianca"
     };
@@ -390,7 +507,7 @@ async function motorDecisao(
   // Fallback seguro
   return {
     acao: "criar_hipotese",
-    dados: interpretacao,
+    dados: dadosMesclados,
     motivo: "fallback_seguro"
   };
 }
@@ -597,10 +714,33 @@ async function sendWhatsAppMessage(to: string, text: string, source: MessageSour
 }
 
 // ============================================================================
-// 🎤 PROCESSAMENTO DE MÍDIA
+// 🎤 PROCESSAMENTO DE MÍDIA (COM GUARD CLAUSE - NUNCA BAIXA 2X)
 // ============================================================================
 
-async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
+async function downloadWhatsAppMedia(mediaId: string, eventoId?: string): Promise<string | null> {
+  // GUARD CLAUSE 1: Verificar se já baixou
+  if (eventoId) {
+    try {
+      const { data: evento } = await supabase
+        .from("eventos_brutos")
+        .select("media_downloaded, media_error")
+        .eq("id", eventoId)
+        .single();
+      
+      if (evento?.media_downloaded) {
+        console.log(`⚠️ [MÍDIA] Evento ${eventoId} já teve mídia baixada anteriormente`);
+        return null;
+      }
+      
+      if (evento?.media_error) {
+        console.log(`⚠️ [MÍDIA] Evento ${eventoId} teve erro anterior: ${evento.media_error}`);
+        return null;
+      }
+    } catch (e) {
+      console.log(`⚠️ [MÍDIA] Erro ao verificar evento:`, e);
+    }
+  }
+  
   try {
     console.log(`🎵 [MÍDIA] Baixando ${mediaId}...`);
     
@@ -609,22 +749,51 @@ async function downloadWhatsAppMedia(mediaId: string): Promise<string | null> {
       { headers: { "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
     );
     
-    if (!urlResponse.ok) return null;
+    if (!urlResponse.ok) {
+      const errorMsg = `URL fetch failed: ${urlResponse.status}`;
+      if (eventoId) {
+        await supabase.from("eventos_brutos")
+          .update({ media_error: errorMsg })
+          .eq("id", eventoId);
+      }
+      return null;
+    }
     
     const urlData = await urlResponse.json();
     const mediaResponse = await fetch(urlData.url, {
       headers: { "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}` }
     });
     
-    if (!mediaResponse.ok) return null;
+    if (!mediaResponse.ok) {
+      const errorMsg = `Media fetch failed: ${mediaResponse.status}`;
+      if (eventoId) {
+        await supabase.from("eventos_brutos")
+          .update({ media_error: errorMsg })
+          .eq("id", eventoId);
+      }
+      return null;
+    }
     
     const arrayBuffer = await mediaResponse.arrayBuffer();
     const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
     
+    // SUCESSO: Marcar como baixada
+    if (eventoId) {
+      await supabase.from("eventos_brutos")
+        .update({ media_downloaded: true })
+        .eq("id", eventoId);
+    }
+    
     console.log(`✅ [MÍDIA] Baixada: ${base64.length} chars`);
     return base64;
   } catch (error) {
+    // ERRO: Marcar o erro e NUNCA tentar de novo
     console.error("❌ [MÍDIA] Erro:", error);
+    if (eventoId) {
+      await supabase.from("eventos_brutos")
+        .update({ media_error: String(error) })
+        .eq("id", eventoId);
+    }
     return null;
   }
 }
@@ -986,13 +1155,13 @@ async function processarIntentNaoRegistro(
     case "cancelar_transacao": {
       const { data: ultimasTransacoes } = await supabase
         .from("transacoes")
-        .select("id, valor, categoria, descricao, data")
+        .select("id, valor, descricao, categoria, data")
         .eq("usuario_id", usuarioId)
         .order("created_at", { ascending: false })
         .limit(5);
       
       if (!ultimasTransacoes || ultimasTransacoes.length === 0) {
-        return "Você não tem transações recentes para apagar 🤔";
+        return "Você não tem transações recentes para cancelar 🤔";
       }
       
       const listaOpcoes = ultimasTransacoes.map((t, i) => {
@@ -1030,7 +1199,7 @@ async function processarIntentNaoRegistro(
 }
 
 // ============================================================================
-// 🚀 WEBHOOK PRINCIPAL
+// 🚀 WEBHOOK PRINCIPAL (COM TRY/CATCH GLOBAL SEMPRE 200)
 // ============================================================================
 
 serve(async (req) => {
@@ -1054,6 +1223,9 @@ serve(async (req) => {
     return new Response("Forbidden", { status: 403 });
   }
 
+  // ============================================================================
+  // TRY/CATCH GLOBAL - SEMPRE RETORNA 200
+  // ============================================================================
   try {
     const json = await req.json();
     console.log("📨 Webhook payload recebido");
@@ -1218,6 +1390,9 @@ serve(async (req) => {
     const historicoRecente = await getHistoricoRecente(payload.phoneNumber);
     
     console.log(`🎯 [ESTADO] Modo: ${estadoUsuario.modo} | Etapa: ${estadoUsuario.etapa_onboarding}`);
+    if (conversaAtiva) {
+      console.log(`🔄 [CONVERSA_ATIVA] Fluxo: ${conversaAtiva.tipo_operacao} | Estado: ${conversaAtiva.estado} | Lock: ${conversaAtiva.lock_acao}`);
+    }
 
     // ========================================================================
     // VERIFICAR HIPÓTESE PENDENTE
@@ -1231,6 +1406,7 @@ serve(async (req) => {
       
       if (resposta.tipo === "cancelar") {
         await limparHipotesePendente(payload.phoneNumber);
+        await limparEstadoConversa(usuarioId);
         const msg = "Sem problemas! 👍 Já descartei.\n\nMe conta novamente como foi, ou faz outra coisa.";
         await sendWhatsAppMessage(payload.phoneNumber, msg, payload.messageSource);
         
@@ -1254,6 +1430,7 @@ serve(async (req) => {
         }, eventoId);
         
         await limparHipotesePendente(payload.phoneNumber);
+        await limparEstadoConversa(usuarioId);
         await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
         
         await supabase.from("historico_conversas").insert({
@@ -1295,14 +1472,15 @@ serve(async (req) => {
     }
 
     // ========================================================================
-    // PROCESSAR MÍDIA (ÁUDIO/IMAGEM)
+    // PROCESSAR MÍDIA (ÁUDIO/IMAGEM) - COM GUARD CLAUSE
     // ========================================================================
     let conteudoProcessado = payload.messageText;
     let confiancaOrigem = 0.9; // Texto tem alta confiança
     let tipoOrigem: TipoMidia = payload.messageType;
     
     if (payload.messageType === "audio" && payload.mediaId) {
-      const audioBase64 = await downloadWhatsAppMedia(payload.mediaId);
+      // PASSA eventoId para guard clause funcionar
+      const audioBase64 = await downloadWhatsAppMedia(payload.mediaId, eventoId || undefined);
       
       if (!audioBase64) {
         const msg = "Não peguei o áudio direito 🎤\n\n👉 Pode escrever rapidinho o que você disse?";
@@ -1328,7 +1506,8 @@ serve(async (req) => {
     }
     
     if (payload.messageType === "image" && payload.mediaId) {
-      const imageBase64 = await downloadWhatsAppMedia(payload.mediaId);
+      // PASSA eventoId para guard clause funcionar
+      const imageBase64 = await downloadWhatsAppMedia(payload.mediaId, eventoId || undefined);
       
       if (!imageBase64) {
         const msg = "Não consegui baixar a imagem 📷\n\n👉 Pode tentar enviar de novo?";
@@ -1356,7 +1535,7 @@ serve(async (req) => {
       
       // Imagem com dados - vai para motor de decisão
       const decisao = await motorDecisao(
-        dadosImagem.dados, dadosImagem.confianca, "image", estadoUsuario, conversaAtiva
+        dadosImagem.dados, dadosImagem.confianca, "image", estadoUsuario, conversaAtiva, usuarioId
       );
       
       console.log(`⚙️ [MOTOR] Decisão imagem: ${decisao.acao} (${decisao.motivo})`);
@@ -1372,19 +1551,41 @@ serve(async (req) => {
         user_message: "[IMAGEM]", ai_response: msgConfirmacao, tipo: "imagem_hipotese"
       });
       
+      // Atualiza evento como interpretado
+      if (eventoId) {
+        await atualizarEventoBruto(eventoId, dadosImagem.dados);
+      }
+      
       return new Response(JSON.stringify({ status: "ok", awaiting_validation: true }), {
         status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     // ========================================================================
-    // 3️⃣ INTERPRETAÇÃO - IA INTERPRETA
+    // 3️⃣ INTERPRETAÇÃO - IA INTERPRETA (COM GUARD CLAUSE)
     // ========================================================================
-    const { intent: interpretacao, confianca } = await interpretarMensagem(conteudoProcessado, historicoRecente);
+    let interpretacao: ExtractedIntent;
+    let confianca: number;
     
-    // Salva interpretação no evento bruto
+    // Verificar se já foi interpretado (guard clause)
     if (eventoId) {
-      await atualizarEventoBruto(eventoId, interpretacao);
+      const { jaInterpretado, interpretacao: intCached } = await verificarJaInterpretado(eventoId);
+      if (jaInterpretado && intCached) {
+        interpretacao = intCached as ExtractedIntent;
+        confianca = intCached.confianca || 0.5;
+        console.log(`♻️ [INTERPRETAÇÃO] Usando cache do evento ${eventoId}`);
+      } else {
+        const resultado = await interpretarMensagem(conteudoProcessado, historicoRecente);
+        interpretacao = resultado.intent;
+        confianca = resultado.confianca;
+        
+        // Salva interpretação no evento bruto
+        await atualizarEventoBruto(eventoId, interpretacao);
+      }
+    } else {
+      const resultado = await interpretarMensagem(conteudoProcessado, historicoRecente);
+      interpretacao = resultado.intent;
+      confianca = resultado.confianca;
     }
     
     console.log(`🎯 [INTERPRETAÇÃO] Intent: ${JSON.stringify(interpretacao)}`);
@@ -1397,7 +1598,8 @@ serve(async (req) => {
       confianca * confiancaOrigem, 
       tipoOrigem, 
       estadoUsuario, 
-      conversaAtiva
+      conversaAtiva,
+      usuarioId
     );
     
     console.log(`⚙️ [MOTOR] Decisão: ${decisao.acao} (${decisao.motivo})`);
@@ -1405,62 +1607,68 @@ serve(async (req) => {
     // ========================================================================
     // 5️⃣ EXECUTAR DECISÃO
     // ========================================================================
-    let respostaFinal = "";
+    let mensagemResposta = "";
     
     switch (decisao.acao) {
       case "registrar_direto": {
-        const resultado = await registrarTransacaoDireto(usuarioId, interpretacao, eventoId);
-        respostaFinal = resultado.mensagem;
+        const resultado = await registrarTransacaoDireto(usuarioId, decisao.dados, eventoId);
+        mensagemResposta = resultado.mensagem;
         break;
       }
       
       case "criar_hipotese": {
-        respostaFinal = await criarHipoteseConfirmacao(
-          payload.phoneNumber, usuarioId, interpretacao, tipoOrigem, confianca
+        mensagemResposta = await criarHipoteseConfirmacao(
+          payload.phoneNumber, usuarioId, decisao.dados, tipoOrigem, confianca
         );
         break;
       }
       
       case "perguntar": {
-        respostaFinal = decisao.pergunta || "Pode me explicar melhor?";
+        mensagemResposta = decisao.pergunta || "O que você precisa? 🤔";
         break;
       }
       
       case "responder_ia": {
-        respostaFinal = await processarIntentNaoRegistro(
-          interpretacao, usuarioId, nomeUsuario, payload.phoneNumber, payload.messageSource, conteudoProcessado
+        mensagemResposta = await processarIntentNaoRegistro(
+          interpretacao, usuarioId, nomeUsuario, 
+          payload.phoneNumber, payload.messageSource, conteudoProcessado
         );
         break;
       }
       
       default: {
-        respostaFinal = "Como posso te ajudar? 🤔";
+        mensagemResposta = "Como posso te ajudar? 🤔\n\n💸 Registrar gasto\n📊 Ver resumo";
       }
     }
 
     // ========================================================================
-    // 6️⃣ ENVIAR RESPOSTA
+    // 6️⃣ ENVIAR RESPOSTA E SALVAR NO HISTÓRICO
     // ========================================================================
-    await sendWhatsAppMessage(payload.phoneNumber, respostaFinal, payload.messageSource);
+    await sendWhatsAppMessage(payload.phoneNumber, mensagemResposta, payload.messageSource);
     
     await supabase.from("historico_conversas").insert({
       phone_number: payload.phoneNumber,
       user_id: usuarioId,
       user_message: conteudoProcessado,
-      ai_response: respostaFinal,
-      tipo: `motor_${decisao.acao}`
+      ai_response: mensagemResposta,
+      tipo: decisao.acao
     });
 
     return new Response(
-      JSON.stringify({ status: "ok", decisao: decisao.acao, motivo: decisao.motivo }),
+      JSON.stringify({ status: "ok", action: decisao.acao, motivo: decisao.motivo }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error) {
-    console.error("❌ Erro no webhook:", error);
+    // ========================================================================
+    // CRITICAL: SEMPRE RETORNA 200 - NUNCA 500
+    // ========================================================================
+    console.error("❌ [WEBHOOK] Erro fatal:", error);
+    
+    // Retorna 200 para WhatsApp não reenviar a mensagem
     return new Response(
-      JSON.stringify({ status: "error", message: String(error) }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({ status: "ok", error: "internal_error", details: String(error) }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
