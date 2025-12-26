@@ -290,6 +290,9 @@ export type Database = {
           created_at: string | null
           id: string
           interpretacao: Json | null
+          interpretado: boolean | null
+          media_downloaded: boolean | null
+          media_error: string | null
           message_id: string | null
           origem: string
           phone_number: string | null
@@ -302,6 +305,9 @@ export type Database = {
           created_at?: string | null
           id?: string
           interpretacao?: Json | null
+          interpretado?: boolean | null
+          media_downloaded?: boolean | null
+          media_error?: string | null
           message_id?: string | null
           origem: string
           phone_number?: string | null
@@ -314,6 +320,9 @@ export type Database = {
           created_at?: string | null
           id?: string
           interpretacao?: Json | null
+          interpretado?: boolean | null
+          media_downloaded?: boolean | null
+          media_error?: string | null
           message_id?: string | null
           origem?: string
           phone_number?: string | null
