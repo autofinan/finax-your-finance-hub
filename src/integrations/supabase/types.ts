@@ -291,8 +291,10 @@ export type Database = {
           id: string
           interpretacao: Json | null
           interpretado: boolean | null
+          media_attempts: number | null
           media_downloaded: boolean | null
           media_error: string | null
+          media_status: string | null
           message_id: string | null
           origem: string
           phone_number: string | null
@@ -306,8 +308,10 @@ export type Database = {
           id?: string
           interpretacao?: Json | null
           interpretado?: boolean | null
+          media_attempts?: number | null
           media_downloaded?: boolean | null
           media_error?: string | null
+          media_status?: string | null
           message_id?: string | null
           origem: string
           phone_number?: string | null
@@ -321,8 +325,10 @@ export type Database = {
           id?: string
           interpretacao?: Json | null
           interpretado?: boolean | null
+          media_attempts?: number | null
           media_downloaded?: boolean | null
           media_error?: string | null
+          media_status?: string | null
           message_id?: string | null
           origem?: string
           phone_number?: string | null
