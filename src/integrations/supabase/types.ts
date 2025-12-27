@@ -16,30 +16,36 @@ export type Database = {
     Tables: {
       actions: {
         Row: {
-          action_hash: string | null
+          action_hash: string
           action_type: string
           created_at: string | null
           entity_id: string | null
           id: string
+          meta: Json | null
           status: string | null
+          updated_at: string | null
           user_id: string
         }
         Insert: {
-          action_hash?: string | null
+          action_hash: string
           action_type: string
           created_at?: string | null
           entity_id?: string | null
           id?: string
+          meta?: Json | null
           status?: string | null
+          updated_at?: string | null
           user_id: string
         }
         Update: {
-          action_hash?: string | null
+          action_hash?: string
           action_type?: string
           created_at?: string | null
           entity_id?: string | null
           id?: string
+          meta?: Json | null
           status?: string | null
+          updated_at?: string | null
           user_id?: string
         }
         Relationships: []
@@ -495,6 +501,51 @@ export type Database = {
           },
         ]
       }
+      finax_logs: {
+        Row: {
+          action_type: string
+          created_at: string | null
+          entity_id: string | null
+          entity_type: string | null
+          id: string
+          job_id: string | null
+          message_id: string | null
+          new_data: Json | null
+          old_data: Json | null
+          step: string | null
+          trace_id: string | null
+          user_id: string | null
+        }
+        Insert: {
+          action_type: string
+          created_at?: string | null
+          entity_id?: string | null
+          entity_type?: string | null
+          id?: string
+          job_id?: string | null
+          message_id?: string | null
+          new_data?: Json | null
+          old_data?: Json | null
+          step?: string | null
+          trace_id?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          action_type?: string
+          created_at?: string | null
+          entity_id?: string | null
+          entity_type?: string | null
+          id?: string
+          job_id?: string | null
+          message_id?: string | null
+          new_data?: Json | null
+          old_data?: Json | null
+          step?: string | null
+          trace_id?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       gastos_recorrentes: {
         Row: {
           ativo: boolean | null
@@ -581,6 +632,7 @@ export type Database = {
           evento_id: string | null
           id: string
           idempotency_key: string | null
+          media_analysis_id: string | null
           status: string | null
           tipo: string | null
           user_id: string | null
@@ -592,6 +644,7 @@ export type Database = {
           evento_id?: string | null
           id?: string
           idempotency_key?: string | null
+          media_analysis_id?: string | null
           status?: string | null
           tipo?: string | null
           user_id?: string | null
@@ -603,6 +656,7 @@ export type Database = {
           evento_id?: string | null
           id?: string
           idempotency_key?: string | null
+          media_analysis_id?: string | null
           status?: string | null
           tipo?: string | null
           user_id?: string | null
@@ -613,6 +667,13 @@ export type Database = {
             columns: ["evento_id"]
             isOneToOne: false
             referencedRelation: "eventos_brutos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hipoteses_registro_media_analysis_id_fkey"
+            columns: ["media_analysis_id"]
+            isOneToOne: false
+            referencedRelation: "media_analysis"
             referencedColumns: ["id"]
           },
           {
@@ -1192,7 +1253,9 @@ export type Database = {
           created_at: string | null
           error: string | null
           id: string
+          last_error: string | null
           message_id: string
+          next_retry_at: string | null
           payload: Json
           processed_at: string | null
           status: string | null
@@ -1203,7 +1266,9 @@ export type Database = {
           created_at?: string | null
           error?: string | null
           id?: string
+          last_error?: string | null
           message_id: string
+          next_retry_at?: string | null
           payload: Json
           processed_at?: string | null
           status?: string | null
@@ -1214,7 +1279,9 @@ export type Database = {
           created_at?: string | null
           error?: string | null
           id?: string
+          last_error?: string | null
           message_id?: string
+          next_retry_at?: string | null
           payload?: Json
           processed_at?: string | null
           status?: string | null
@@ -1649,6 +1716,7 @@ export type Database = {
         Returns: undefined
       }
       fn_analise_consultiva: { Args: { p_usuario_id: string }; Returns: Json }
+      fn_cleanup_expired_selections: { Args: never; Returns: undefined }
       fn_close_card_faturas: { Args: never; Returns: undefined }
       fn_daily_jobs: { Args: never; Returns: undefined }
       fn_generate_parcelas: {
