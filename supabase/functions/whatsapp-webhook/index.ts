@@ -98,39 +98,44 @@ interface ConversaAtiva {
 }
 
 // ============================================================================
-// 1️⃣ DEDUPE - NADA ACONTECE ANTES DISSO
+// 1️⃣ DEDUPE ATÔMICO - LOCK NO BANCO, NÃO EM MEMÓRIA
 // ============================================================================
 
-async function verificarDedupe(messageId: string): Promise<boolean> {
-  if (!messageId) return false;
-  
-  const { data } = await supabase
-    .from("processed_messages")
-    .select("id")
-    .eq("message_id", messageId)
-    .maybeSingle();
-  
-  if (data) {
-    console.log(`⚠️ [DEDUPE] Mensagem ${messageId} já processada - ignorando`);
-    return true;
-  }
-  
-  return false;
-}
-
-async function marcarProcessada(messageId: string, phoneNumber: string, source: string): Promise<void> {
-  if (!messageId) return;
+/**
+ * DEDUPE ATÔMICO: Tenta inserir E verifica em uma única operação
+ * Resolve race condition de processos paralelos
+ * 
+ * Retorna: true = conseguiu lock (processar), false = já existe (abortar)
+ */
+async function tentarLockDedupe(messageId: string, phoneNumber: string, source: string): Promise<boolean> {
+  if (!messageId) return true; // Sem ID, processa mas sem lock
   
   try {
-    await supabase.from("processed_messages").insert({
-      message_id: messageId,
-      phone_number: phoneNumber,
-      source: source
-    });
-    console.log(`✅ [DEDUPE] Mensagem ${messageId} marcada como processada`);
+    // INSERT ATÔMICO - se já existe, falha com conflict
+    const { error } = await supabase
+      .from("processed_messages")
+      .insert({
+        message_id: messageId,
+        phone_number: phoneNumber,
+        source: source
+      });
+    
+    if (error) {
+      // Erro de unique constraint = mensagem já existe = outro processo ganhou
+      if (error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('unique')) {
+        console.log(`🔒 [DEDUPE] Mensagem ${messageId} já em processamento - ABORTANDO`);
+        return false;
+      }
+      // Outro erro - loga mas tenta processar
+      console.error(`⚠️ [DEDUPE] Erro inesperado:`, error);
+      return true;
+    }
+    
+    console.log(`✅ [DEDUPE] Lock adquirido para ${messageId}`);
+    return true;
   } catch (e) {
-    // Ignora erro de duplicata (já existe)
-    console.log(`⚠️ [DEDUPE] Mensagem ${messageId} já existe ou erro:`, e);
+    console.error(`⚠️ [DEDUPE] Exceção:`, e);
+    return true; // Em caso de erro, tenta processar
   }
 }
 
@@ -717,30 +722,64 @@ async function sendWhatsAppMessage(to: string, text: string, source: MessageSour
 // 🎤 PROCESSAMENTO DE MÍDIA (COM GUARD CLAUSE - NUNCA BAIXA 2X)
 // ============================================================================
 
+/**
+ * DOWNLOAD DE MÍDIA COM BLINDAGEM TRIPLA
+ * - Verifica status no banco ANTES de baixar
+ * - Incrementa tentativas
+ * - MÁXIMO 1 tentativa por evento
+ * - NUNCA recursão, NUNCA retry automático
+ */
 async function downloadWhatsAppMedia(mediaId: string, eventoId?: string): Promise<string | null> {
-  // GUARD CLAUSE 1: Verificar se já baixou
+  // ========================================================================
+  // GUARD CLAUSE 1: Verificar status e tentativas no banco
+  // ========================================================================
   if (eventoId) {
     try {
       const { data: evento } = await supabase
         .from("eventos_brutos")
-        .select("media_downloaded, media_error")
+        .select("media_status, media_attempts, media_downloaded, media_error")
         .eq("id", eventoId)
         .single();
       
-      if (evento?.media_downloaded) {
-        console.log(`⚠️ [MÍDIA] Evento ${eventoId} já teve mídia baixada anteriormente`);
+      // Já baixou com sucesso
+      if (evento?.media_status === 'done' || evento?.media_downloaded) {
+        console.log(`🛑 [MÍDIA] Evento ${eventoId} já baixado (status: done)`);
         return null;
       }
       
-      if (evento?.media_error) {
-        console.log(`⚠️ [MÍDIA] Evento ${eventoId} teve erro anterior: ${evento.media_error}`);
+      // Já teve erro - não tenta novamente
+      if (evento?.media_status === 'error' || evento?.media_error) {
+        console.log(`🛑 [MÍDIA] Evento ${eventoId} teve erro anterior - abortando`);
         return null;
       }
+      
+      // Já tentou pelo menos 1 vez - não tenta novamente
+      if ((evento?.media_attempts || 0) >= 1) {
+        console.log(`🛑 [MÍDIA] Evento ${eventoId} já tentou ${evento?.media_attempts}x - abortando`);
+        await supabase.from("eventos_brutos")
+          .update({ media_status: 'error', media_error: 'Max attempts reached' })
+          .eq("id", eventoId);
+        return null;
+      }
+      
+      // MARCAR COMO EM PROCESSAMENTO (atômico)
+      await supabase.from("eventos_brutos")
+        .update({ 
+          media_status: 'processing', 
+          media_attempts: (evento?.media_attempts || 0) + 1 
+        })
+        .eq("id", eventoId);
+        
     } catch (e) {
       console.log(`⚠️ [MÍDIA] Erro ao verificar evento:`, e);
+      // Em caso de erro na verificação, aborta por segurança
+      return null;
     }
   }
   
+  // ========================================================================
+  // DOWNLOAD (sem recursão, sem retry)
+  // ========================================================================
   try {
     console.log(`🎵 [MÍDIA] Baixando ${mediaId}...`);
     
@@ -751,12 +790,13 @@ async function downloadWhatsAppMedia(mediaId: string, eventoId?: string): Promis
     
     if (!urlResponse.ok) {
       const errorMsg = `URL fetch failed: ${urlResponse.status}`;
+      console.error(`❌ [MÍDIA] ${errorMsg}`);
       if (eventoId) {
         await supabase.from("eventos_brutos")
-          .update({ media_error: errorMsg })
+          .update({ media_status: 'error', media_error: errorMsg })
           .eq("id", eventoId);
       }
-      return null;
+      return null; // NUNCA retry
     }
     
     const urlData = await urlResponse.json();
@@ -766,35 +806,37 @@ async function downloadWhatsAppMedia(mediaId: string, eventoId?: string): Promis
     
     if (!mediaResponse.ok) {
       const errorMsg = `Media fetch failed: ${mediaResponse.status}`;
+      console.error(`❌ [MÍDIA] ${errorMsg}`);
       if (eventoId) {
         await supabase.from("eventos_brutos")
-          .update({ media_error: errorMsg })
+          .update({ media_status: 'error', media_error: errorMsg })
           .eq("id", eventoId);
       }
-      return null;
+      return null; // NUNCA retry
     }
     
     const arrayBuffer = await mediaResponse.arrayBuffer();
     const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
     
-    // SUCESSO: Marcar como baixada
+    // SUCESSO: Marcar como done
     if (eventoId) {
       await supabase.from("eventos_brutos")
-        .update({ media_downloaded: true })
+        .update({ media_status: 'done', media_downloaded: true })
         .eq("id", eventoId);
     }
     
     console.log(`✅ [MÍDIA] Baixada: ${base64.length} chars`);
     return base64;
+    
   } catch (error) {
-    // ERRO: Marcar o erro e NUNCA tentar de novo
-    console.error("❌ [MÍDIA] Erro:", error);
+    // ERRO FATAL: Marcar e NUNCA tentar de novo
+    console.error("❌ [MÍDIA] Erro fatal:", error);
     if (eventoId) {
       await supabase.from("eventos_brutos")
-        .update({ media_error: String(error) })
+        .update({ media_status: 'error', media_error: String(error) })
         .eq("id", eventoId);
     }
-    return null;
+    return null; // NUNCA retry, NUNCA recursão
   }
 }
 
@@ -1305,14 +1347,14 @@ serve(async (req) => {
     }
 
     // ========================================================================
-    // 1️⃣ DEDUPE - NADA ACONTECE ANTES DISSO
+    // 1️⃣ DEDUPE ATÔMICO - LOCK NO BANCO (RESOLVE RACE CONDITION)
     // ========================================================================
-    if (await verificarDedupe(payload.messageId)) {
-      return new Response(JSON.stringify({ status: "ok", dedupe: true }), {
+    const conseguiuLock = await tentarLockDedupe(payload.messageId, payload.phoneNumber, payload.messageSource);
+    if (!conseguiuLock) {
+      return new Response(JSON.stringify({ status: "ok", dedupe: true, race_avoided: true }), {
         status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    await marcarProcessada(payload.messageId, payload.phoneNumber, payload.messageSource);
 
     // ========================================================================
     // BUSCAR OU CRIAR USUÁRIO
