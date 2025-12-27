@@ -14,6 +14,36 @@ export type Database = {
   }
   public: {
     Tables: {
+      actions: {
+        Row: {
+          action_hash: string | null
+          action_type: string
+          created_at: string | null
+          entity_id: string | null
+          id: string
+          status: string | null
+          user_id: string
+        }
+        Insert: {
+          action_hash?: string | null
+          action_type: string
+          created_at?: string | null
+          entity_id?: string | null
+          id?: string
+          status?: string | null
+          user_id: string
+        }
+        Update: {
+          action_hash?: string | null
+          action_type?: string
+          created_at?: string | null
+          entity_id?: string | null
+          id?: string
+          status?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       cartoes_credito: {
         Row: {
           ativo: boolean | null
@@ -637,6 +667,50 @@ export type Database = {
         }
         Relationships: []
       }
+      media_analysis: {
+        Row: {
+          confidence: number | null
+          created_at: string | null
+          evento_bruto_id: string | null
+          id: string
+          message_id: string | null
+          parsed: Json | null
+          processed: boolean | null
+          raw_ocr: string | null
+          source: string | null
+        }
+        Insert: {
+          confidence?: number | null
+          created_at?: string | null
+          evento_bruto_id?: string | null
+          id?: string
+          message_id?: string | null
+          parsed?: Json | null
+          processed?: boolean | null
+          raw_ocr?: string | null
+          source?: string | null
+        }
+        Update: {
+          confidence?: number | null
+          created_at?: string | null
+          evento_bruto_id?: string | null
+          id?: string
+          message_id?: string | null
+          parsed?: Json | null
+          processed?: boolean | null
+          raw_ocr?: string | null
+          source?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "media_analysis_evento_bruto_id_fkey"
+            columns: ["evento_bruto_id"]
+            isOneToOne: false
+            referencedRelation: "eventos_brutos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       messages_outbox: {
         Row: {
           created_at: string | null
@@ -732,6 +806,39 @@ export type Database = {
             referencedColumns: ["usuario_id"]
           },
         ]
+      }
+      pending_selections: {
+        Row: {
+          awaiting_field: string | null
+          consumed: boolean | null
+          created_at: string | null
+          expires_at: string
+          id: string
+          options: Json
+          token: string | null
+          user_id: string
+        }
+        Insert: {
+          awaiting_field?: string | null
+          consumed?: boolean | null
+          created_at?: string | null
+          expires_at: string
+          id?: string
+          options: Json
+          token?: string | null
+          user_id: string
+        }
+        Update: {
+          awaiting_field?: string | null
+          consumed?: boolean | null
+          created_at?: string | null
+          expires_at?: string
+          id?: string
+          options?: Json
+          token?: string | null
+          user_id?: string
+        }
+        Relationships: []
       }
       perfil_cliente: {
         Row: {
@@ -1076,6 +1183,42 @@ export type Database = {
           ultimo_relatorio_semanal?: string | null
           ultimo_resumo?: string | null
           updated_at?: string | null
+        }
+        Relationships: []
+      }
+      webhook_jobs: {
+        Row: {
+          attempts: number | null
+          created_at: string | null
+          error: string | null
+          id: string
+          message_id: string
+          payload: Json
+          processed_at: string | null
+          status: string | null
+          user_id: string | null
+        }
+        Insert: {
+          attempts?: number | null
+          created_at?: string | null
+          error?: string | null
+          id?: string
+          message_id: string
+          payload: Json
+          processed_at?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          attempts?: number | null
+          created_at?: string | null
+          error?: string | null
+          id?: string
+          message_id?: string
+          payload?: Json
+          processed_at?: string | null
+          status?: string | null
+          user_id?: string | null
         }
         Relationships: []
       }
