@@ -3,17 +3,17 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.168.0/crypto/mod.ts";
 
 // ============================================================================
-// 🏭 FINAX WORKER v1.0 - PROCESSAMENTO PESADO
+// 🏭 FINAX WORKER v2.0 - ANTI-DUPLICAÇÃO TOTAL
 // ============================================================================
 //
-// Consome webhook_jobs e processa:
-// 1. Download de mídia (guarded)
-// 2. OCR/Transcrição -> persist media_analysis
-// 3. Interpretação IA -> hipoteses_registro
-// 4. Motor de decisão -> ações
-// 5. Registro com idempotência (action_hash)
-// 6. Envio de mensagens
+// REGRAS FUNDAMENTAIS:
+// 1. IA INTERPRETA, NUNCA DECIDE SE GRAVA
+// 2. action_hash = user_id + action_type + valor + categoria + janela_60s
+// 3. descrição NÃO entra no hash
+// 4. Mensagem duplicada em < 60s = MESMA action = NÃO grava de novo
+// 5. Transação SÓ é criada se action foi criada agora
 //
+// FLUXO: Mensagem → IA Interpreta → ACTION (idempotente) → Transação
 // ============================================================================
 
 const corsHeaders = {
@@ -65,44 +65,84 @@ interface ExtractedIntent {
 }
 
 // ============================================================================
-// 🔐 IDEMPOTÊNCIA - ACTION HASH
+// 🔐 IDEMPOTÊNCIA - ACTION HASH (JANELA DE 60 SEGUNDOS)
 // ============================================================================
 
+/**
+ * REGRA DE OURO: action_hash baseado em:
+ * - user_id
+ * - action_type (registrar_gasto, registrar_entrada)
+ * - valor ARREDONDADO (centavos)
+ * - categoria NORMALIZADA (lowercase, sem acentos)
+ * - JANELA DE TEMPO (60 segundos)
+ * 
+ * ⚠️ DESCRIÇÃO NÃO ENTRA NO HASH ⚠️
+ */
 function gerarActionHash(
   userId: string,
   actionType: string,
-  canonicalData: Record<string, any>
+  valor: number | undefined,
+  categoria: string | undefined
 ): string {
-  const dateBucket = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const dataString = JSON.stringify({ userId, actionType, ...canonicalData, dateBucket });
+  // Janela de 60 segundos: timestamp arredondado para minuto
+  const now = new Date();
+  const timeBucket = Math.floor(now.getTime() / 60000); // Minuto atual
   
-  // Hash simples - em produção usar crypto.subtle
+  // Valor em centavos (arredondado para evitar float issues)
+  const valorCentavos = Math.round((valor || 0) * 100);
+  
+  // Categoria normalizada
+  const categoriaNorm = (categoria || "outros")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+  
+  // Hash string: user + type + valor + categoria + janela
+  const hashInput = `${userId}|${actionType}|${valorCentavos}|${categoriaNorm}|${timeBucket}`;
+  
+  // Gerar hash simples mas único
   let hash = 0;
-  for (let i = 0; i < dataString.length; i++) {
-    const char = dataString.charCodeAt(i);
+  for (let i = 0; i < hashInput.length; i++) {
+    const char = hashInput.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
     hash = hash & hash;
   }
   
-  return `${actionType}_${userId.slice(0, 8)}_${Math.abs(hash).toString(36)}`;
+  return `${actionType}_${userId.slice(0, 8)}_${Math.abs(hash).toString(36)}_${timeBucket}`;
 }
 
+/**
+ * Verifica se action já existe ou cria nova.
+ * RETORNA: { created: true } se é uma NOVA action (deve registrar)
+ * RETORNA: { created: false } se action JÁ EXISTE (NÃO registrar)
+ */
 async function verificarOuCriarAction(
   userId: string,
   actionType: string,
   actionHash: string,
-  entityId?: string,
   meta?: Record<string, any>
-): Promise<{ created: boolean; actionId?: string }> {
+): Promise<{ created: boolean; actionId?: string; existingAction?: any }> {
   try {
-    // Tenta inserir - se já existe, falha com unique constraint
+    // 1. Primeiro verificar se já existe
+    const { data: existing } = await supabase
+      .from("actions")
+      .select("id, status, created_at")
+      .eq("action_hash", actionHash)
+      .single();
+    
+    if (existing) {
+      console.log(`🔒 [ACTION] Hash ${actionHash} JÁ EXISTE - duplicação bloqueada`);
+      return { created: false, existingAction: existing };
+    }
+    
+    // 2. Tentar inserir (com constraint unique)
     const { data, error } = await supabase
       .from("actions")
       .insert({
         user_id: userId,
         action_type: actionType,
         action_hash: actionHash,
-        entity_id: entityId,
         status: "pending",
         meta: meta || {}
       })
@@ -110,26 +150,32 @@ async function verificarOuCriarAction(
       .single();
     
     if (error) {
+      // Constraint violation = duplicação
       if (error.code === '23505' || error.message?.includes('duplicate')) {
-        console.log(`🔒 [ACTION] Hash ${actionHash} já existe - idempotente`);
+        console.log(`🔒 [ACTION] Constraint bloqueou duplicação: ${actionHash}`);
         return { created: false };
       }
-      console.error("❌ [ACTION] Erro:", error);
+      console.error("❌ [ACTION] Erro inesperado:", error);
       return { created: false };
     }
     
-    console.log(`✅ [ACTION] Criada: ${data.id}`);
+    console.log(`✅ [ACTION] Nova action criada: ${data.id} (${actionHash})`);
     return { created: true, actionId: data.id };
+    
   } catch (e) {
     console.error("❌ [ACTION] Exceção:", e);
     return { created: false };
   }
 }
 
-async function marcarActionDone(actionHash: string): Promise<void> {
+async function marcarActionDone(actionHash: string, entityId?: string): Promise<void> {
   await supabase
     .from("actions")
-    .update({ status: "done", updated_at: new Date().toISOString() })
+    .update({ 
+      status: "done", 
+      entity_id: entityId,
+      updated_at: new Date().toISOString() 
+    })
     .eq("action_hash", actionHash);
 }
 
@@ -192,7 +238,6 @@ async function sendWhatsAppMessage(to: string, text: string, source: MessageSour
   return sendWhatsAppMeta(to, text);
 }
 
-// Enviar mensagem com botões interativos (Meta)
 async function sendWhatsAppButtons(
   to: string, 
   bodyText: string, 
@@ -200,7 +245,6 @@ async function sendWhatsAppButtons(
   source: MessageSource
 ): Promise<boolean> {
   if (source !== "meta") {
-    // Fallback para texto com opções numeradas
     const fallbackText = bodyText + "\n\n" + buttons.map((b, i) => `${i + 1}. ${b.title}`).join("\n");
     return sendWhatsAppMessage(to, fallbackText, source);
   }
@@ -244,7 +288,6 @@ async function sendWhatsAppButtons(
 // ============================================================================
 
 async function downloadWhatsAppMedia(mediaId: string, eventoId?: string): Promise<string | null> {
-  // Guard clause - verificar estado no banco
   if (eventoId) {
     const { data: evento } = await supabase
       .from("eventos_brutos")
@@ -447,7 +490,6 @@ Se não for financeiro: {"intent": "outro", "confianca": 0.1}`
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
     const parsed = JSON.parse(cleanJson);
     
-    // Persistir media_analysis
     await supabase.from("media_analysis").insert({
       evento_bruto_id: eventoId,
       message_id: messageId,
@@ -471,7 +513,7 @@ Se não for financeiro: {"intent": "outro", "confianca": 0.1}`
 }
 
 // ============================================================================
-// 🧠 INTERPRETAÇÃO IA
+// 🧠 INTERPRETAÇÃO IA (APENAS INTERPRETA, NÃO DECIDE)
 // ============================================================================
 
 async function interpretarMensagem(mensagem: string, historicoRecente: string): Promise<{ intent: ExtractedIntent; confianca: number }> {
@@ -487,15 +529,17 @@ async function interpretarMensagem(mensagem: string, historicoRecente: string): 
         messages: [
           {
             role: "system",
-            content: `Você é um analisador de intenções financeiras. APENAS interprete, não tome decisões.
+            content: `Você é um analisador de intenções financeiras. APENAS interprete, NÃO tome decisões.
+
+⚠️ SUA FUNÇÃO: Extrair dados da mensagem. Você NÃO decide se deve registrar ou não.
 
 INTENTS:
-- "registrar_gasto": gasto/despesa
-- "registrar_entrada": receita/entrada
+- "registrar_gasto": gasto/despesa/compra
+- "registrar_entrada": receita/entrada/salário
 - "criar_parcelamento": compra parcelada
 - "criar_recorrente": gasto repetitivo mensal
-- "consultar_resumo": resumo geral
-- "cancelar_transacao": apagar algo
+- "consultar_resumo": resumo/quanto gastei
+- "cancelar_transacao": apagar/cancelar/desfazer
 - "saudacao": oi, olá, bom dia
 - "ajuda": como funciona
 - "confirmar_hipotese": sim, pode registrar
@@ -569,7 +613,6 @@ async function consumirPendingSelection(
   userId: string,
   awaitingField: string
 ): Promise<{ options: any[]; id: string } | null> {
-  // FOR UPDATE com lock atômico
   const { data, error } = await supabase
     .from("pending_selections")
     .select("id, options")
@@ -586,12 +629,11 @@ async function consumirPendingSelection(
     return null;
   }
   
-  // Marcar como consumido atomicamente
   const { error: updateError } = await supabase
     .from("pending_selections")
     .update({ consumed: true })
     .eq("id", data.id)
-    .eq("consumed", false); // Garantia de lock
+    .eq("consumed", false);
   
   if (updateError) {
     console.log(`⚠️ [PENDING] Race condition ao consumir`);
@@ -603,18 +645,22 @@ async function consumirPendingSelection(
 }
 
 // ============================================================================
-// 💾 HIPÓTESES
+// 💾 HIPÓTESES (PARA CONFIRMAÇÃO DO USUÁRIO)
 // ============================================================================
 
 async function criarHipotese(
   userId: string,
   eventoId: string | null,
   dados: ExtractedIntent,
-  confianca: number,
-  mediaAnalysisId?: string
+  confianca: number
 ): Promise<string | null> {
   try {
-    const idempotencyKey = `hyp_${userId}_${Date.now()}`;
+    // Expirar hipóteses antigas do mesmo usuário
+    await supabase
+      .from("hipoteses_registro")
+      .update({ status: "expirada" })
+      .eq("user_id", userId)
+      .eq("status", "pendente");
     
     const { data, error } = await supabase
       .from("hipoteses_registro")
@@ -624,9 +670,7 @@ async function criarHipotese(
         tipo: dados.intent,
         dados: dados,
         confianca,
-        status: "pendente",
-        idempotency_key: idempotencyKey,
-        media_analysis_id: mediaAnalysisId
+        status: "pendente"
       })
       .select("id")
       .single();
@@ -663,17 +707,23 @@ async function buscarHipotesePendente(userId: string): Promise<any | null> {
   
   if (!data) return null;
   
-  // Verificar se não expirou (15 min)
+  // Verificar se não expirou (5 min para hipóteses)
   const createdAt = new Date(data.created_at);
   const diffMinutos = (Date.now() - createdAt.getTime()) / 1000 / 60;
   
-  if (diffMinutos > 15) return null;
+  if (diffMinutos > 5) {
+    await supabase
+      .from("hipoteses_registro")
+      .update({ status: "expirada" })
+      .eq("id", data.id);
+    return null;
+  }
   
   return data;
 }
 
 // ============================================================================
-// 💰 REGISTRO DE TRANSAÇÃO (IDEMPOTENTE)
+// 💰 REGISTRO DE TRANSAÇÃO (IDEMPOTENTE COM ACTION HASH)
 // ============================================================================
 
 function gerarIdTransacao(): string {
@@ -683,38 +733,55 @@ function gerarIdTransacao(): string {
   return `TRX-${data}-${random}`;
 }
 
+/**
+ * FUNÇÃO PRINCIPAL DE REGISTRO - ANTI-DUPLICAÇÃO
+ * 
+ * 1. Gera action_hash baseado em: user_id + tipo + valor + categoria + janela_60s
+ * 2. Tenta criar action (idempotente)
+ * 3. SE action já existe → NÃO registra, retorna "já registrado"
+ * 4. SE action criada → Cria transação + marca action como done
+ */
 async function registrarTransacaoIdempotente(
   userId: string,
   dados: ExtractedIntent,
   eventoId: string | null,
   hipoteseId?: string
-): Promise<{ sucesso: boolean; mensagem: string; transacaoId?: string }> {
+): Promise<{ sucesso: boolean; mensagem: string; transacaoId?: string; jaDuplicado?: boolean }> {
   
-  // Gerar action hash
-  const actionHash = gerarActionHash(userId, "registrar_transacao", {
-    valor: dados.valor,
-    descricao: dados.descricao,
-    categoria: dados.categoria
-  });
+  const tipoTransacao = dados.intent === "registrar_entrada" ? "entrada" : "saida";
+  const categoria = dados.categoria || "outros";
   
-  // Verificar idempotência
-  const { created, actionId } = await verificarOuCriarAction(
-    userId, 
-    "registrar_transacao", 
-    actionHash
+  // 1. GERAR ACTION HASH (SEM DESCRIÇÃO!)
+  const actionHash = gerarActionHash(
+    userId,
+    dados.intent === "registrar_entrada" ? "registrar_entrada" : "registrar_gasto",
+    dados.valor,
+    categoria
   );
   
+  console.log(`🔐 [REGISTRO] Hash: ${actionHash} | Valor: ${dados.valor} | Cat: ${categoria}`);
+  
+  // 2. VERIFICAR/CRIAR ACTION (IDEMPOTENTE)
+  const { created, actionId } = await verificarOuCriarAction(
+    userId, 
+    dados.intent === "registrar_entrada" ? "registrar_entrada" : "registrar_gasto",
+    actionHash,
+    { valor: dados.valor, categoria, descricao: dados.descricao }
+  );
+  
+  // 3. SE JÁ EXISTE → NÃO DUPLICAR
   if (!created) {
+    console.log(`🛑 [REGISTRO] Bloqueado - duplicação detectada: ${actionHash}`);
     return {
       sucesso: false,
-      mensagem: "Essa transação já foi registrada 👍"
+      jaDuplicado: true,
+      mensagem: "Esse gasto já foi registrado há instantes 👍"
     };
   }
   
+  // 4. CRIAR TRANSAÇÃO (ÚNICA VEZ)
   const transacaoId = gerarIdTransacao();
   const agora = new Date();
-  const tipoTransacao = dados.intent === "registrar_entrada" ? "entrada" : "saida";
-  const categoria = dados.categoria || "outros";
   
   const { data: transacao, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
@@ -731,7 +798,7 @@ async function registrarTransacaoIdempotente(
   }).select("id").single();
   
   if (error) {
-    console.error("❌ [REGISTRO] Erro:", error);
+    console.error("❌ [REGISTRO] Erro ao criar transação:", error);
     // Reverter action
     await supabase.from("actions").delete().eq("action_hash", actionHash);
     return {
@@ -740,27 +807,30 @@ async function registrarTransacaoIdempotente(
     };
   }
   
-  // Marcar action como done
-  await marcarActionDone(actionHash);
+  // 5. MARCAR ACTION COMO DONE
+  await marcarActionDone(actionHash, transacao.id);
   
-  // Marcar hipótese como confirmada
+  // 6. CONFIRMAR HIPÓTESE SE EXISTIR
   if (hipoteseId) {
     await confirmarHipotese(hipoteseId);
   }
   
-  // Log
+  // 7. LOG
   await supabase.from("finax_logs").insert({
     user_id: userId,
     action_type: "registrar_transacao",
     entity_type: "transacao",
     entity_id: transacao.id,
-    new_data: dados
+    new_data: { ...dados, action_hash: actionHash }
   });
   
+  // 8. FORMATAR RESPOSTA
   const dataFormatada = agora.toLocaleDateString("pt-BR");
   const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
   const sinal = tipoTransacao === "entrada" ? "+" : "-";
   const tipoTexto = tipoTransacao === "entrada" ? "Entrada registrada" : "Gasto registrado";
+  
+  console.log(`✅ [REGISTRO] Sucesso: ${transacaoId} | ${actionHash}`);
   
   return {
     sucesso: true,
@@ -776,7 +846,7 @@ async function registrarTransacaoIdempotente(
 }
 
 // ============================================================================
-// 🗑️ CANCELAMENTO (IDEMPOTENTE COM UNDO)
+// 🗑️ CANCELAMENTO (IDEMPOTENTE)
 // ============================================================================
 
 async function listarTransacoesParaCancelar(userId: string): Promise<any[]> {
@@ -796,20 +866,19 @@ async function cancelarTransacaoIdempotente(
   transacaoId: string
 ): Promise<{ sucesso: boolean; mensagem: string }> {
   
-  const actionHash = gerarActionHash(userId, "cancelar_transacao", { transacao_id: transacaoId });
+  const actionHash = gerarActionHash(userId, "cancelar_transacao", 0, transacaoId);
   
   const { created } = await verificarOuCriarAction(
     userId, 
     "cancelar_transacao", 
     actionHash,
-    transacaoId
+    { transacao_id: transacaoId }
   );
   
   if (!created) {
     return { sucesso: false, mensagem: "Essa transação já foi cancelada 👍" };
   }
   
-  // Buscar transação
   const { data: transacao } = await supabase
     .from("transacoes")
     .select("*")
@@ -821,20 +890,18 @@ async function cancelarTransacaoIdempotente(
     return { sucesso: false, mensagem: "Transação não encontrada 🤔" };
   }
   
-  // Log antes de cancelar
   await supabase.from("finax_logs").insert({
     user_id: userId,
     action_type: "cancelar_transacao",
     entity_type: "transacao",
     entity_id: transacaoId,
     old_data: transacao,
-    new_data: { status: "cancelled" }
+    new_data: { status: "cancelada" }
   });
   
-  // Cancelar
   const { error } = await supabase
     .from("transacoes")
-    .update({ status: "cancelled" })
+    .update({ status: "cancelada" })
     .eq("id", transacaoId)
     .eq("usuario_id", userId);
   
@@ -843,7 +910,7 @@ async function cancelarTransacaoIdempotente(
     return { sucesso: false, mensagem: "Erro ao cancelar 😕" };
   }
   
-  await marcarActionDone(actionHash);
+  await marcarActionDone(actionHash, transacaoId);
   
   return {
     sucesso: true,
@@ -862,7 +929,7 @@ async function processarJob(job: any): Promise<void> {
   const userId = job.user_id;
   const eventoId = payload.evento_id;
   
-  console.log(`🔄 [WORKER] Processando job ${job.id} | ${payload.messageType}`);
+  console.log(`🔄 [WORKER] Job ${job.id} | ${payload.messageType} | User: ${userId?.slice(0,8)}`);
   
   try {
     // Buscar usuário
@@ -874,7 +941,7 @@ async function processarJob(job: any): Promise<void> {
     
     const nomeUsuario = usuario?.nome || "amigo(a)";
     
-    // Verificar se é novo usuário (sem histórico)
+    // Verificar se é novo usuário
     const { count: historicoCount } = await supabase
       .from("historico_conversas")
       .select("id", { count: "exact", head: true })
@@ -882,7 +949,7 @@ async function processarJob(job: any): Promise<void> {
     
     const isNovoUsuario = (historicoCount || 0) === 0;
     
-    // ONBOARDING NOVO USUÁRIO
+    // ONBOARDING
     if (isNovoUsuario) {
       console.log(`🎉 [WORKER] Novo usuário: ${payload.phoneNumber}`);
       
@@ -929,7 +996,7 @@ async function processarJob(job: any): Promise<void> {
           user_id: userId,
           user_message: payload.messageText,
           ai_response: resultado.mensagem,
-          tipo: "registro_confirmado"
+          tipo: resultado.jaDuplicado ? "duplicado_bloqueado" : "registro_confirmado"
         });
         
         return;
@@ -991,7 +1058,6 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     let conteudoProcessado = payload.messageText;
     let confianca = 0.9;
-    let tipoOrigem = payload.messageType;
     
     // ÁUDIO
     if (payload.messageType === "audio" && payload.mediaId) {
@@ -1020,7 +1086,6 @@ async function processarJob(job: any): Promise<void> {
       conteudoProcessado = transcricao.texto;
       confianca = transcricao.confianca * 0.9;
       
-      // Persistir media_analysis
       await supabase.from("media_analysis").insert({
         evento_bruto_id: eventoId,
         message_id: payload.messageId,
@@ -1032,7 +1097,7 @@ async function processarJob(job: any): Promise<void> {
       });
     }
     
-    // IMAGEM - FLUXO PERFEITO
+    // IMAGEM
     if (payload.messageType === "image" && payload.mediaId) {
       const imageBase64 = await downloadWhatsAppMedia(payload.mediaId, eventoId || undefined);
       
@@ -1056,10 +1121,9 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // CRIAR HIPÓTESE (imagem SEMPRE cria hipótese)
-      const hipoteseId = await criarHipotese(userId, eventoId, analise.dados, analise.confianca);
+      // Imagem sempre cria hipótese para confirmação
+      await criarHipotese(userId, eventoId, analise.dados, analise.confianca);
       
-      // Montar mensagem de confirmação com botões
       const msgConfirmacao = `Entendi assim 👇\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━\n` +
         `💸 *Gasto*: R$ ${analise.dados.valor?.toFixed(2)}\n` +
@@ -1090,18 +1154,17 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
-    // INTERPRETAÇÃO IA
+    // INTERPRETAÇÃO IA (APENAS INTERPRETA)
     // ========================================================================
-    const historicoRecente = ""; // Simplificado
-    const { intent: interpretacao, confianca: confIA } = await interpretarMensagem(conteudoProcessado, historicoRecente);
+    const { intent: interpretacao, confianca: confIA } = await interpretarMensagem(conteudoProcessado, "");
     
-    console.log(`🎯 [WORKER] Intent: ${interpretacao.intent} (${confIA})`);
+    console.log(`🎯 [WORKER] Intent: ${interpretacao.intent} | Valor: ${interpretacao.valor} | Conf: ${confIA}`);
     
     // ========================================================================
     // MOTOR DE DECISÃO
     // ========================================================================
     
-    // CANCELAR TRANSAÇÃO - FLUXO PERFEITO
+    // CANCELAR TRANSAÇÃO
     if (interpretacao.intent === "cancelar_transacao") {
       const transacoes = await listarTransacoesParaCancelar(userId);
       
@@ -1114,7 +1177,6 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // Criar pending_selection
       const options = transacoes.map((t, i) => ({
         index: i + 1,
         tx_id: t.id,
@@ -1148,10 +1210,10 @@ async function processarJob(job: any): Promise<void> {
     // REGISTRAR GASTO/ENTRADA
     if (["registrar_gasto", "registrar_entrada"].includes(interpretacao.intent)) {
       const temValor = interpretacao.valor && interpretacao.valor > 0;
-      const temDescricao = !!interpretacao.descricao;
+      const temCategoria = !!interpretacao.categoria;
       
-      // Dados completos + alta confiança → REGISTRA DIRETO
-      if (temValor && temDescricao && confIA >= 0.8) {
+      // DADOS SUFICIENTES + ALTA CONFIANÇA → REGISTRA DIRETO
+      if (temValor && confIA >= 0.7) {
         const resultado = await registrarTransacaoIdempotente(userId, interpretacao, eventoId);
         
         await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
@@ -1161,20 +1223,21 @@ async function processarJob(job: any): Promise<void> {
           user_id: userId,
           user_message: conteudoProcessado,
           ai_response: resultado.mensagem,
-          tipo: "registro_direto"
+          tipo: resultado.jaDuplicado ? "duplicado_bloqueado" : "registro_direto"
         });
         
         return;
       }
       
-      // Dados completos + média confiança → CRIAR HIPÓTESE
-      if (temValor && temDescricao) {
+      // DADOS COMPLETOS + MÉDIA CONFIANÇA → CRIAR HIPÓTESE
+      if (temValor && confIA >= 0.5) {
         await criarHipotese(userId, eventoId, interpretacao, confIA);
         
         const msgConfirmacao = `Entendi assim 👇\n\n` +
           `━━━━━━━━━━━━━━━━━━━━━━\n` +
           `💸 *Gasto*: R$ ${interpretacao.valor?.toFixed(2)}\n` +
           (interpretacao.descricao ? `📝 *O quê*: ${interpretacao.descricao}\n` : "") +
+          (interpretacao.categoria ? `📂 *Categoria*: ${interpretacao.categoria}\n` : "") +
           `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
           `Posso registrar? *Sim* ou *Não*`;
         
@@ -1191,10 +1254,9 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // Falta dados → PERGUNTAR
-      const faltando = !temValor ? "valor" : "descricao";
-      const pergunta = faltando === "valor"
-        ? `Entendi: *${interpretacao.descricao}* 👍\n\n👉 Qual foi o valor?`
+      // FALTA DADOS → PERGUNTAR
+      const pergunta = !temValor
+        ? `Entendi: *${interpretacao.descricao || "um gasto"}* 👍\n\n👉 Qual foi o valor?`
         : `Vi *R$ ${interpretacao.valor?.toFixed(2)}* 💰\n\n👉 O que foi essa compra?`;
       
       await sendWhatsAppMessage(payload.phoneNumber, pergunta, payload.messageSource);
@@ -1286,12 +1348,12 @@ async function processarJob(job: any): Promise<void> {
     
   } catch (error) {
     console.error(`❌ [WORKER] Erro processando job ${job.id}:`, error);
-    throw error; // Propagar para marcar job como erro
+    throw error;
   }
 }
 
 // ============================================================================
-// 🚀 ENDPOINT - PODE SER CHAMADO POR CRON OU WEBHOOK
+// 🚀 ENDPOINT
 // ============================================================================
 
 serve(async (req) => {
@@ -1300,7 +1362,6 @@ serve(async (req) => {
   }
 
   try {
-    // Buscar próximo job pendente
     const { data: jobs, error: fetchError } = await supabase
       .from("webhook_jobs")
       .select("*")
@@ -1332,12 +1393,11 @@ serve(async (req) => {
         .from("webhook_jobs")
         .update({ status: "processing", attempts: job.attempts + 1 })
         .eq("id", job.id)
-        .eq("status", "pending"); // Lock otimista
+        .eq("status", "pending");
       
       try {
         await processarJob(job);
         
-        // Marcar como done
         await supabase
           .from("webhook_jobs")
           .update({ status: "done", processed_at: new Date().toISOString() })
@@ -1350,10 +1410,9 @@ serve(async (req) => {
         console.error(`❌ [WORKER] Job ${job.id} falhou:`, error);
         
         const newAttempts = job.attempts + 1;
-        const nextRetry = new Date(Date.now() + Math.pow(2, newAttempts) * 1000); // Exponential backoff
+        const nextRetry = new Date(Date.now() + Math.pow(2, newAttempts) * 1000);
         
         if (newAttempts >= 3) {
-          // Dead letter
           await supabase
             .from("webhook_jobs")
             .update({ 
@@ -1363,7 +1422,6 @@ serve(async (req) => {
             })
             .eq("id", job.id);
         } else {
-          // Retry
           await supabase
             .from("webhook_jobs")
             .update({ 
