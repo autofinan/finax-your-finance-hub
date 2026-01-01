@@ -23,8 +23,50 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const WHATSAPP_VERIFY_TOKEN = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
+const WHATSAPP_ACCESS_TOKEN = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+const WHATSAPP_PHONE_NUMBER_ID = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// ============================================================================
+// 📱 RESPOSTA RÁPIDA (FEEDBACK IMEDIATO AO USUÁRIO)
+// ============================================================================
+
+async function enviarRespostaRapida(phoneNumber: string, tipo: TipoMidia): Promise<void> {
+  if (tipo === "text") return; // Texto não precisa de resposta rápida
+  
+  const mensagens = {
+    image: "📷 Recebi a imagem! Analisando... 🧠",
+    audio: "🎤 Recebi o áudio! Transcrevendo... 🧠"
+  };
+  
+  const texto = mensagens[tipo] || null;
+  if (!texto) return;
+  
+  try {
+    const cleanNumber = phoneNumber.replace(/\D/g, "");
+    await fetch(
+      `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: cleanNumber,
+          type: "text",
+          text: { body: texto }
+        }),
+      }
+    );
+    console.log(`⚡ [QUICK] Resposta rápida enviada para ${tipo}`);
+  } catch (e) {
+    console.log(`⚠️ [QUICK] Erro ao enviar resposta rápida:`, e);
+    // Não bloqueia o fluxo se falhar
+  }
+}
 
 // ============================================================================
 // 📦 TIPOS
@@ -43,6 +85,7 @@ interface PayloadParsed {
   messageSource: MessageSource;
   nomeContato: string | null;
   rawPayload: any;
+  buttonReplyId: string | null;
 }
 
 // ============================================================================
@@ -217,7 +260,8 @@ function parsePayload(json: any): PayloadParsed | null {
       mediaId: null,
       mediaMimeType: "",
       nomeContato: null,
-      rawPayload: json
+      rawPayload: json,
+      buttonReplyId: null
     };
   }
   
@@ -238,6 +282,7 @@ function parsePayload(json: any): PayloadParsed | null {
     let messageText = "";
     let mediaId: string | null = null;
     let mediaMimeType = "";
+    let buttonReplyId: string | null = null;
     
     if (message.type === "text") {
       messageType = "text";
@@ -250,6 +295,12 @@ function parsePayload(json: any): PayloadParsed | null {
       messageType = "image";
       mediaId = message.image?.id || null;
       mediaMimeType = message.image?.mime_type || "image/jpeg";
+    } else if (message.type === "interactive") {
+      // 🔘 CALLBACK DE BOTÃO INTERATIVO
+      messageType = "text";
+      buttonReplyId = message.interactive?.button_reply?.id || null;
+      messageText = buttonReplyId || message.interactive?.button_reply?.title || "";
+      console.log(`🔘 [BUTTON] Callback: ${buttonReplyId}`);
     } else {
       return null; // Tipo não suportado
     }
@@ -263,7 +314,8 @@ function parsePayload(json: any): PayloadParsed | null {
       mediaId,
       mediaMimeType,
       nomeContato,
-      rawPayload: json
+      rawPayload: json,
+      buttonReplyId
     };
   }
   
@@ -334,6 +386,11 @@ serve(async (req) => {
 
     // 3. Buscar/criar usuário
     const usuarioId = await buscarOuCriarUsuario(payload.phoneNumber, payload.nomeContato);
+
+    // 3.5 RESPOSTA RÁPIDA PARA MÍDIA (não bloqueia)
+    if (payload.messageType === "image" || payload.messageType === "audio") {
+      enviarRespostaRapida(payload.phoneNumber, payload.messageType);
+    }
 
     // 4. Salvar evento bruto
     const eventoId = await salvarEventoBruto(
