@@ -51,6 +51,7 @@ interface JobPayload {
   messageSource: MessageSource;
   nomeContato: string | null;
   evento_id: string | null;
+  buttonReplyId: string | null;
 }
 
 interface ExtractedIntent {
@@ -648,44 +649,202 @@ async function consumirPendingSelection(
 // 💾 HIPÓTESES (PARA CONFIRMAÇÃO DO USUÁRIO)
 // ============================================================================
 
+/**
+ * CRIA HIPÓTESE COM ACTION PRÉ-REGISTRADA
+ * 
+ * REGRA DE OURO DOS BOTÕES:
+ * - Botão NUNCA decide nada
+ * - Ele apenas EXECUTA algo que já está pré-registrado (action)
+ * 
+ * Ao criar hipótese, já cria a ACTION com status "pending_confirmation"
+ * Quando usuário clica "Sim", apenas muda status para "pending" e executa
+ */
 async function criarHipotese(
   userId: string,
   eventoId: string | null,
   dados: ExtractedIntent,
   confianca: number
-): Promise<string | null> {
+): Promise<{ hipoteseId: string | null; actionId: string | null }> {
   try {
-    // Expirar hipóteses antigas do mesmo usuário
+    // 1. Expirar hipóteses antigas do mesmo usuário
     await supabase
       .from("hipoteses_registro")
       .update({ status: "expirada" })
       .eq("user_id", userId)
       .eq("status", "pendente");
     
-    const { data, error } = await supabase
+    // 2. Criar ACTION com status "pending_confirmation" (aguardando botão)
+    const actionHash = `hipotese_${userId.slice(0,8)}_${Date.now()}`;
+    
+    const { data: actionData, error: actionError } = await supabase
+      .from("actions")
+      .insert({
+        user_id: userId,
+        action_type: dados.intent === "registrar_entrada" ? "registrar_entrada" : "registrar_gasto",
+        action_hash: actionHash,
+        status: "pending_confirmation", // Aguardando confirmação do usuário
+        meta: {
+          valor: dados.valor,
+          categoria: dados.categoria || "outros",
+          descricao: dados.descricao,
+          forma_pagamento: dados.forma_pagamento,
+          evento_id: eventoId,
+          confianca
+        }
+      })
+      .select("id")
+      .single();
+    
+    if (actionError) {
+      console.error("❌ [HIPOTESE] Erro ao criar action:", actionError);
+      return { hipoteseId: null, actionId: null };
+    }
+    
+    console.log(`🔐 [ACTION] Pré-registrada: ${actionData.id} (${actionHash})`);
+    
+    // 3. Criar hipótese vinculada à action
+    const { data: hipoteseData, error: hipoteseError } = await supabase
       .from("hipoteses_registro")
       .insert({
         user_id: userId,
         evento_id: eventoId,
         tipo: dados.intent,
-        dados: dados,
+        dados: { ...dados, action_id: actionData.id },
         confianca,
-        status: "pendente"
+        status: "pendente",
+        idempotency_key: actionHash
       })
       .select("id")
       .single();
     
-    if (error) {
-      console.error("❌ [HIPOTESE] Erro:", error);
-      return null;
+    if (hipoteseError) {
+      console.error("❌ [HIPOTESE] Erro:", hipoteseError);
+      return { hipoteseId: null, actionId: actionData.id };
     }
     
-    console.log(`💡 [HIPOTESE] Criada: ${data.id}`);
-    return data.id;
+    console.log(`💡 [HIPOTESE] Criada: ${hipoteseData.id} -> Action: ${actionData.id}`);
+    return { hipoteseId: hipoteseData.id, actionId: actionData.id };
   } catch (e) {
     console.error("❌ [HIPOTESE] Exceção:", e);
-    return null;
+    return { hipoteseId: null, actionId: null };
   }
+}
+
+/**
+ * EXECUTAR ACTION PRÉ-REGISTRADA (CHAMADO QUANDO USUÁRIO CLICA "SIM")
+ * 
+ * 1. Busca action pelo ID
+ * 2. Valida se ainda está "pending_confirmation"
+ * 3. Executa (cria transação)
+ * 4. Marca como "done"
+ */
+async function executarActionConfirmada(
+  actionId: string,
+  userId: string
+): Promise<{ sucesso: boolean; mensagem: string; jaDuplicado?: boolean }> {
+  try {
+    // 1. Buscar action
+    const { data: action } = await supabase
+      .from("actions")
+      .select("*")
+      .eq("id", actionId)
+      .eq("user_id", userId)
+      .single();
+    
+    if (!action) {
+      console.log(`❌ [ACTION] Não encontrada: ${actionId}`);
+      return { sucesso: false, mensagem: "Essa confirmação expirou 😕\n\nMe conta de novo o gasto." };
+    }
+    
+    // 2. Verificar status
+    if (action.status === "done") {
+      console.log(`🔒 [ACTION] Já executada: ${actionId}`);
+      return { sucesso: false, jaDuplicado: true, mensagem: "Esse gasto já foi registrado 👍" };
+    }
+    
+    if (action.status !== "pending_confirmation") {
+      console.log(`⚠️ [ACTION] Status inválido: ${action.status}`);
+      return { sucesso: false, mensagem: "Essa confirmação não está mais disponível." };
+    }
+    
+    // 3. Extrair dados do meta
+    const meta = action.meta as { valor: number; categoria: string; descricao?: string; forma_pagamento?: string };
+    const tipoTransacao = action.action_type === "registrar_entrada" ? "entrada" : "saida";
+    
+    // 4. Criar transação
+    const transacaoId = gerarIdTransacao();
+    const agora = new Date();
+    
+    const { data: transacao, error: txError } = await supabase.from("transacoes").insert({
+      usuario_id: userId,
+      valor: meta.valor,
+      categoria: meta.categoria || "outros",
+      tipo: tipoTransacao,
+      descricao: meta.descricao,
+      observacao: meta.descricao,
+      data: agora.toISOString(),
+      origem: "whatsapp",
+      forma_pagamento: meta.forma_pagamento,
+      status: "confirmada",
+      idempotency_key: action.action_hash
+    }).select("id").single();
+    
+    if (txError) {
+      console.error("❌ [ACTION] Erro ao criar transação:", txError);
+      return { sucesso: false, mensagem: "Algo deu errado ao salvar 😕\n\nTenta de novo?" };
+    }
+    
+    // 5. Marcar action como done
+    await supabase
+      .from("actions")
+      .update({ status: "done", entity_id: transacao.id, updated_at: new Date().toISOString() })
+      .eq("id", actionId);
+    
+    // 6. Log
+    await supabase.from("finax_logs").insert({
+      user_id: userId,
+      action_type: "confirmar_registro",
+      entity_type: "transacao",
+      entity_id: transacao.id,
+      new_data: { action_id: actionId, ...meta }
+    });
+    
+    // 7. Formatar resposta
+    const dataFormatada = agora.toLocaleDateString("pt-BR");
+    const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    const sinal = tipoTransacao === "entrada" ? "+" : "-";
+    const tipoTexto = tipoTransacao === "entrada" ? "Entrada registrada" : "Gasto registrado";
+    
+    console.log(`✅ [ACTION] Executada: ${actionId} -> ${transacao.id}`);
+    
+    return {
+      sucesso: true,
+      mensagem: `✅ *${tipoTexto}!*\n\n` +
+        `🧾 *ID: ${transacaoId}*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `💸 *${sinal}R$ ${meta.valor?.toFixed(2)}*\n` +
+        `📂 ${meta.categoria}\n` +
+        (meta.descricao ? `📝 ${meta.descricao}\n` : "") +
+        `📅 ${dataFormatada} às ${horaFormatada}`
+    };
+    
+  } catch (e) {
+    console.error("❌ [ACTION] Exceção:", e);
+    return { sucesso: false, mensagem: "Erro ao processar confirmação 😕" };
+  }
+}
+
+/**
+ * CANCELAR ACTION PRÉ-REGISTRADA (CHAMADO QUANDO USUÁRIO CLICA "NÃO")
+ */
+async function cancelarActionPendente(actionId: string, userId: string): Promise<void> {
+  await supabase
+    .from("actions")
+    .update({ status: "cancelled", updated_at: new Date().toISOString() })
+    .eq("id", actionId)
+    .eq("user_id", userId);
+  
+  console.log(`🗑️ [ACTION] Cancelada: ${actionId}`);
 }
 
 async function confirmarHipotese(hipoteseId: string): Promise<void> {
@@ -973,15 +1132,124 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
-    // VERIFICAR HIPÓTESE PENDENTE
+    // 🔘 TRATAR CALLBACK DE BOTÃO INTERATIVO (PRIORIDADE MÁXIMA)
+    // ========================================================================
+    if (payload.buttonReplyId) {
+      console.log(`🔘 [BUTTON] Processando callback: ${payload.buttonReplyId}`);
+      
+      const hipotesePendente = await buscarHipotesePendente(userId);
+      
+      if (payload.buttonReplyId === "confirm_yes") {
+        // CONFIRMAR - Buscar action vinculada à hipótese
+        if (hipotesePendente?.dados?.action_id) {
+          const resultado = await executarActionConfirmada(hipotesePendente.dados.action_id, userId);
+          
+          // Atualizar hipótese
+          await supabase.from("hipoteses_registro")
+            .update({ status: resultado.sucesso ? "confirmada" : "erro" })
+            .eq("id", hipotesePendente.id);
+          
+          await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber,
+            user_id: userId,
+            user_message: "[BOTÃO SIM]",
+            ai_response: resultado.mensagem,
+            tipo: resultado.jaDuplicado ? "duplicado_bloqueado" : "registro_botao"
+          });
+          
+          return;
+        } else {
+          // Fallback: hipótese sem action (compatibilidade)
+          if (hipotesePendente) {
+            const resultado = await registrarTransacaoIdempotente(
+              userId,
+              hipotesePendente.dados,
+              eventoId,
+              hipotesePendente.id
+            );
+            
+            await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+            return;
+          }
+        }
+        
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          "Essa confirmação expirou 😕\n\nMe conta de novo o gasto.",
+          payload.messageSource
+        );
+        return;
+      }
+      
+      if (payload.buttonReplyId === "confirm_no") {
+        // CANCELAR
+        if (hipotesePendente) {
+          // Cancelar hipótese
+          await supabase.from("hipoteses_registro")
+            .update({ status: "cancelada" })
+            .eq("id", hipotesePendente.id);
+          
+          // Cancelar action vinculada
+          if (hipotesePendente.dados?.action_id) {
+            await cancelarActionPendente(hipotesePendente.dados.action_id, userId);
+          }
+        }
+        
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          "Sem problemas! 👍 Já descartei.\n\nMe conta novamente como foi.",
+          payload.messageSource
+        );
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: payload.phoneNumber,
+          user_id: userId,
+          user_message: "[BOTÃO NÃO]",
+          ai_response: "[CANCELADO_BOTAO]",
+          tipo: "cancelamento_botao"
+        });
+        
+        return;
+      }
+      
+      // Outro botão não reconhecido
+      console.log(`⚠️ [BUTTON] Botão não reconhecido: ${payload.buttonReplyId}`);
+    }
+    
+    // ========================================================================
+    // VERIFICAR HIPÓTESE PENDENTE (TEXTO)
     // ========================================================================
     const hipotesePendente = await buscarHipotesePendente(userId);
     
-    if (hipotesePendente && payload.messageType === "text") {
+    if (hipotesePendente && payload.messageType === "text" && !payload.buttonReplyId) {
       const msg = payload.messageText.toLowerCase().trim();
       
-      // Confirmar
+      // Confirmar via texto
       if (/^(sim|s|ok|pode|isso|certo|exato|blz|beleza|perfeito)$/.test(msg) || /isso mesmo|pode salvar|^registra$/.test(msg)) {
+        // Verificar se tem action vinculada
+        if (hipotesePendente.dados?.action_id) {
+          const resultado = await executarActionConfirmada(hipotesePendente.dados.action_id, userId);
+          
+          await supabase.from("hipoteses_registro")
+            .update({ status: resultado.sucesso ? "confirmada" : "erro" })
+            .eq("id", hipotesePendente.id);
+          
+          await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber,
+            user_id: userId,
+            user_message: payload.messageText,
+            ai_response: resultado.mensagem,
+            tipo: resultado.jaDuplicado ? "duplicado_bloqueado" : "registro_confirmado"
+          });
+          
+          return;
+        }
+        
+        // Fallback: registrar diretamente (compatibilidade)
         const resultado = await registrarTransacaoIdempotente(
           userId,
           hipotesePendente.dados,
@@ -1002,11 +1270,16 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // Cancelar
+      // Cancelar via texto
       if (/^(não|nao|n)$/.test(msg) || /^cancela|^para|^deixa|deixa pra l/.test(msg)) {
         await supabase.from("hipoteses_registro")
           .update({ status: "cancelada" })
           .eq("id", hipotesePendente.id);
+        
+        // Cancelar action vinculada se existir
+        if (hipotesePendente.dados?.action_id) {
+          await cancelarActionPendente(hipotesePendente.dados.action_id, userId);
+        }
         
         await sendWhatsAppMessage(
           payload.phoneNumber,
@@ -1121,8 +1394,17 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // Imagem sempre cria hipótese para confirmação
-      await criarHipotese(userId, eventoId, analise.dados, analise.confianca);
+      // Imagem sempre cria hipótese + action para confirmação
+      const { hipoteseId, actionId } = await criarHipotese(userId, eventoId, analise.dados, analise.confianca);
+      
+      if (!hipoteseId) {
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          "Algo deu errado ao processar a imagem 😕\n\n👉 Tenta de novo?",
+          payload.messageSource
+        );
+        return;
+      }
       
       const msgConfirmacao = `Entendi assim 👇\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1229,9 +1511,9 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // DADOS COMPLETOS + MÉDIA CONFIANÇA → CRIAR HIPÓTESE
+      // DADOS COMPLETOS + MÉDIA CONFIANÇA → CRIAR HIPÓTESE COM ACTION
       if (temValor && confIA >= 0.5) {
-        await criarHipotese(userId, eventoId, interpretacao, confIA);
+        const { hipoteseId, actionId } = await criarHipotese(userId, eventoId, interpretacao, confIA);
         
         const msgConfirmacao = `Entendi assim 👇\n\n` +
           `━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1239,9 +1521,18 @@ async function processarJob(job: any): Promise<void> {
           (interpretacao.descricao ? `📝 *O quê*: ${interpretacao.descricao}\n` : "") +
           (interpretacao.categoria ? `📂 *Categoria*: ${interpretacao.categoria}\n` : "") +
           `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-          `Posso registrar? *Sim* ou *Não*`;
+          `Posso registrar?`;
         
-        await sendWhatsAppMessage(payload.phoneNumber, msgConfirmacao, payload.messageSource);
+        // Enviar com botões se Meta, senão texto
+        await sendWhatsAppButtons(
+          payload.phoneNumber,
+          msgConfirmacao,
+          [
+            { id: "confirm_yes", title: "✅ Sim" },
+            { id: "confirm_no", title: "❌ Não" }
+          ],
+          payload.messageSource
+        );
         
         await supabase.from("historico_conversas").insert({
           phone_number: payload.phoneNumber,
