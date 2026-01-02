@@ -551,6 +551,7 @@ INTENTS:
 - "criar_recorrente": gasto repetitivo mensal
 - "consultar_resumo": resumo/quanto gastei
 - "cancelar_transacao": apagar/cancelar/desfazer
+- "gerenciar_cartoes": atualizar/adicionar/remover/ver cartões ("meus cartões", "atualizar cartão", "adicionar cartão", "remover cartão", "quais cartões")
 - "saudacao": oi, olá, bom dia
 - "ajuda": como funciona
 - "confirmar_hipotese": sim, pode registrar
@@ -564,10 +565,23 @@ Se a mensagem contiver MAIS DE UM gasto/item COM VALORES DISTINTOS:
 2. Defina split_explicit=true se o usuário disse "separadamente", "cada um", "separado"
 3. Defina aggregate_explicit=true se o usuário falou como um único gasto ("gastei 10 no mercado com pão e leite")
 
-EXEMPLOS:
-- "café 1,50 e pão 5" → itens: [{valor:1.50,descricao:"café"},{valor:5,descricao:"pão"}], split_explicit: false
-- "café 1,50 e pão 5, registre separado" → itens: [...], split_explicit: true
-- "gastei 10 no mercado" → valor: 10, itens: null (único gasto)
+🔴 REGRA ABSOLUTA DE CATEGORIZAÇÃO (OBRIGATÓRIA):
+"outros" é SEMPRE o ÚLTIMO RECURSO. Você TEM conhecimento semântico. USE-O.
+
+MAPEAMENTO OBRIGATÓRIO:
+- café, pão, pão de queijo, água, refrigerante, suco, lanche, açaí, pizza, hambúrguer, almoço, jantar, padaria, restaurante, bar, ifood, delivery, paçoca, chocolate, doce, sorvete → "alimentacao"
+- mercado, supermercado, compras, feira → "mercado"
+- uber, 99, táxi, ônibus, metrô, gasolina, combustível, estacionamento, pedágio → "transporte"
+- farmácia, remédio, médico, hospital, consulta, exame, dentista, plano de saúde → "saude"
+- cinema, netflix, spotify, show, festa, bar (lazer), jogo, passeio, viagem → "lazer"
+- aluguel, condomínio, luz, água (conta), gás, internet, telefone → "moradia"
+- roupa, calçado, maquiagem, perfume, acessório, loja → "compras"
+
+SE o item combinar com QUALQUER palavra acima → USE essa categoria (confiança alta).
+"outros" SÓ se for algo totalmente desconhecido como "xyz123".
+
+CADA ITEM no array "itens" DEVE ter sua própria categoria correta.
+Exemplo: "café 1,50 e uber 10" → [{valor:1.50,descricao:"café",categoria:"alimentacao"},{valor:10,descricao:"uber",categoria:"transporte"}]
 
 Responda APENAS JSON:
 {
@@ -906,6 +920,66 @@ async function buscarHipotesePendente(userId: string): Promise<any | null> {
 }
 
 // ============================================================================
+// 🏷️ MAPEAMENTO SEMÂNTICO DE CATEGORIAS (FALLBACK OBRIGATÓRIO)
+// ============================================================================
+
+/**
+ * REGRA ABSOLUTA: "outros" é SEMPRE o ÚLTIMO RECURSO.
+ * Esta função garante que itens claramente inferíveis NUNCA caiam em "outros".
+ */
+function inferirCategoria(descricao: string, categoriaIA?: string): string {
+  // Se IA já retornou uma categoria válida diferente de "outros", usar ela
+  if (categoriaIA && categoriaIA !== "outros" && categoriaIA !== "other") {
+    return categoriaIA;
+  }
+  
+  const desc = descricao.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  
+  // ALIMENTAÇÃO
+  if (/cafe|café|pao|pão|padaria|lanche|almoco|almoço|jantar|janta|agua|água|refrigerante|refri|suco|acai|açai|pizza|hamburguer|hamburger|burger|pastel|coxinha|salgado|paçoca|pacoca|chocolate|doce|sorvete|bolo|biscoito|ifood|delivery|restaurante|mcdonald|mc donald|burger king|subway|starbucks|bar\s|bar$|boteco|cerveja|bebida|comida|refeicao|refeição|snack|lanchonete|cantina|cafeteria/.test(desc)) {
+    return "alimentacao";
+  }
+  
+  // MERCADO
+  if (/mercado|supermercado|feira|hortifruti|atacado|atacadao|carrefour|extra|pao de acucar|assai|compras mercado/.test(desc)) {
+    return "mercado";
+  }
+  
+  // TRANSPORTE
+  if (/uber|99|taxi|táxi|onibus|ônibus|metro|metrô|trem|gasolina|combustivel|combustível|alcool|álcool|etanol|estacionamento|pedagio|pedágio|bilhete|passagem|cabify|moto|bike|bicicleta|patinete|carro|veiculo|veiculo/.test(desc)) {
+    return "transporte";
+  }
+  
+  // SAÚDE
+  if (/farmacia|farmácia|remedio|remédio|medicamento|medico|médico|hospital|clinica|clínica|consulta|exame|dentista|fisioterapia|psicolog|plano de saude|plano de saúde|drogaria|droga raia|drogasil|pague menos|laboratorio|laboratório/.test(desc)) {
+    return "saude";
+  }
+  
+  // MORADIA
+  if (/aluguel|condominio|condomínio|luz|energia|eletrica|elétrica|gas|gás|agua conta|água conta|conta de agua|conta de água|internet|wifi|telefone|celular|iptu|seguro casa|seguro residencial/.test(desc)) {
+    return "moradia";
+  }
+  
+  // LAZER
+  if (/cinema|netflix|spotify|amazon prime|disney|hbo|show|festa|ingresso|teatro|museu|parque|viagem|hotel|hospedagem|airbnb|passeio|jogo|game|steam|playstation|xbox|diversao|diversão|entretenimento/.test(desc)) {
+    return "lazer";
+  }
+  
+  // COMPRAS
+  if (/roupa|calca|calça|camisa|vestido|sapato|tenis|tênis|bolsa|maquiagem|perfume|cosmetico|cosmético|acessorio|acessório|loja|shopping|renner|riachuelo|cea|marisa|zara|h&m|shein|mercado livre|amazon|magalu/.test(desc)) {
+    return "compras";
+  }
+  
+  // SERVIÇOS
+  if (/servico|serviço|manutencao|manutenção|conserto|reparo|mecanico|mecânico|eletricista|encanador|faxina|limpeza|lavanderia|costura|barbeiro|cabeleireiro|salao|salão/.test(desc)) {
+    return "servicos";
+  }
+  
+  // Se nada bateu e IA disse "outros", mantém
+  return categoriaIA || "outros";
+}
+
+// ============================================================================
 // 💰 REGISTRO DE TRANSAÇÃO (IDEMPOTENTE COM ACTION HASH)
 // ============================================================================
 
@@ -932,7 +1006,8 @@ async function registrarTransacaoIdempotente(
 ): Promise<{ sucesso: boolean; mensagem: string; transacaoId?: string; jaDuplicado?: boolean }> {
   
   const tipoTransacao = dados.intent === "registrar_entrada" ? "entrada" : "saida";
-  const categoria = dados.categoria || "outros";
+  // APLICAR INFERÊNCIA SEMÂNTICA - "outros" é último recurso
+  const categoria = inferirCategoria(dados.descricao || "", dados.categoria);
   
   // 1. GERAR ACTION HASH (SEM DESCRIÇÃO!)
   const actionHash = gerarActionHash(
@@ -1259,11 +1334,13 @@ async function processarJob(job: any): Promise<void> {
         
         for (const opt of pending.options) {
           const meta = opt.meta as { valor: number; descricao: string; categoria: string };
+          // APLICAR INFERÊNCIA SEMÂNTICA - "outros" é último recurso
+          const categoriaInferida = inferirCategoria(meta.descricao, meta.categoria);
           const intentItem: ExtractedIntent = {
             intent: "registrar_gasto",
             valor: meta.valor,
             descricao: meta.descricao,
-            categoria: meta.categoria
+            categoria: categoriaInferida
           };
           
           const resultado = await registrarTransacaoIdempotente(userId, intentItem, eventoId);
@@ -1315,11 +1392,14 @@ async function processarJob(job: any): Promise<void> {
           descricoes.push(meta.descricao);
         }
         
+        // Inferir categoria do gasto combinado
+        const categoriaInferida = inferirCategoria(descricoes.join(" "), "outros");
+        
         const intentUnico: ExtractedIntent = {
           intent: "registrar_gasto",
           valor: somaTotal,
           descricao: descricoes.join(" + "),
-          categoria: "outros"
+          categoria: categoriaInferida
         };
         
         const resultado = await registrarTransacaoIdempotente(userId, intentUnico, eventoId);
@@ -1443,6 +1523,375 @@ async function processarJob(job: any): Promise<void> {
           ai_response: resultado.mensagem,
           tipo: "cancelamento_executado"
         });
+        
+        return;
+      }
+    }
+    
+    // ========================================================================
+    // VERIFICAR ACTION ATIVA DE CARTÕES (PRIORIDADE SOBRE INTERPRETAÇÃO)
+    // ========================================================================
+    const { data: cardActionActive } = await supabase
+      .from("actions")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("action_type", "card_management")
+      .in("status", ["awaiting_decision", "awaiting_input"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+    
+    if (cardActionActive && payload.messageType === "text") {
+      console.log(`🃏 [CARD] Action ativa encontrada: ${cardActionActive.id} - step: ${(cardActionActive.meta as any)?.step}`);
+      
+      const meta = cardActionActive.meta as { step?: string; card_id?: string; card_name?: string };
+      const msg = payload.messageText.trim();
+      const opcao = parseInt(msg);
+      
+      // STEP: choose_action - Usuário responde com número
+      if (meta.step === "choose_action") {
+        if (opcao === 1) {
+          // Ver cartões cadastrados
+          const { data: cartoes } = await supabase
+            .from("cartoes_credito")
+            .select("*")
+            .eq("usuario_id", userId)
+            .eq("ativo", true);
+          
+          if (!cartoes || cartoes.length === 0) {
+            await sendWhatsAppMessage(
+              payload.phoneNumber,
+              "Você ainda não tem cartões cadastrados 💳\n\n👉 Quer adicionar um agora? Me diz o nome do cartão.",
+              payload.messageSource
+            );
+            
+            await supabase.from("actions")
+              .update({ 
+                meta: { step: "awaiting_card_name" }, 
+                status: "awaiting_input",
+                updated_at: new Date().toISOString() 
+              })
+              .eq("id", cardActionActive.id);
+            
+            return;
+          }
+          
+          const listaCartoes = cartoes.map((c, i) => 
+            `${i + 1}. *${c.nome}*\n   Limite: R$ ${Number(c.limite_total || 0).toFixed(2)}\n   Disponível: R$ ${Number(c.limite_disponivel || 0).toFixed(2)}\n   Vencimento: dia ${c.dia_vencimento}`
+          ).join("\n\n");
+          
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            `*Seus cartões* 💳\n\n${listaCartoes}`,
+            payload.messageSource
+          );
+          
+          // Marcar action como done
+          await supabase.from("actions")
+            .update({ status: "done", updated_at: new Date().toISOString() })
+            .eq("id", cardActionActive.id);
+          
+          return;
+          
+        } else if (opcao === 2) {
+          // Adicionar novo cartão
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            "Legal! 💳 Qual é o nome do cartão? (Ex: Nubank, C6, Itaú...)",
+            payload.messageSource
+          );
+          
+          await supabase.from("actions")
+            .update({ 
+              meta: { step: "awaiting_card_name" }, 
+              status: "awaiting_input",
+              updated_at: new Date().toISOString() 
+            })
+            .eq("id", cardActionActive.id);
+          
+          return;
+          
+        } else if (opcao === 3) {
+          // Atualizar cartão
+          const { data: cartoes } = await supabase
+            .from("cartoes_credito")
+            .select("*")
+            .eq("usuario_id", userId)
+            .eq("ativo", true);
+          
+          if (!cartoes || cartoes.length === 0) {
+            await sendWhatsAppMessage(
+              payload.phoneNumber,
+              "Você não tem cartões para atualizar 🤔\n\n👉 Quer adicionar um? Me diz o nome.",
+              payload.messageSource
+            );
+            
+            await supabase.from("actions")
+              .update({ 
+                meta: { step: "awaiting_card_name" }, 
+                status: "awaiting_input",
+                updated_at: new Date().toISOString() 
+              })
+              .eq("id", cardActionActive.id);
+            
+            return;
+          }
+          
+          const listaCartoes = cartoes.map((c, i) => `${i + 1}. ${c.nome}`).join("\n");
+          
+          // Criar pending selection para escolha
+          const cardOptions = cartoes.map((c, i) => ({
+            index: i + 1,
+            tx_id: c.id,
+            label: c.nome || "Sem nome",
+            meta: { card_id: c.id, card_name: c.nome }
+          }));
+          
+          await criarPendingSelection(userId, cardOptions, "card_update_selection", 3);
+          
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            `Qual cartão você quer atualizar?\n\n${listaCartoes}\n\n_Responde com o número_`,
+            payload.messageSource
+          );
+          
+          await supabase.from("actions")
+            .update({ 
+              meta: { step: "awaiting_card_selection_update" }, 
+              status: "awaiting_input",
+              updated_at: new Date().toISOString() 
+            })
+            .eq("id", cardActionActive.id);
+          
+          return;
+          
+        } else if (opcao === 4) {
+          // Remover cartão
+          const { data: cartoes } = await supabase
+            .from("cartoes_credito")
+            .select("*")
+            .eq("usuario_id", userId)
+            .eq("ativo", true);
+          
+          if (!cartoes || cartoes.length === 0) {
+            await sendWhatsAppMessage(
+              payload.phoneNumber,
+              "Você não tem cartões para remover 🤔",
+              payload.messageSource
+            );
+            
+            await supabase.from("actions")
+              .update({ status: "done", updated_at: new Date().toISOString() })
+              .eq("id", cardActionActive.id);
+            
+            return;
+          }
+          
+          const listaCartoes = cartoes.map((c, i) => `${i + 1}. ${c.nome}`).join("\n");
+          
+          const cardOptions = cartoes.map((c, i) => ({
+            index: i + 1,
+            tx_id: c.id,
+            label: c.nome || "Sem nome",
+            meta: { card_id: c.id, card_name: c.nome }
+          }));
+          
+          await criarPendingSelection(userId, cardOptions, "card_remove_selection", 3);
+          
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            `Qual cartão você quer remover?\n\n${listaCartoes}\n\n_Responde com o número_`,
+            payload.messageSource
+          );
+          
+          await supabase.from("actions")
+            .update({ 
+              meta: { step: "awaiting_card_selection_remove" }, 
+              status: "awaiting_input",
+              updated_at: new Date().toISOString() 
+            })
+            .eq("id", cardActionActive.id);
+          
+          return;
+        }
+        
+        // Opção inválida
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          "Responde com 1, 2, 3 ou 4 😊",
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // STEP: awaiting_card_name - Usuário digitou nome do cartão
+      if (meta.step === "awaiting_card_name") {
+        const nomeCarto = msg;
+        
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          `*${nomeCarto}* 👍\n\nAgora me diz o limite total do cartão.\n\n_Ex: 5000_`,
+          payload.messageSource
+        );
+        
+        await supabase.from("actions")
+          .update({ 
+            meta: { step: "awaiting_card_limit", card_name: nomeCarto }, 
+            updated_at: new Date().toISOString() 
+          })
+          .eq("id", cardActionActive.id);
+        
+        return;
+      }
+      
+      // STEP: awaiting_card_limit - Usuário digitou limite
+      if (meta.step === "awaiting_card_limit") {
+        const limiteStr = msg.replace(/[^\d.,]/g, "").replace(",", ".");
+        const limite = parseFloat(limiteStr);
+        
+        if (isNaN(limite) || limite <= 0) {
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            "Não entendi o limite 🤔\n\nDigita só o número. Ex: 5000",
+            payload.messageSource
+          );
+          return;
+        }
+        
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          `Limite de R$ ${limite.toFixed(2)} 💳\n\nQual o dia de vencimento da fatura?\n\n_Ex: 10_`,
+          payload.messageSource
+        );
+        
+        await supabase.from("actions")
+          .update({ 
+            meta: { ...meta, step: "awaiting_card_due_day", card_limit: limite }, 
+            updated_at: new Date().toISOString() 
+          })
+          .eq("id", cardActionActive.id);
+        
+        return;
+      }
+      
+      // STEP: awaiting_card_due_day - Usuário digitou dia de vencimento
+      if (meta.step === "awaiting_card_due_day") {
+        const diaVenc = parseInt(msg);
+        
+        if (isNaN(diaVenc) || diaVenc < 1 || diaVenc > 31) {
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            "Dia inválido 🤔\n\nDigita um número de 1 a 31.",
+            payload.messageSource
+          );
+          return;
+        }
+        
+        // Criar cartão
+        const metaAtual = cardActionActive.meta as any;
+        
+        const { data: novoCartao, error: cardError } = await supabase
+          .from("cartoes_credito")
+          .insert({
+            usuario_id: userId,
+            nome: metaAtual.card_name,
+            limite_total: metaAtual.card_limit,
+            limite_disponivel: metaAtual.card_limit,
+            dia_vencimento: diaVenc,
+            dia_fechamento: diaVenc > 5 ? diaVenc - 5 : 25,
+            ativo: true
+          })
+          .select("id")
+          .single();
+        
+        if (cardError) {
+          console.error("❌ [CARD] Erro ao criar:", cardError);
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            "Algo deu errado ao criar o cartão 😕\n\nTenta de novo?",
+            payload.messageSource
+          );
+          return;
+        }
+        
+        await supabase.from("actions")
+          .update({ 
+            status: "done", 
+            entity_id: novoCartao.id,
+            updated_at: new Date().toISOString() 
+          })
+          .eq("id", cardActionActive.id);
+        
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          `✅ *Cartão adicionado!*\n\n` +
+          `💳 *${metaAtual.card_name}*\n` +
+          `💰 Limite: R$ ${metaAtual.card_limit.toFixed(2)}\n` +
+          `📅 Vencimento: dia ${diaVenc}`,
+          payload.messageSource
+        );
+        
+        return;
+      }
+      
+      // Se chegou aqui com action ativa mas não tratou, encerrar
+      await supabase.from("actions")
+        .update({ status: "done", updated_at: new Date().toISOString() })
+        .eq("id", cardActionActive.id);
+    }
+    
+    // ========================================================================
+    // VERIFICAR PENDING SELECTION (CARTÕES - UPDATE)
+    // ========================================================================
+    const pendingCardUpdate = await consumirPendingSelection(userId, "card_update_selection");
+    
+    if (pendingCardUpdate && payload.messageType === "text") {
+      const opcao = parseInt(payload.messageText.trim());
+      
+      if (!isNaN(opcao) && opcao >= 1 && opcao <= pendingCardUpdate.options.length) {
+        const selected = pendingCardUpdate.options[opcao - 1];
+        const cardMeta = selected.meta as { card_id: string; card_name: string };
+        
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          `O que você quer atualizar no *${cardMeta.card_name}*?\n\n1. Limite\n2. Dia de vencimento\n3. Nome\n\n_Responde com o número_`,
+          payload.messageSource
+        );
+        
+        // Criar nova pending selection para escolha de campo
+        await criarPendingSelection(userId, [
+          { index: 1, label: "Limite", meta: { card_id: cardMeta.card_id, field: "limite" } },
+          { index: 2, label: "Dia de vencimento", meta: { card_id: cardMeta.card_id, field: "vencimento" } },
+          { index: 3, label: "Nome", meta: { card_id: cardMeta.card_id, field: "nome" } },
+        ], "card_field_selection", 3);
+        
+        return;
+      }
+    }
+    
+    // ========================================================================
+    // VERIFICAR PENDING SELECTION (CARTÕES - REMOVER)
+    // ========================================================================
+    const pendingCardRemove = await consumirPendingSelection(userId, "card_remove_selection");
+    
+    if (pendingCardRemove && payload.messageType === "text") {
+      const opcao = parseInt(payload.messageText.trim());
+      
+      if (!isNaN(opcao) && opcao >= 1 && opcao <= pendingCardRemove.options.length) {
+        const selected = pendingCardRemove.options[opcao - 1];
+        const cardMeta = selected.meta as { card_id: string; card_name: string };
+        
+        // Desativar cartão
+        await supabase
+          .from("cartoes_credito")
+          .update({ ativo: false })
+          .eq("id", cardMeta.card_id);
+        
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          `✅ Cartão *${cardMeta.card_name}* removido!`,
+          payload.messageSource
+        );
         
         return;
       }
@@ -1606,6 +2055,67 @@ async function processarJob(job: any): Promise<void> {
         user_message: payload.messageText,
         ai_response: "[CANCEL_LIST]",
         tipo: "cancel_selection"
+      });
+      
+      return;
+    }
+    
+    // ========================================================================
+    // GERENCIAR CARTÕES (CRIAR ACTION PERSISTENTE)
+    // ========================================================================
+    if (interpretacao.intent === "gerenciar_cartoes") {
+      console.log("🃏 [CARD] Intent gerenciar_cartoes detectado");
+      
+      // Expirar actions de cartões antigas do usuário
+      await supabase
+        .from("actions")
+        .update({ status: "expired", updated_at: new Date().toISOString() })
+        .eq("user_id", userId)
+        .eq("action_type", "card_management")
+        .in("status", ["awaiting_decision", "awaiting_input"]);
+      
+      // Criar NOVA action para gerenciamento de cartões
+      const actionHash = `card_mgmt_${userId.slice(0,8)}_${Date.now()}`;
+      
+      const { data: actionData, error: actionError } = await supabase
+        .from("actions")
+        .insert({
+          user_id: userId,
+          action_type: "card_management",
+          action_hash: actionHash,
+          status: "awaiting_decision",
+          meta: { step: "choose_action" }
+        })
+        .select("id")
+        .single();
+      
+      if (actionError) {
+        console.error("❌ [CARD] Erro ao criar action:", actionError);
+        await sendWhatsAppMessage(
+          payload.phoneNumber,
+          "Algo deu errado ao iniciar o gerenciamento de cartões 😕\n\nTenta de novo?",
+          payload.messageSource
+        );
+        return;
+      }
+      
+      console.log(`✅ [CARD] Action criada: ${actionData.id}`);
+      
+      const msgCartoes = `Claro! O que você deseja fazer com seus cartões? 💳\n\n` +
+        `1️⃣ Ver cartões cadastrados\n` +
+        `2️⃣ Adicionar novo cartão\n` +
+        `3️⃣ Atualizar cartão existente\n` +
+        `4️⃣ Remover cartão\n\n` +
+        `_Responde com o número_`;
+      
+      await sendWhatsAppMessage(payload.phoneNumber, msgCartoes, payload.messageSource);
+      
+      await supabase.from("historico_conversas").insert({
+        phone_number: payload.phoneNumber,
+        user_id: userId,
+        user_message: payload.messageText,
+        ai_response: msgCartoes,
+        tipo: "card_management"
       });
       
       return;
