@@ -54,6 +54,12 @@ interface JobPayload {
   buttonReplyId: string | null;
 }
 
+interface ExtractedItem {
+  valor: number;
+  descricao: string;
+  categoria?: string;
+}
+
 interface ExtractedIntent {
   intent: string;
   valor?: number;
@@ -63,6 +69,10 @@ interface ExtractedIntent {
   parcelas?: number;
   tipo_recorrencia?: "mensal" | "semanal" | "anual";
   confianca?: number;
+  // NOVOS CAMPOS PARA MÚLTIPLOS GASTOS
+  itens?: ExtractedItem[];
+  split_explicit?: boolean;    // Usuário pediu "registre separadamente"
+  aggregate_explicit?: boolean; // Usuário indicou como único gasto
 }
 
 // ============================================================================
@@ -535,7 +545,7 @@ async function interpretarMensagem(mensagem: string, historicoRecente: string): 
 ⚠️ SUA FUNÇÃO: Extrair dados da mensagem. Você NÃO decide se deve registrar ou não.
 
 INTENTS:
-- "registrar_gasto": gasto/despesa/compra
+- "registrar_gasto": gasto/despesa/compra (ÚNICO ou MÚLTIPLOS)
 - "registrar_entrada": receita/entrada/salário
 - "criar_parcelamento": compra parcelada
 - "criar_recorrente": gasto repetitivo mensal
@@ -548,16 +558,30 @@ INTENTS:
 - "selecionar_opcao": números (1, 2, 3...)
 - "outro": não financeiro
 
+🔴 REGRA CRUCIAL PARA MÚLTIPLOS GASTOS:
+Se a mensagem contiver MAIS DE UM gasto/item COM VALORES DISTINTOS:
+1. Retorne "itens" como array de cada item
+2. Defina split_explicit=true se o usuário disse "separadamente", "cada um", "separado"
+3. Defina aggregate_explicit=true se o usuário falou como um único gasto ("gastei 10 no mercado com pão e leite")
+
+EXEMPLOS:
+- "café 1,50 e pão 5" → itens: [{valor:1.50,descricao:"café"},{valor:5,descricao:"pão"}], split_explicit: false
+- "café 1,50 e pão 5, registre separado" → itens: [...], split_explicit: true
+- "gastei 10 no mercado" → valor: 10, itens: null (único gasto)
+
 Responda APENAS JSON:
 {
   "intent": "string",
-  "valor": number ou null,
+  "valor": number ou null (se único gasto),
   "categoria": "string" ou null,
   "descricao": "string" ou null,
   "forma_pagamento": "pix"|"dinheiro"|"debito"|"credito" ou null,
   "parcelas": number ou null,
   "opcao_selecionada": number ou null,
-  "confianca": number
+  "confianca": number,
+  "itens": [{"valor": number, "descricao": "string", "categoria": "string"}] ou null,
+  "split_explicit": boolean ou null,
+  "aggregate_explicit": boolean ou null
 }
 
 ${historicoRecente ? `HISTÓRICO:\n${historicoRecente}` : ""}`
@@ -572,7 +596,7 @@ ${historicoRecente ? `HISTÓRICO:\n${historicoRecente}` : ""}`
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
     const parsed = JSON.parse(cleanJson);
     
-    console.log(`🧠 [IA] ${parsed.intent} (${parsed.confianca})`);
+    console.log(`🧠 [IA] ${parsed.intent} | Itens: ${parsed.itens?.length || 0} | Split: ${parsed.split_explicit} | Conf: ${parsed.confianca}`);
     
     return {
       intent: parsed as ExtractedIntent,
@@ -1214,6 +1238,104 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      // ====================================================================
+      // BATCH_SEPARATE - Registrar gastos separadamente
+      // ====================================================================
+      if (payload.buttonReplyId === "batch_separate") {
+        const pending = await consumirPendingSelection(userId, "batch_expense");
+        
+        if (!pending || pending.options.length === 0) {
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            "Essa seleção expirou 😕\n\nMe conta de novo os gastos.",
+            payload.messageSource
+          );
+          return;
+        }
+        
+        console.log(`✂️ [BATCH] Registrando ${pending.options.length} itens SEPARADOS`);
+        
+        const resultados: string[] = [];
+        
+        for (const opt of pending.options) {
+          const meta = opt.meta as { valor: number; descricao: string; categoria: string };
+          const intentItem: ExtractedIntent = {
+            intent: "registrar_gasto",
+            valor: meta.valor,
+            descricao: meta.descricao,
+            categoria: meta.categoria
+          };
+          
+          const resultado = await registrarTransacaoIdempotente(userId, intentItem, eventoId);
+          if (resultado.sucesso) {
+            resultados.push(`✅ R$ ${meta.valor.toFixed(2)} - ${meta.descricao}`);
+          } else if (resultado.jaDuplicado) {
+            resultados.push(`🔒 R$ ${meta.valor.toFixed(2)} - ${meta.descricao} (já registrado)`);
+          }
+        }
+        
+        const msgFinal = `*${pending.options.length} gastos registrados!*\n\n${resultados.join("\n")}`;
+        await sendWhatsAppMessage(payload.phoneNumber, msgFinal, payload.messageSource);
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: payload.phoneNumber,
+          user_id: userId,
+          user_message: "[BOTÃO SEPARADOS]",
+          ai_response: msgFinal,
+          tipo: "batch_separate"
+        });
+        
+        return;
+      }
+      
+      // ====================================================================
+      // BATCH_SINGLE - Registrar como gasto único
+      // ====================================================================
+      if (payload.buttonReplyId === "batch_single") {
+        const pending = await consumirPendingSelection(userId, "batch_expense");
+        
+        if (!pending || pending.options.length === 0) {
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            "Essa seleção expirou 😕\n\nMe conta de novo os gastos.",
+            payload.messageSource
+          );
+          return;
+        }
+        
+        console.log(`➕ [BATCH] Registrando como ÚNICO`);
+        
+        // Somar todos os valores e juntar descrições
+        let somaTotal = 0;
+        const descricoes: string[] = [];
+        
+        for (const opt of pending.options) {
+          const meta = opt.meta as { valor: number; descricao: string; categoria: string };
+          somaTotal += meta.valor;
+          descricoes.push(meta.descricao);
+        }
+        
+        const intentUnico: ExtractedIntent = {
+          intent: "registrar_gasto",
+          valor: somaTotal,
+          descricao: descricoes.join(" + "),
+          categoria: "outros"
+        };
+        
+        const resultado = await registrarTransacaoIdempotente(userId, intentUnico, eventoId);
+        await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: payload.phoneNumber,
+          user_id: userId,
+          user_message: "[BOTÃO ÚNICO]",
+          ai_response: resultado.mensagem,
+          tipo: "batch_single"
+        });
+        
+        return;
+      }
+      
       // Outro botão não reconhecido
       console.log(`⚠️ [BUTTON] Botão não reconhecido: ${payload.buttonReplyId}`);
     }
@@ -1492,7 +1614,133 @@ async function processarJob(job: any): Promise<void> {
     // REGISTRAR GASTO/ENTRADA
     if (["registrar_gasto", "registrar_entrada"].includes(interpretacao.intent)) {
       const temValor = interpretacao.valor && interpretacao.valor > 0;
-      const temCategoria = !!interpretacao.categoria;
+      const temItens = interpretacao.itens && interpretacao.itens.length > 1;
+      const splitExplicit = interpretacao.split_explicit === true;
+      const aggregateExplicit = interpretacao.aggregate_explicit === true;
+      
+      // ====================================================================
+      // CASO 1: MÚLTIPLOS ITENS DETECTADOS
+      // ====================================================================
+      if (temItens) {
+        const itens = interpretacao.itens!;
+        const somaTotal = itens.reduce((acc, i) => acc + i.valor, 0);
+        
+        console.log(`📦 [MULTI] ${itens.length} itens | Split: ${splitExplicit} | Aggregate: ${aggregateExplicit}`);
+        
+        // CASO 1A: Usuário pediu explicitamente "registre separadamente"
+        if (splitExplicit) {
+          console.log(`✂️ [MULTI] Registrando ${itens.length} itens SEPARADOS (explícito)`);
+          
+          let todosOk = true;
+          const resultados: string[] = [];
+          
+          for (const item of itens) {
+            const intentItem: ExtractedIntent = {
+              intent: "registrar_gasto",
+              valor: item.valor,
+              descricao: item.descricao,
+              categoria: item.categoria || "outros"
+            };
+            
+            const resultado = await registrarTransacaoIdempotente(userId, intentItem, eventoId);
+            if (resultado.sucesso) {
+              resultados.push(`✅ R$ ${item.valor.toFixed(2)} - ${item.descricao}`);
+            } else if (resultado.jaDuplicado) {
+              resultados.push(`🔒 R$ ${item.valor.toFixed(2)} - ${item.descricao} (já registrado)`);
+            } else {
+              todosOk = false;
+            }
+          }
+          
+          const msgFinal = `*${itens.length} gastos registrados!*\n\n${resultados.join("\n")}`;
+          await sendWhatsAppMessage(payload.phoneNumber, msgFinal, payload.messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber,
+            user_id: userId,
+            user_message: conteudoProcessado,
+            ai_response: msgFinal,
+            tipo: "registro_multiplo_separado"
+          });
+          
+          return;
+        }
+        
+        // CASO 1B: Usuário indicou como um único gasto
+        if (aggregateExplicit) {
+          console.log(`➕ [MULTI] Registrando como ÚNICO (explícito)`);
+          
+          const descricaoComposta = itens.map(i => i.descricao).join(" + ");
+          const intentUnico: ExtractedIntent = {
+            intent: "registrar_gasto",
+            valor: somaTotal,
+            descricao: descricaoComposta,
+            categoria: interpretacao.categoria || "outros"
+          };
+          
+          const resultado = await registrarTransacaoIdempotente(userId, intentUnico, eventoId);
+          await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber,
+            user_id: userId,
+            user_message: conteudoProcessado,
+            ai_response: resultado.mensagem,
+            tipo: resultado.jaDuplicado ? "duplicado_bloqueado" : "registro_unico_agregado"
+          });
+          
+          return;
+        }
+        
+        // CASO 1C: AMBÍGUO → Pedir confirmação em lote
+        console.log(`❓ [MULTI] Ambíguo - pedindo confirmação em lote`);
+        
+        // Criar pending selection para os itens
+        const batchOptions = itens.map((item, idx) => ({
+          index: idx + 1,
+          label: `R$ ${item.valor.toFixed(2)} - ${item.descricao}`,
+          meta: { valor: item.valor, descricao: item.descricao, categoria: item.categoria || "outros" }
+        }));
+        
+        await criarPendingSelection(userId, batchOptions, "batch_expense", 3);
+        
+        // Montar lista de itens
+        const listaItens = itens.map((item, idx) => 
+          `${idx + 1}️⃣ ${item.descricao} — R$ ${item.valor.toFixed(2)}`
+        ).join("\n");
+        
+        const msgBatch = `Identifiquei *${itens.length} gastos* 👇\n\n` +
+          `${listaItens}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `*Total: R$ ${somaTotal.toFixed(2)}*\n\n` +
+          `Como você prefere registrar?`;
+        
+        // WhatsApp só permite 3 botões, então adaptamos
+        await sendWhatsAppButtons(
+          payload.phoneNumber,
+          msgBatch,
+          [
+            { id: "batch_separate", title: "✂️ Separados" },
+            { id: "batch_single", title: `➕ Único (R$ ${somaTotal.toFixed(2)})`.slice(0, 20) },
+            { id: "confirm_no", title: "❌ Cancelar" }
+          ],
+          payload.messageSource
+        );
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: payload.phoneNumber,
+          user_id: userId,
+          user_message: conteudoProcessado,
+          ai_response: msgBatch,
+          tipo: "batch_confirmation"
+        });
+        
+        return;
+      }
+      
+      // ====================================================================
+      // CASO 2: GASTO ÚNICO (FLUXO NORMAL)
+      // ====================================================================
       
       // DADOS SUFICIENTES + ALTA CONFIANÇA → REGISTRA DIRETO
       if (temValor && confIA >= 0.7) {
