@@ -73,7 +73,76 @@ interface ExtractedIntent {
   itens?: ExtractedItem[];
   split_explicit?: boolean;    // Usuário pediu "registre separadamente"
   aggregate_explicit?: boolean; // Usuário indicou como único gasto
+  // SLOT FILLING - Campos extraídos da mensagem
+  slots?: Record<string, any>;
 }
+
+// ============================================================================
+// 🎰 SLOT FILLING ARCHITECTURE
+// ============================================================================
+
+interface SlotRequirement {
+  required: string[];
+  optional: string[];
+}
+
+// Definição de slots obrigatórios e opcionais por intent
+const SLOT_REQUIREMENTS: Record<string, SlotRequirement> = {
+  // CARTÕES
+  update_card: { required: ["card", "field", "value"], optional: [] },
+  add_card: { required: ["card_name", "limit", "due_day"], optional: ["closing_day"] },
+  remove_card: { required: ["card"], optional: [] },
+  view_cards: { required: [], optional: [] },
+  gerenciar_cartoes: { required: [], optional: ["action"] },
+  
+  // TRANSAÇÕES
+  registrar_gasto: { required: ["amount"], optional: ["description", "category", "payment_method", "card"] },
+  registrar_entrada: { required: ["amount"], optional: ["description", "category"] },
+  cancelar_transacao: { required: ["transaction_id"], optional: [] },
+  
+  // PARCELAMENTOS / RECORRENTES
+  criar_parcelamento: { required: ["amount", "installments", "description"], optional: ["category", "card"] },
+  criar_recorrente: { required: ["amount", "description", "recurrence_type"], optional: ["category", "day_of_month"] },
+};
+
+// Prompts para solicitar slots faltantes
+const SLOT_PROMPTS: Record<string, string> = {
+  // Cartões
+  card: "Qual cartão você quer gerenciar? 💳",
+  field: "O que você quer atualizar? (limite, vencimento ou nome)",
+  value: "Qual o novo valor?",
+  card_name: "Qual é o nome do cartão? (Ex: Nubank, C6, Itaú...)",
+  limit: "Qual o limite total do cartão? 💰",
+  due_day: "Qual o dia de vencimento da fatura? (1-31)",
+  closing_day: "Qual o dia de fechamento? (opcional, deixe vazio para pular)",
+  action: "O que você deseja fazer?\n\n1️⃣ Ver cartões\n2️⃣ Adicionar cartão\n3️⃣ Atualizar cartão\n4️⃣ Remover cartão",
+  
+  // Transações
+  amount: "Qual foi o valor? 💸",
+  description: "O que foi essa compra?",
+  category: "Qual categoria se encaixa melhor?",
+  transaction_id: "Qual transação você quer cancelar?",
+  
+  // Parcelamentos
+  installments: "Em quantas vezes foi parcelado?",
+  recurrence_type: "É mensal, semanal ou anual?",
+  day_of_month: "Em qual dia do mês esse gasto se repete?",
+};
+
+// Mapeamento de campos por nome (para normalização fuzzy)
+const FIELD_ALIASES: Record<string, string> = {
+  // Campos de cartão
+  "limite": "limit", "limit": "limit", "lim": "limit",
+  "vencimento": "due_day", "venc": "due_day", "dia vencimento": "due_day", "dia de vencimento": "due_day",
+  "nome": "card_name", "name": "card_name",
+  "fechamento": "closing_day", "dia fechamento": "closing_day",
+  
+  // Ações numéricas
+  "1": "view", "ver": "view", "listar": "view",
+  "2": "add", "adicionar": "add", "novo": "add", "criar": "add",
+  "3": "update", "atualizar": "update", "alterar": "update", "mudar": "update",
+  "4": "remove", "remover": "remove", "excluir": "remove", "apagar": "remove",
+};
 
 // ============================================================================
 // 🔐 IDEMPOTÊNCIA - ACTION HASH (JANELA DE 60 SEGUNDOS)
@@ -540,58 +609,66 @@ async function interpretarMensagem(mensagem: string, historicoRecente: string): 
         messages: [
           {
             role: "system",
-            content: `Você é um analisador de intenções financeiras. APENAS interprete, NÃO tome decisões.
+            content: `Você é um analisador de intenções financeiras com SLOT FILLING. APENAS extraia dados, NÃO tome decisões.
 
-⚠️ SUA FUNÇÃO: Extrair dados da mensagem. Você NÃO decide se deve registrar ou não.
+⚠️ SUA FUNÇÃO: Extrair intent + slots da mensagem. Você NÃO decide completude.
 
-INTENTS:
-- "registrar_gasto": gasto/despesa/compra (ÚNICO ou MÚLTIPLOS)
-- "registrar_entrada": receita/entrada/salário
-- "criar_parcelamento": compra parcelada
-- "criar_recorrente": gasto repetitivo mensal
+INTENTS E SLOTS:
+
+📱 CARTÕES:
+- "update_card": atualizar cartão (slots: card, field, value)
+  Ex: "meu limite no Nubank é 3200" → {intent:"update_card", slots:{card:"nubank", field:"limit", value:3200}}
+- "add_card": adicionar cartão (slots: card_name, limit, due_day)
+- "remove_card": remover cartão (slots: card)
+- "view_cards": ver cartões cadastrados
+- "gerenciar_cartoes": intenção genérica de cartões (slots: action se especificado)
+
+💸 TRANSAÇÕES:
+- "registrar_gasto": gasto/despesa/compra (slots: amount, description, category)
+- "registrar_entrada": receita/entrada (slots: amount, description, category)
+- "cancelar_transacao": cancelar gasto (slots: transaction_id)
+- "criar_parcelamento": compra parcelada (slots: amount, installments, description, card)
+- "criar_recorrente": gasto repetitivo (slots: amount, description, recurrence_type)
+
+📊 OUTROS:
 - "consultar_resumo": resumo/quanto gastei
-- "cancelar_transacao": apagar/cancelar/desfazer
-- "gerenciar_cartoes": atualizar/adicionar/remover/ver cartões ("meus cartões", "atualizar cartão", "adicionar cartão", "remover cartão", "quais cartões")
 - "saudacao": oi, olá, bom dia
 - "ajuda": como funciona
 - "confirmar_hipotese": sim, pode registrar
 - "negar_hipotese": não, cancela
 - "selecionar_opcao": números (1, 2, 3...)
-- "outro": não financeiro
+- "fornecer_slot": quando usuário está respondendo uma pergunta de slot
 
-🔴 REGRA CRUCIAL PARA MÚLTIPLOS GASTOS:
-Se a mensagem contiver MAIS DE UM gasto/item COM VALORES DISTINTOS:
-1. Retorne "itens" como array de cada item
-2. Defina split_explicit=true se o usuário disse "separadamente", "cada um", "separado"
-3. Defina aggregate_explicit=true se o usuário falou como um único gasto ("gastei 10 no mercado com pão e leite")
+🔴 EXTRAÇÃO DE SLOTS:
+Extraia TODOS os dados presentes na mensagem, mesmo parciais:
+- "Nubank" sozinho → slots: { card: "nubank" }
+- "3200" sozinho (em contexto de cartão) → slots: { value: 3200 }
+- "limite" ou "vencimento" → slots: { field: "limit" } ou { field: "due_day" }
+- "Atualiza o Itaú pra 5000" → slots: { card: "itau", value: 5000 }
 
-🔴 REGRA ABSOLUTA DE CATEGORIZAÇÃO (OBRIGATÓRIA):
-"outros" é SEMPRE o ÚLTIMO RECURSO. Você TEM conhecimento semântico. USE-O.
+🔴 MÚLTIPLOS GASTOS:
+Se houver MAIS DE UM gasto COM VALORES DISTINTOS, retorne "itens" como array.
+split_explicit=true se pediu "separadamente".
 
-MAPEAMENTO OBRIGATÓRIO:
-- café, pão, pão de queijo, água, refrigerante, suco, lanche, açaí, pizza, hambúrguer, almoço, jantar, padaria, restaurante, bar, ifood, delivery, paçoca, chocolate, doce, sorvete → "alimentacao"
-- mercado, supermercado, compras, feira → "mercado"
-- uber, 99, táxi, ônibus, metrô, gasolina, combustível, estacionamento, pedágio → "transporte"
-- farmácia, remédio, médico, hospital, consulta, exame, dentista, plano de saúde → "saude"
-- cinema, netflix, spotify, show, festa, bar (lazer), jogo, passeio, viagem → "lazer"
-- aluguel, condomínio, luz, água (conta), gás, internet, telefone → "moradia"
-- roupa, calçado, maquiagem, perfume, acessório, loja → "compras"
-
-SE o item combinar com QUALQUER palavra acima → USE essa categoria (confiança alta).
-"outros" SÓ se for algo totalmente desconhecido como "xyz123".
-
-CADA ITEM no array "itens" DEVE ter sua própria categoria correta.
-Exemplo: "café 1,50 e uber 10" → [{valor:1.50,descricao:"café",categoria:"alimentacao"},{valor:10,descricao:"uber",categoria:"transporte"}]
+🔴 CATEGORIZAÇÃO (OBRIGATÓRIA):
+"outros" é ÚLTIMO RECURSO. Mapeamento:
+- café, pão, lanche, água, refrigerante, almoço, jantar, ifood → "alimentacao"
+- mercado, supermercado, feira → "mercado"
+- uber, 99, táxi, ônibus, gasolina → "transporte"
+- farmácia, remédio, médico → "saude"
+- cinema, netflix, spotify, festa → "lazer"
+- aluguel, luz, internet → "moradia"
+- roupa, loja → "compras"
 
 Responda APENAS JSON:
 {
   "intent": "string",
-  "valor": number ou null (se único gasto),
+  "slots": { "slot_name": "value", ... } ou null,
+  "valor": number ou null,
   "categoria": "string" ou null,
   "descricao": "string" ou null,
   "forma_pagamento": "pix"|"dinheiro"|"debito"|"credito" ou null,
   "parcelas": number ou null,
-  "opcao_selecionada": number ou null,
   "confianca": number,
   "itens": [{"valor": number, "descricao": "string", "categoria": "string"}] ou null,
   "split_explicit": boolean ou null,
@@ -610,7 +687,7 @@ ${historicoRecente ? `HISTÓRICO:\n${historicoRecente}` : ""}`
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
     const parsed = JSON.parse(cleanJson);
     
-    console.log(`🧠 [IA] ${parsed.intent} | Itens: ${parsed.itens?.length || 0} | Split: ${parsed.split_explicit} | Conf: ${parsed.confianca}`);
+    console.log(`🧠 [IA] ${parsed.intent} | Slots: ${JSON.stringify(parsed.slots || {})} | Conf: ${parsed.confianca}`);
     
     return {
       intent: parsed as ExtractedIntent,
@@ -977,6 +1054,233 @@ function inferirCategoria(descricao: string, categoriaIA?: string): string {
   
   // Se nada bateu e IA disse "outros", mantém
   return categoriaIA || "outros";
+}
+
+// ============================================================================
+// 🎰 SLOT FILLING ENGINE - FUNÇÕES DO MOTOR
+// ============================================================================
+
+/**
+ * Busca ou cria uma action pendente para o usuário/intent
+ * Retorna a action com slots atuais para merge incremental
+ */
+async function getOrCreateSlotAction(
+  userId: string,
+  intent: string,
+  initialSlots?: Record<string, any>
+): Promise<{ action: any; isNew: boolean }> {
+  // 1. Buscar action ativa do mesmo tipo
+  const { data: existing } = await supabase
+    .from("actions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("action_type", intent)
+    .in("status", ["collecting", "awaiting_input"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+  
+  if (existing) {
+    // Verificar se não expirou (10 min para slot filling)
+    const createdAt = new Date(existing.created_at);
+    const diffMinutos = (Date.now() - createdAt.getTime()) / 1000 / 60;
+    
+    if (diffMinutos <= 10) {
+      console.log(`🎰 [SLOT] Action existente: ${existing.id} | Slots: ${JSON.stringify(existing.slots || {})}`);
+      return { action: existing, isNew: false };
+    } else {
+      // Expirar action antiga
+      await supabase
+        .from("actions")
+        .update({ status: "expired", updated_at: new Date().toISOString() })
+        .eq("id", existing.id);
+    }
+  }
+  
+  // 2. Criar nova action
+  const actionHash = `slot_${intent}_${userId.slice(0,8)}_${Date.now()}`;
+  
+  const { data: newAction, error } = await supabase
+    .from("actions")
+    .insert({
+      user_id: userId,
+      action_type: intent,
+      action_hash: actionHash,
+      status: "collecting",
+      slots: initialSlots || {},
+      meta: { started_at: new Date().toISOString() }
+    })
+    .select("*")
+    .single();
+  
+  if (error) {
+    console.error("❌ [SLOT] Erro ao criar action:", error);
+    throw error;
+  }
+  
+  console.log(`✨ [SLOT] Nova action: ${newAction.id} | Intent: ${intent}`);
+  return { action: newAction, isNew: true };
+}
+
+/**
+ * Merge incremental de slots - NÃO sobrescreve valores já preenchidos
+ * Normaliza valores (lowercase, aliases)
+ */
+function mergeSlots(
+  existingSlots: Record<string, any>,
+  newSlots: Record<string, any>
+): Record<string, any> {
+  const merged = { ...existingSlots };
+  
+  for (const [key, value] of Object.entries(newSlots)) {
+    if (value === null || value === undefined || value === "") continue;
+    
+    // Normalizar valor
+    let normalizedValue = value;
+    
+    if (typeof value === "string") {
+      const lower = value.toLowerCase().trim();
+      
+      // Aplicar aliases para campos conhecidos
+      if (FIELD_ALIASES[lower]) {
+        normalizedValue = FIELD_ALIASES[lower];
+      } else {
+        // Normalizar strings (lowercase, remover acentos)
+        normalizedValue = lower.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      }
+    }
+    
+    // Só sobrescrever se slot ainda não preenchido
+    if (!existingSlots[key] || existingSlots[key] === null) {
+      merged[key] = normalizedValue;
+      console.log(`📝 [SLOT] ${key}: ${normalizedValue}`);
+    }
+  }
+  
+  return merged;
+}
+
+/**
+ * Verifica quais slots obrigatórios ainda faltam
+ */
+function getMissingSlots(intent: string, currentSlots: Record<string, any>): string[] {
+  const requirements = SLOT_REQUIREMENTS[intent];
+  if (!requirements) return [];
+  
+  const missing: string[] = [];
+  
+  for (const slot of requirements.required) {
+    if (!currentSlots[slot] || currentSlots[slot] === null || currentSlots[slot] === "") {
+      missing.push(slot);
+    }
+  }
+  
+  return missing;
+}
+
+/**
+ * Atualiza slots da action no banco
+ */
+async function updateActionSlots(
+  actionId: string,
+  slots: Record<string, any>,
+  status?: string
+): Promise<void> {
+  const update: any = { 
+    slots, 
+    updated_at: new Date().toISOString() 
+  };
+  
+  if (status) {
+    update.status = status;
+  }
+  
+  await supabase
+    .from("actions")
+    .update(update)
+    .eq("id", actionId);
+  
+  console.log(`💾 [SLOT] Action ${actionId} atualizada | Status: ${status || "unchanged"}`);
+}
+
+/**
+ * Tenta extrair slots de uma mensagem simples (números, nomes de cartão, etc)
+ * Usado quando usuário responde uma pergunta de slot
+ */
+function extractSlotsFromSimpleMessage(
+  message: string,
+  pendingSlot: string,
+  userId: string
+): Record<string, any> {
+  const msg = message.trim();
+  const slots: Record<string, any> = {};
+  
+  // Número puro (para limit, due_day, value, amount)
+  const numMatch = msg.replace(/[^\d.,]/g, "").replace(",", ".");
+  const numValue = parseFloat(numMatch);
+  
+  if (!isNaN(numValue) && ["limit", "due_day", "value", "amount", "closing_day", "installments"].includes(pendingSlot)) {
+    slots[pendingSlot] = numValue;
+    return slots;
+  }
+  
+  // Opção numérica (1-4 para action)
+  if (/^[1-4]$/.test(msg) && pendingSlot === "action") {
+    const actionMap: Record<string, string> = { "1": "view", "2": "add", "3": "update", "4": "remove" };
+    slots.action = actionMap[msg];
+    return slots;
+  }
+  
+  // Campos de texto (card_name, card, description)
+  if (["card_name", "card", "description", "field"].includes(pendingSlot)) {
+    // Normalizar
+    const normalized = msg.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    
+    // Verificar aliases para field
+    if (pendingSlot === "field" && FIELD_ALIASES[normalized]) {
+      slots.field = FIELD_ALIASES[normalized];
+    } else {
+      slots[pendingSlot] = normalized;
+    }
+    return slots;
+  }
+  
+  // Fallback: atribuir ao slot pendente
+  slots[pendingSlot] = msg;
+  return slots;
+}
+
+/**
+ * Busca cartão do usuário por nome (fuzzy match)
+ */
+async function findCardByName(
+  userId: string,
+  cardName: string
+): Promise<{ id: string; nome: string; limite_total: number; dia_vencimento: number } | null> {
+  const { data: cartoes } = await supabase
+    .from("cartoes_credito")
+    .select("id, nome, limite_total, dia_vencimento")
+    .eq("usuario_id", userId)
+    .eq("ativo", true);
+  
+  if (!cartoes || cartoes.length === 0) return null;
+  
+  const normalizedSearch = cardName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  
+  // Match exato
+  const exact = cartoes.find(c => 
+    (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() === normalizedSearch
+  );
+  if (exact) return exact;
+  
+  // Match parcial (contém)
+  const partial = cartoes.find(c => 
+    (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(normalizedSearch) ||
+    normalizedSearch.includes((c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""))
+  );
+  if (partial) return partial;
+  
+  return null;
 }
 
 // ============================================================================
@@ -1529,29 +1833,169 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
-    // VERIFICAR ACTION ATIVA DE CARTÕES (PRIORIDADE SOBRE INTERPRETAÇÃO)
+    // 🎰 SLOT FILLING - VERIFICAR ACTIONS ATIVAS COM SLOTS
     // ========================================================================
-    const { data: cardActionActive } = await supabase
+    const { data: slotAction } = await supabase
       .from("actions")
       .select("*")
       .eq("user_id", userId)
-      .eq("action_type", "card_management")
-      .in("status", ["awaiting_decision", "awaiting_input"])
+      .in("status", ["collecting", "awaiting_input", "awaiting_decision"])
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
     
-    if (cardActionActive && payload.messageType === "text") {
-      console.log(`🃏 [CARD] Action ativa encontrada: ${cardActionActive.id} - step: ${(cardActionActive.meta as any)?.step}`);
-      
-      const meta = cardActionActive.meta as { step?: string; card_id?: string; card_name?: string };
+    if (slotAction && payload.messageType === "text") {
+      const actionType = slotAction.action_type;
+      const currentSlots = (slotAction.slots || {}) as Record<string, any>;
+      const meta = (slotAction.meta || {}) as Record<string, any>;
       const msg = payload.messageText.trim();
-      const opcao = parseInt(msg);
       
-      // STEP: choose_action - Usuário responde com número
-      if (meta.step === "choose_action") {
-        if (opcao === 1) {
-          // Ver cartões cadastrados
+      console.log(`🎰 [SLOT] Action ativa: ${slotAction.id} | Type: ${actionType} | Slots: ${JSON.stringify(currentSlots)}`);
+      
+      // Identificar slot pendente (o próximo que falta)
+      const missingSlots = getMissingSlots(actionType, currentSlots);
+      const pendingSlot = meta.pending_slot || (missingSlots.length > 0 ? missingSlots[0] : null);
+      
+      // Extrair slots da mensagem simples
+      const extractedSlots = pendingSlot 
+        ? extractSlotsFromSimpleMessage(msg, pendingSlot, userId)
+        : {};
+      
+      // Merge com slots existentes
+      const mergedSlots = mergeSlots(currentSlots, extractedSlots);
+      
+      // Atualizar action
+      await updateActionSlots(slotAction.id, mergedSlots);
+      
+      // Verificar completude
+      const stillMissing = getMissingSlots(actionType, mergedSlots);
+      
+      console.log(`🎰 [SLOT] Após merge: ${JSON.stringify(mergedSlots)} | Faltando: ${stillMissing.join(", ") || "nenhum"}`);
+      
+      // ================================================================
+      // EXECUTAR SE COMPLETO
+      // ================================================================
+      if (stillMissing.length === 0) {
+        console.log(`✅ [SLOT] Slots completos! Executando ${actionType}...`);
+        
+        // ADD_CARD - Criar novo cartão
+        if (actionType === "add_card") {
+          const { data: novoCartao, error: cardError } = await supabase
+            .from("cartoes_credito")
+            .insert({
+              usuario_id: userId,
+              nome: mergedSlots.card_name,
+              limite_total: mergedSlots.limit,
+              limite_disponivel: mergedSlots.limit,
+              dia_vencimento: mergedSlots.due_day,
+              dia_fechamento: mergedSlots.closing_day || (mergedSlots.due_day > 5 ? mergedSlots.due_day - 5 : 25),
+              ativo: true
+            })
+            .select("id")
+            .single();
+          
+          if (cardError) {
+            console.error("❌ [CARD] Erro ao criar:", cardError);
+            await sendWhatsAppMessage(payload.phoneNumber, "Algo deu errado ao criar o cartão 😕\n\nTenta de novo?", payload.messageSource);
+            await updateActionSlots(slotAction.id, mergedSlots, "error");
+            return;
+          }
+          
+          await updateActionSlots(slotAction.id, mergedSlots, "done");
+          await supabase.from("actions").update({ entity_id: novoCartao.id }).eq("id", slotAction.id);
+          
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            `✅ *Cartão adicionado!*\n\n` +
+            `💳 *${mergedSlots.card_name}*\n` +
+            `💰 Limite: R$ ${Number(mergedSlots.limit).toFixed(2)}\n` +
+            `📅 Vencimento: dia ${mergedSlots.due_day}`,
+            payload.messageSource
+          );
+          return;
+        }
+        
+        // UPDATE_CARD - Atualizar cartão existente
+        if (actionType === "update_card") {
+          // Buscar cartão
+          const card = await findCardByName(userId, mergedSlots.card);
+          
+          if (!card) {
+            await sendWhatsAppMessage(payload.phoneNumber, `Não encontrei o cartão "${mergedSlots.card}" 🤔\n\nMe diz o nome correto.`, payload.messageSource);
+            mergedSlots.card = null; // Limpar para pedir novamente
+            await updateActionSlots(slotAction.id, mergedSlots);
+            await supabase.from("actions").update({ meta: { pending_slot: "card" } }).eq("id", slotAction.id);
+            return;
+          }
+          
+          // Mapear field para coluna do banco
+          const fieldMap: Record<string, string> = {
+            "limit": "limite_total",
+            "limite": "limite_total", 
+            "due_day": "dia_vencimento",
+            "vencimento": "dia_vencimento",
+            "name": "nome",
+            "card_name": "nome"
+          };
+          
+          const dbField = fieldMap[mergedSlots.field] || mergedSlots.field;
+          const updateData: Record<string, any> = { [dbField]: mergedSlots.value };
+          
+          // Se atualizou limite, atualizar disponível também
+          if (dbField === "limite_total") {
+            updateData.limite_disponivel = mergedSlots.value;
+          }
+          
+          const { error: updateError } = await supabase
+            .from("cartoes_credito")
+            .update(updateData)
+            .eq("id", card.id);
+          
+          if (updateError) {
+            console.error("❌ [CARD] Erro ao atualizar:", updateError);
+            await sendWhatsAppMessage(payload.phoneNumber, "Algo deu errado ao atualizar 😕\n\nTenta de novo?", payload.messageSource);
+            await updateActionSlots(slotAction.id, mergedSlots, "error");
+            return;
+          }
+          
+          await updateActionSlots(slotAction.id, mergedSlots, "done");
+          await supabase.from("actions").update({ entity_id: card.id }).eq("id", slotAction.id);
+          
+          const fieldNames: Record<string, string> = {
+            "limit": "Limite", "limite": "Limite", "limite_total": "Limite",
+            "due_day": "Vencimento", "vencimento": "Vencimento", "dia_vencimento": "Vencimento",
+            "name": "Nome", "card_name": "Nome", "nome": "Nome"
+          };
+          
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            `✅ *Cartão atualizado!*\n\n` +
+            `💳 *${card.nome}*\n` +
+            `${fieldNames[mergedSlots.field] || mergedSlots.field}: ${mergedSlots.value}`,
+            payload.messageSource
+          );
+          return;
+        }
+        
+        // REMOVE_CARD - Remover cartão
+        if (actionType === "remove_card") {
+          const card = await findCardByName(userId, mergedSlots.card);
+          
+          if (!card) {
+            await sendWhatsAppMessage(payload.phoneNumber, `Não encontrei o cartão "${mergedSlots.card}" 🤔`, payload.messageSource);
+            await updateActionSlots(slotAction.id, mergedSlots, "done");
+            return;
+          }
+          
+          await supabase.from("cartoes_credito").update({ ativo: false }).eq("id", card.id);
+          await updateActionSlots(slotAction.id, mergedSlots, "done");
+          
+          await sendWhatsAppMessage(payload.phoneNumber, `✅ Cartão *${card.nome}* removido!`, payload.messageSource);
+          return;
+        }
+        
+        // VIEW_CARDS - Listar cartões
+        if (actionType === "view_cards") {
           const { data: cartoes } = await supabase
             .from("cartoes_credito")
             .select("*")
@@ -1559,289 +2003,93 @@ async function processarJob(job: any): Promise<void> {
             .eq("ativo", true);
           
           if (!cartoes || cartoes.length === 0) {
-            await sendWhatsAppMessage(
-              payload.phoneNumber,
-              "Você ainda não tem cartões cadastrados 💳\n\n👉 Quer adicionar um agora? Me diz o nome do cartão.",
-              payload.messageSource
-            );
-            
-            await supabase.from("actions")
-              .update({ 
-                meta: { step: "awaiting_card_name" }, 
-                status: "awaiting_input",
-                updated_at: new Date().toISOString() 
-              })
-              .eq("id", cardActionActive.id);
-            
+            await sendWhatsAppMessage(payload.phoneNumber, "Você ainda não tem cartões cadastrados 💳\n\nQuer adicionar um? Me diz o nome do cartão.", payload.messageSource);
+            // Converter para add_card
+            await supabase.from("actions").update({ action_type: "add_card", meta: { pending_slot: "card_name" } }).eq("id", slotAction.id);
             return;
           }
           
-          const listaCartoes = cartoes.map((c, i) => 
+          const lista = cartoes.map((c, i) => 
             `${i + 1}. *${c.nome}*\n   Limite: R$ ${Number(c.limite_total || 0).toFixed(2)}\n   Disponível: R$ ${Number(c.limite_disponivel || 0).toFixed(2)}\n   Vencimento: dia ${c.dia_vencimento}`
           ).join("\n\n");
           
-          await sendWhatsAppMessage(
-            payload.phoneNumber,
-            `*Seus cartões* 💳\n\n${listaCartoes}`,
-            payload.messageSource
-          );
-          
-          // Marcar action como done
-          await supabase.from("actions")
-            .update({ status: "done", updated_at: new Date().toISOString() })
-            .eq("id", cardActionActive.id);
-          
+          await sendWhatsAppMessage(payload.phoneNumber, `*Seus cartões* 💳\n\n${lista}`, payload.messageSource);
+          await updateActionSlots(slotAction.id, mergedSlots, "done");
           return;
+        }
+        
+        // GERENCIAR_CARTOES - Tratar ação selecionada
+        if (actionType === "gerenciar_cartoes" && mergedSlots.action) {
+          const action = mergedSlots.action;
           
-        } else if (opcao === 2) {
-          // Adicionar novo cartão
-          await sendWhatsAppMessage(
-            payload.phoneNumber,
-            "Legal! 💳 Qual é o nome do cartão? (Ex: Nubank, C6, Itaú...)",
-            payload.messageSource
-          );
-          
-          await supabase.from("actions")
-            .update({ 
-              meta: { step: "awaiting_card_name" }, 
-              status: "awaiting_input",
-              updated_at: new Date().toISOString() 
-            })
-            .eq("id", cardActionActive.id);
-          
-          return;
-          
-        } else if (opcao === 3) {
-          // Atualizar cartão
-          const { data: cartoes } = await supabase
-            .from("cartoes_credito")
-            .select("*")
-            .eq("usuario_id", userId)
-            .eq("ativo", true);
-          
-          if (!cartoes || cartoes.length === 0) {
-            await sendWhatsAppMessage(
-              payload.phoneNumber,
-              "Você não tem cartões para atualizar 🤔\n\n👉 Quer adicionar um? Me diz o nome.",
-              payload.messageSource
-            );
+          if (action === "view") {
+            // Converter para view_cards e executar
+            await supabase.from("actions").update({ action_type: "view_cards" }).eq("id", slotAction.id);
             
-            await supabase.from("actions")
-              .update({ 
-                meta: { step: "awaiting_card_name" }, 
-                status: "awaiting_input",
-                updated_at: new Date().toISOString() 
-              })
-              .eq("id", cardActionActive.id);
+            const { data: cartoes } = await supabase.from("cartoes_credito").select("*").eq("usuario_id", userId).eq("ativo", true);
             
+            if (!cartoes || cartoes.length === 0) {
+              await sendWhatsAppMessage(payload.phoneNumber, "Você ainda não tem cartões cadastrados 💳\n\nQuer adicionar um? Me diz o nome do cartão.", payload.messageSource);
+              await supabase.from("actions").update({ action_type: "add_card", meta: { pending_slot: "card_name" }, status: "collecting" }).eq("id", slotAction.id);
+              return;
+            }
+            
+            const lista = cartoes.map((c, i) => `${i + 1}. *${c.nome}*\n   Limite: R$ ${Number(c.limite_total || 0).toFixed(2)}\n   Vencimento: dia ${c.dia_vencimento}`).join("\n\n");
+            await sendWhatsAppMessage(payload.phoneNumber, `*Seus cartões* 💳\n\n${lista}`, payload.messageSource);
+            await updateActionSlots(slotAction.id, mergedSlots, "done");
             return;
           }
           
-          const listaCartoes = cartoes.map((c, i) => `${i + 1}. ${c.nome}`).join("\n");
-          
-          // Criar pending selection para escolha
-          const cardOptions = cartoes.map((c, i) => ({
-            index: i + 1,
-            tx_id: c.id,
-            label: c.nome || "Sem nome",
-            meta: { card_id: c.id, card_name: c.nome }
-          }));
-          
-          await criarPendingSelection(userId, cardOptions, "card_update_selection", 3);
-          
-          await sendWhatsAppMessage(
-            payload.phoneNumber,
-            `Qual cartão você quer atualizar?\n\n${listaCartoes}\n\n_Responde com o número_`,
-            payload.messageSource
-          );
-          
-          await supabase.from("actions")
-            .update({ 
-              meta: { step: "awaiting_card_selection_update" }, 
-              status: "awaiting_input",
-              updated_at: new Date().toISOString() 
-            })
-            .eq("id", cardActionActive.id);
-          
-          return;
-          
-        } else if (opcao === 4) {
-          // Remover cartão
-          const { data: cartoes } = await supabase
-            .from("cartoes_credito")
-            .select("*")
-            .eq("usuario_id", userId)
-            .eq("ativo", true);
-          
-          if (!cartoes || cartoes.length === 0) {
-            await sendWhatsAppMessage(
-              payload.phoneNumber,
-              "Você não tem cartões para remover 🤔",
-              payload.messageSource
-            );
-            
-            await supabase.from("actions")
-              .update({ status: "done", updated_at: new Date().toISOString() })
-              .eq("id", cardActionActive.id);
-            
+          if (action === "add") {
+            await supabase.from("actions").update({ action_type: "add_card", slots: {}, status: "collecting", meta: { pending_slot: "card_name" } }).eq("id", slotAction.id);
+            await sendWhatsAppMessage(payload.phoneNumber, "Legal! 💳 Qual é o nome do cartão? (Ex: Nubank, C6, Itaú...)", payload.messageSource);
             return;
           }
           
-          const listaCartoes = cartoes.map((c, i) => `${i + 1}. ${c.nome}`).join("\n");
+          if (action === "update") {
+            await supabase.from("actions").update({ action_type: "update_card", slots: {}, status: "collecting", meta: { pending_slot: "card" } }).eq("id", slotAction.id);
+            
+            const { data: cartoes } = await supabase.from("cartoes_credito").select("nome").eq("usuario_id", userId).eq("ativo", true);
+            const cartoesList = cartoes?.map(c => c.nome).join(", ") || "nenhum";
+            await sendWhatsAppMessage(payload.phoneNumber, `Qual cartão você quer atualizar?\n\n_Cartões: ${cartoesList}_`, payload.messageSource);
+            return;
+          }
           
-          const cardOptions = cartoes.map((c, i) => ({
-            index: i + 1,
-            tx_id: c.id,
-            label: c.nome || "Sem nome",
-            meta: { card_id: c.id, card_name: c.nome }
-          }));
-          
-          await criarPendingSelection(userId, cardOptions, "card_remove_selection", 3);
-          
-          await sendWhatsAppMessage(
-            payload.phoneNumber,
-            `Qual cartão você quer remover?\n\n${listaCartoes}\n\n_Responde com o número_`,
-            payload.messageSource
-          );
-          
-          await supabase.from("actions")
-            .update({ 
-              meta: { step: "awaiting_card_selection_remove" }, 
-              status: "awaiting_input",
-              updated_at: new Date().toISOString() 
-            })
-            .eq("id", cardActionActive.id);
-          
-          return;
+          if (action === "remove") {
+            await supabase.from("actions").update({ action_type: "remove_card", slots: {}, status: "collecting", meta: { pending_slot: "card" } }).eq("id", slotAction.id);
+            
+            const { data: cartoes } = await supabase.from("cartoes_credito").select("nome").eq("usuario_id", userId).eq("ativo", true);
+            const cartoesList = cartoes?.map(c => c.nome).join(", ") || "nenhum";
+            await sendWhatsAppMessage(payload.phoneNumber, `Qual cartão você quer remover?\n\n_Cartões: ${cartoesList}_`, payload.messageSource);
+            return;
+          }
         }
-        
-        // Opção inválida
-        await sendWhatsAppMessage(
-          payload.phoneNumber,
-          "Responde com 1, 2, 3 ou 4 😊",
-          payload.messageSource
-        );
-        return;
       }
       
-      // STEP: awaiting_card_name - Usuário digitou nome do cartão
-      if (meta.step === "awaiting_card_name") {
-        const nomeCarto = msg;
+      // ================================================================
+      // PEDIR PRÓXIMO SLOT FALTANTE
+      // ================================================================
+      if (stillMissing.length > 0) {
+        const nextSlot = stillMissing[0];
+        const prompt = SLOT_PROMPTS[nextSlot] || `Me diz o ${nextSlot}:`;
         
-        await sendWhatsAppMessage(
-          payload.phoneNumber,
-          `*${nomeCarto}* 👍\n\nAgora me diz o limite total do cartão.\n\n_Ex: 5000_`,
-          payload.messageSource
-        );
+        await supabase.from("actions").update({ meta: { ...meta, pending_slot: nextSlot } }).eq("id", slotAction.id);
+        await sendWhatsAppMessage(payload.phoneNumber, prompt, payload.messageSource);
         
-        await supabase.from("actions")
-          .update({ 
-            meta: { step: "awaiting_card_limit", card_name: nomeCarto }, 
-            updated_at: new Date().toISOString() 
-          })
-          .eq("id", cardActionActive.id);
+        await supabase.from("historico_conversas").insert({
+          phone_number: payload.phoneNumber,
+          user_id: userId,
+          user_message: payload.messageText,
+          ai_response: prompt,
+          tipo: "slot_filling"
+        });
         
         return;
       }
-      
-      // STEP: awaiting_card_limit - Usuário digitou limite
-      if (meta.step === "awaiting_card_limit") {
-        const limiteStr = msg.replace(/[^\d.,]/g, "").replace(",", ".");
-        const limite = parseFloat(limiteStr);
-        
-        if (isNaN(limite) || limite <= 0) {
-          await sendWhatsAppMessage(
-            payload.phoneNumber,
-            "Não entendi o limite 🤔\n\nDigita só o número. Ex: 5000",
-            payload.messageSource
-          );
-          return;
-        }
-        
-        await sendWhatsAppMessage(
-          payload.phoneNumber,
-          `Limite de R$ ${limite.toFixed(2)} 💳\n\nQual o dia de vencimento da fatura?\n\n_Ex: 10_`,
-          payload.messageSource
-        );
-        
-        await supabase.from("actions")
-          .update({ 
-            meta: { ...meta, step: "awaiting_card_due_day", card_limit: limite }, 
-            updated_at: new Date().toISOString() 
-          })
-          .eq("id", cardActionActive.id);
-        
-        return;
-      }
-      
-      // STEP: awaiting_card_due_day - Usuário digitou dia de vencimento
-      if (meta.step === "awaiting_card_due_day") {
-        const diaVenc = parseInt(msg);
-        
-        if (isNaN(diaVenc) || diaVenc < 1 || diaVenc > 31) {
-          await sendWhatsAppMessage(
-            payload.phoneNumber,
-            "Dia inválido 🤔\n\nDigita um número de 1 a 31.",
-            payload.messageSource
-          );
-          return;
-        }
-        
-        // Criar cartão
-        const metaAtual = cardActionActive.meta as any;
-        
-        const { data: novoCartao, error: cardError } = await supabase
-          .from("cartoes_credito")
-          .insert({
-            usuario_id: userId,
-            nome: metaAtual.card_name,
-            limite_total: metaAtual.card_limit,
-            limite_disponivel: metaAtual.card_limit,
-            dia_vencimento: diaVenc,
-            dia_fechamento: diaVenc > 5 ? diaVenc - 5 : 25,
-            ativo: true
-          })
-          .select("id")
-          .single();
-        
-        if (cardError) {
-          console.error("❌ [CARD] Erro ao criar:", cardError);
-          await sendWhatsAppMessage(
-            payload.phoneNumber,
-            "Algo deu errado ao criar o cartão 😕\n\nTenta de novo?",
-            payload.messageSource
-          );
-          return;
-        }
-        
-        await supabase.from("actions")
-          .update({ 
-            status: "done", 
-            entity_id: novoCartao.id,
-            updated_at: new Date().toISOString() 
-          })
-          .eq("id", cardActionActive.id);
-        
-        await sendWhatsAppMessage(
-          payload.phoneNumber,
-          `✅ *Cartão adicionado!*\n\n` +
-          `💳 *${metaAtual.card_name}*\n` +
-          `💰 Limite: R$ ${metaAtual.card_limit.toFixed(2)}\n` +
-          `📅 Vencimento: dia ${diaVenc}`,
-          payload.messageSource
-        );
-        
-        return;
-      }
-      
-      // Se chegou aqui com action ativa mas não tratou, encerrar
-      await supabase.from("actions")
-        .update({ status: "done", updated_at: new Date().toISOString() })
-        .eq("id", cardActionActive.id);
     }
     
     // ========================================================================
-    // VERIFICAR PENDING SELECTION (CARTÕES - UPDATE)
+    // VERIFICAR PENDING SELECTION (CARTÕES - UPDATE - COMPATIBILIDADE)
     // ========================================================================
     const pendingCardUpdate = await consumirPendingSelection(userId, "card_update_selection");
     
@@ -1852,19 +2100,65 @@ async function processarJob(job: any): Promise<void> {
         const selected = pendingCardUpdate.options[opcao - 1];
         const cardMeta = selected.meta as { card_id: string; card_name: string };
         
+        // Criar action de update_card com slot card já preenchido
+        const { action: slotAction } = await getOrCreateSlotAction(userId, "update_card", { card: cardMeta.card_name });
+        
         await sendWhatsAppMessage(
           payload.phoneNumber,
           `O que você quer atualizar no *${cardMeta.card_name}*?\n\n1. Limite\n2. Dia de vencimento\n3. Nome\n\n_Responde com o número_`,
           payload.messageSource
         );
         
-        // Criar nova pending selection para escolha de campo
+        await supabase.from("actions").update({ meta: { pending_slot: "field" } }).eq("id", slotAction.id);
+        
+        // Criar pending selection para escolha de campo
         await criarPendingSelection(userId, [
-          { index: 1, label: "Limite", meta: { card_id: cardMeta.card_id, field: "limite" } },
-          { index: 2, label: "Dia de vencimento", meta: { card_id: cardMeta.card_id, field: "vencimento" } },
-          { index: 3, label: "Nome", meta: { card_id: cardMeta.card_id, field: "nome" } },
+          { index: 1, label: "Limite", meta: { card_id: cardMeta.card_id, field: "limit" } },
+          { index: 2, label: "Dia de vencimento", meta: { card_id: cardMeta.card_id, field: "due_day" } },
+          { index: 3, label: "Nome", meta: { card_id: cardMeta.card_id, field: "name" } },
         ], "card_field_selection", 3);
         
+        return;
+      }
+    }
+    
+    // ========================================================================
+    // VERIFICAR PENDING SELECTION (CARTÕES - CAMPO)
+    // ========================================================================
+    const pendingCardField = await consumirPendingSelection(userId, "card_field_selection");
+    
+    if (pendingCardField && payload.messageType === "text") {
+      const opcao = parseInt(payload.messageText.trim());
+      
+      if (!isNaN(opcao) && opcao >= 1 && opcao <= pendingCardField.options.length) {
+        const selected = pendingCardField.options[opcao - 1];
+        const fieldMeta = selected.meta as { card_id: string; field: string };
+        
+        // Buscar ou criar action de update_card
+        const { data: activeAction } = await supabase
+          .from("actions")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("action_type", "update_card")
+          .in("status", ["collecting", "awaiting_input"])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
+        
+        if (activeAction) {
+          const currentSlots = (activeAction.slots || {}) as Record<string, any>;
+          const updatedSlots = mergeSlots(currentSlots, { field: fieldMeta.field });
+          await updateActionSlots(activeAction.id, updatedSlots);
+          await supabase.from("actions").update({ meta: { pending_slot: "value" } }).eq("id", activeAction.id);
+        }
+        
+        const fieldPrompts: Record<string, string> = {
+          "limit": "Qual o novo limite do cartão? 💰",
+          "due_day": "Qual o novo dia de vencimento? (1-31)",
+          "name": "Qual o novo nome do cartão?"
+        };
+        
+        await sendWhatsAppMessage(payload.phoneNumber, fieldPrompts[fieldMeta.field] || "Qual o novo valor?", payload.messageSource);
         return;
       }
     }
@@ -2063,59 +2357,140 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     // GERENCIAR CARTÕES (CRIAR ACTION PERSISTENTE)
     // ========================================================================
-    if (interpretacao.intent === "gerenciar_cartoes") {
-      console.log("🃏 [CARD] Intent gerenciar_cartoes detectado");
+    // ========================================================================
+    // GERENCIAR CARTÕES - SLOT FILLING
+    // ========================================================================
+    if (interpretacao.intent === "gerenciar_cartoes" || interpretacao.intent === "view_cards" || 
+        interpretacao.intent === "add_card" || interpretacao.intent === "update_card" || 
+        interpretacao.intent === "remove_card") {
+      
+      console.log(`🃏 [CARD] Intent ${interpretacao.intent} detectado | Slots: ${JSON.stringify(interpretacao.slots || {})}`);
       
       // Expirar actions de cartões antigas do usuário
       await supabase
         .from("actions")
         .update({ status: "expired", updated_at: new Date().toISOString() })
         .eq("user_id", userId)
-        .eq("action_type", "card_management")
-        .in("status", ["awaiting_decision", "awaiting_input"]);
+        .in("action_type", ["gerenciar_cartoes", "card_management", "add_card", "update_card", "remove_card", "view_cards"])
+        .in("status", ["collecting", "awaiting_decision", "awaiting_input"]);
       
-      // Criar NOVA action para gerenciamento de cartões
-      const actionHash = `card_mgmt_${userId.slice(0,8)}_${Date.now()}`;
+      // Determinar action_type e slots iniciais
+      let actionType = interpretacao.intent;
+      let initialSlots: Record<string, any> = interpretacao.slots || {};
       
-      const { data: actionData, error: actionError } = await supabase
-        .from("actions")
-        .insert({
-          user_id: userId,
-          action_type: "card_management",
-          action_hash: actionHash,
-          status: "awaiting_decision",
-          meta: { step: "choose_action" }
-        })
-        .select("id")
-        .single();
+      // Se é update_card direto (ex: "meu limite no Nubank é 3200")
+      if (actionType === "update_card" && initialSlots.card && initialSlots.field && initialSlots.value) {
+        // Todos os slots preenchidos - executar direto
+        const card = await findCardByName(userId, initialSlots.card);
+        
+        if (card) {
+          const fieldMap: Record<string, string> = {
+            "limit": "limite_total", "limite": "limite_total",
+            "due_day": "dia_vencimento", "vencimento": "dia_vencimento",
+            "name": "nome", "card_name": "nome"
+          };
+          
+          const dbField = fieldMap[initialSlots.field] || initialSlots.field;
+          const updateData: Record<string, any> = { [dbField]: initialSlots.value };
+          
+          if (dbField === "limite_total") {
+            updateData.limite_disponivel = initialSlots.value;
+          }
+          
+          const { error } = await supabase.from("cartoes_credito").update(updateData).eq("id", card.id);
+          
+          if (!error) {
+            await sendWhatsAppMessage(
+              payload.phoneNumber,
+              `✅ *Cartão atualizado!*\n\n💳 *${card.nome}*\n${initialSlots.field}: ${initialSlots.value}`,
+              payload.messageSource
+            );
+            
+            // Registrar action como done
+            const actionHash = `slot_update_card_${userId.slice(0,8)}_${Date.now()}`;
+            await supabase.from("actions").insert({
+              user_id: userId, action_type: "update_card", action_hash: actionHash,
+              status: "done", slots: initialSlots, entity_id: card.id
+            });
+            
+            await supabase.from("historico_conversas").insert({
+              phone_number: payload.phoneNumber, user_id: userId,
+              user_message: conteudoProcessado, ai_response: `[CARD_UPDATED:${card.nome}]`,
+              tipo: "card_update_direct"
+            });
+            
+            return;
+          }
+        } else {
+          // Cartão não encontrado, pedir novamente
+          await sendWhatsAppMessage(
+            payload.phoneNumber,
+            `Não encontrei o cartão "${initialSlots.card}" 🤔\n\nQual cartão você quer atualizar?`,
+            payload.messageSource
+          );
+          
+          initialSlots.card = null;
+          await getOrCreateSlotAction(userId, "update_card", initialSlots);
+          return;
+        }
+      }
       
-      if (actionError) {
-        console.error("❌ [CARD] Erro ao criar action:", actionError);
-        await sendWhatsAppMessage(
-          payload.phoneNumber,
-          "Algo deu errado ao iniciar o gerenciamento de cartões 😕\n\nTenta de novo?",
-          payload.messageSource
-        );
+      // Criar action de slot filling
+      const { action } = await getOrCreateSlotAction(userId, actionType, initialSlots);
+      
+      // Verificar quais slots faltam
+      const missingSlots = getMissingSlots(actionType, initialSlots);
+      
+      // Se não falta nada, executar (view_cards por exemplo)
+      if (missingSlots.length === 0) {
+        if (actionType === "view_cards") {
+          const { data: cartoes } = await supabase.from("cartoes_credito").select("*").eq("usuario_id", userId).eq("ativo", true);
+          
+          if (!cartoes || cartoes.length === 0) {
+            await sendWhatsAppMessage(payload.phoneNumber, "Você ainda não tem cartões cadastrados 💳\n\nQuer adicionar um? Me diz o nome do cartão.", payload.messageSource);
+            await supabase.from("actions").update({ action_type: "add_card", status: "collecting", meta: { pending_slot: "card_name" } }).eq("id", action.id);
+            return;
+          }
+          
+          const lista = cartoes.map((c, i) => `${i + 1}. *${c.nome}*\n   Limite: R$ ${Number(c.limite_total || 0).toFixed(2)}\n   Vencimento: dia ${c.dia_vencimento}`).join("\n\n");
+          await sendWhatsAppMessage(payload.phoneNumber, `*Seus cartões* 💳\n\n${lista}`, payload.messageSource);
+          await updateActionSlots(action.id, initialSlots, "done");
+          return;
+        }
+      }
+      
+      // Se é gerenciar_cartoes genérico, pedir a ação
+      if (actionType === "gerenciar_cartoes") {
+        const msgCartoes = `Claro! O que você deseja fazer com seus cartões? 💳\n\n` +
+          `1️⃣ Ver cartões cadastrados\n` +
+          `2️⃣ Adicionar novo cartão\n` +
+          `3️⃣ Atualizar cartão existente\n` +
+          `4️⃣ Remover cartão\n\n` +
+          `_Responde com o número_`;
+        
+        await supabase.from("actions").update({ meta: { pending_slot: "action" } }).eq("id", action.id);
+        await sendWhatsAppMessage(payload.phoneNumber, msgCartoes, payload.messageSource);
+        
+        await supabase.from("historico_conversas").insert({
+          phone_number: payload.phoneNumber, user_id: userId,
+          user_message: payload.messageText, ai_response: msgCartoes,
+          tipo: "card_management"
+        });
+        
         return;
       }
       
-      console.log(`✅ [CARD] Action criada: ${actionData.id}`);
+      // Pedir primeiro slot faltante
+      const nextSlot = missingSlots[0];
+      const prompt = SLOT_PROMPTS[nextSlot] || `Me diz o ${nextSlot}:`;
       
-      const msgCartoes = `Claro! O que você deseja fazer com seus cartões? 💳\n\n` +
-        `1️⃣ Ver cartões cadastrados\n` +
-        `2️⃣ Adicionar novo cartão\n` +
-        `3️⃣ Atualizar cartão existente\n` +
-        `4️⃣ Remover cartão\n\n` +
-        `_Responde com o número_`;
-      
-      await sendWhatsAppMessage(payload.phoneNumber, msgCartoes, payload.messageSource);
+      await supabase.from("actions").update({ meta: { pending_slot: nextSlot } }).eq("id", action.id);
+      await sendWhatsAppMessage(payload.phoneNumber, prompt, payload.messageSource);
       
       await supabase.from("historico_conversas").insert({
-        phone_number: payload.phoneNumber,
-        user_id: userId,
-        user_message: payload.messageText,
-        ai_response: msgCartoes,
-        tipo: "card_management"
+        phone_number: payload.phoneNumber, user_id: userId,
+        user_message: payload.messageText, ai_response: prompt,
+        tipo: "slot_filling_start"
       });
       
       return;
