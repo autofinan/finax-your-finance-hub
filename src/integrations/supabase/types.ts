@@ -22,6 +22,7 @@ export type Database = {
           entity_id: string | null
           id: string
           meta: Json | null
+          slots: Json | null
           status: string | null
           updated_at: string | null
           user_id: string
@@ -33,6 +34,7 @@ export type Database = {
           entity_id?: string | null
           id?: string
           meta?: Json | null
+          slots?: Json | null
           status?: string | null
           updated_at?: string | null
           user_id: string
@@ -44,6 +46,7 @@ export type Database = {
           entity_id?: string | null
           id?: string
           meta?: Json | null
+          slots?: Json | null
           status?: string | null
           updated_at?: string | null
           user_id?: string
