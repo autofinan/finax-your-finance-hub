@@ -3,22 +3,21 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.168.0/crypto/mod.ts";
 
 // ============================================================================
-// 🏭 FINAX WORKER v3.0 - SLOT FILLING INTELIGENTE
+// 🏭 FINAX WORKER v4.0 - MOTOR DE DECISÃO DETERMINÍSTICO
 // ============================================================================
 //
 // ARQUITETURA:
-// 1. IA INTERPRETA (extrai intent + slots) - NUNCA DECIDE
-// 2. GERENCIADOR DE CONTEXTO (memória de curto prazo) 
-// 3. SLOT FILLING INTELIGENTE (anti-robô)
-// 4. EXECUTOR (só executa quando slots completos)
-// 5. ANTI-DUPLICAÇÃO SEMÂNTICA
+// 1. PRIORIDADE: Reply → Pending Selection → Active Action → Nova Intent
+// 2. ISOLAMENTO: Cada tipo de action (slot_filling, cancel_selection, card_update)
+// 3. NUMERIC ROUTING: Número isolado → preenche slot OU pergunta contexto
+// 4. ANTI-DUPLICAÇÃO: Hash semântico + janela temporal (3 min)
+// 5. MULTI-ITEM: Detecta N itens e pergunta [Separado] [Único]
 //
 // REGRAS DE OURO:
 // - Nenhum gasto é salvo sem: valor + forma_pagamento
-// - "Anota um gasto" = INTENÇÃO, não dado
-// - Número sozinho = tenta preencher contexto ativo
+// - Número sozinho → tenta preencher contexto ativo, senão pergunta
 // - Nunca "como posso ajudar" com contexto ativo
-// - Usuário pode falar em qualquer ordem
+// - Cancel selection: número = seleção (não slot de gasto)
 // ============================================================================
 
 const corsHeaders = {
@@ -45,6 +44,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
+type ActionType = "slot_filling" | "cancel_selection" | "card_update" | "batch_confirm" | "duplicate_confirm";
 
 interface JobPayload {
   phoneNumber: string;
@@ -57,7 +57,6 @@ interface JobPayload {
   nomeContato: string | null;
   evento_id: string | null;
   buttonReplyId: string | null;
-  // NOVO: Para cancelar por reply
   replyToMessageId?: string | null;
 }
 
@@ -77,67 +76,47 @@ interface ExtractedIntent {
   parcelas?: number;
   tipo_recorrencia?: "mensal" | "semanal" | "anual";
   confianca?: number;
-  // MÚLTIPLOS GASTOS
   itens?: ExtractedItem[];
   split_explicit?: boolean;
   aggregate_explicit?: boolean;
-  // SLOT FILLING
   slots?: Record<string, any>;
-  // MÚLTIPLAS AÇÕES
   acoes_detectadas?: Array<{ intent: string; slots: Record<string, any> }>;
 }
 
-// ============================================================================
-// 🎰 SLOT FILLING ARCHITECTURE v2.0
-// ============================================================================
-
-interface SlotRequirement {
-  required: string[];
-  optional: string[];
+interface ActiveAction {
+  id: string;
+  user_id: string;
+  type: ActionType;
+  intent: string;
+  slots: Record<string, any> & { card?: string };
+  status: string;
+  pending_slot?: string | null;
+  pending_selection_id?: string | null;
+  origin_message_id?: string | null;
+  last_message_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
 }
 
-// SLOTS OBRIGATÓRIOS E OPCIONAIS POR INTENT
-const SLOT_REQUIREMENTS: Record<string, SlotRequirement> = {
-  // CARTÕES
+// ============================================================================
+// 🎰 SLOT REQUIREMENTS & PROMPTS
+// ============================================================================
+
+const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[] }> = {
+  registrar_gasto: { required: ["amount", "payment_method"], optional: ["description", "category", "card"] },
+  registrar_entrada: { required: ["amount"], optional: ["description", "category"] },
   update_card: { required: ["card", "field", "value"], optional: [] },
   add_card: { required: ["card_name", "limit", "due_day"], optional: ["closing_day"] },
   remove_card: { required: ["card"], optional: [] },
-  view_cards: { required: [], optional: [] },
-  gerenciar_cartoes: { required: [], optional: ["action"] },
-  
-  // TRANSAÇÕES - FORMA_PAGAMENTO agora é OBRIGATÓRIO
-  registrar_gasto: { 
-    required: ["amount", "payment_method"], 
-    optional: ["description", "category", "card"] 
-  },
-  registrar_entrada: { 
-    required: ["amount"], 
-    optional: ["description", "category"] 
-  },
-  cancelar_transacao: { required: ["transaction_id"], optional: [] },
-  
-  // PARCELAMENTOS / RECORRENTES
   criar_parcelamento: { required: ["amount", "installments", "description"], optional: ["category", "card"] },
   criar_recorrente: { required: ["amount", "description", "recurrence_type"], optional: ["category", "day_of_month"] },
 };
 
-// PROMPTS PARA SOLICITAR SLOTS FALTANTES
 const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons?: Array<{ id: string; title: string }> }> = {
-  // Cartões
-  card: { text: "Qual cartão você quer gerenciar? 💳" },
-  field: { text: "O que você quer atualizar? (limite, vencimento ou nome)" },
-  value: { text: "Qual o novo valor?" },
-  card_name: { text: "Qual é o nome do cartão? (Ex: Nubank, C6, Itaú...)" },
-  limit: { text: "Qual o limite total do cartão? 💰" },
-  due_day: { text: "Qual o dia de vencimento da fatura? (1-31)" },
-  closing_day: { text: "Qual o dia de fechamento? (opcional, deixe vazio para pular)" },
-  action: { text: "O que você deseja fazer?\n\n1️⃣ Ver cartões\n2️⃣ Adicionar cartão\n3️⃣ Atualizar cartão\n4️⃣ Remover cartão" },
-  
-  // Transações - Com botões para forma de pagamento
   amount: { text: "Qual foi o valor? 💸" },
   description: { text: "O que foi essa compra?" },
-  category: { text: "Qual categoria se encaixa melhor?" },
-  transaction_id: { text: "Qual transação você quer cancelar?" },
+  category: { text: "Qual categoria?" },
   payment_method: { 
     text: "Como você pagou?", 
     useButtons: true,
@@ -147,155 +126,166 @@ const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons
       { id: "pay_credito", title: "💳 Crédito" }
     ]
   },
-  
-  // Parcelamentos
-  installments: { text: "Em quantas vezes foi parcelado?" },
+  card: { text: "Qual cartão?" },
+  card_name: { text: "Qual o nome do cartão? (Ex: Nubank, C6...)" },
+  limit: { text: "Qual o limite total? 💰" },
+  due_day: { text: "Qual o dia de vencimento? (1-31)" },
+  closing_day: { text: "Qual o dia de fechamento?" },
+  field: { text: "O que quer atualizar? (limite, vencimento ou nome)" },
+  value: { text: "Qual o novo valor?" },
+  installments: { text: "Em quantas vezes?" },
   recurrence_type: { text: "É mensal, semanal ou anual?" },
-  day_of_month: { text: "Em qual dia do mês esse gasto se repete?" },
 };
 
-// MAPEAMENTO DE CAMPOS (normalização fuzzy)
-const FIELD_ALIASES: Record<string, string> = {
-  // Campos de cartão
-  "limite": "limit", "limit": "limit", "lim": "limit",
-  "vencimento": "due_day", "venc": "due_day", "dia vencimento": "due_day", "dia de vencimento": "due_day",
-  "nome": "card_name", "name": "card_name",
-  "fechamento": "closing_day", "dia fechamento": "closing_day",
-  
-  // Ações numéricas
-  "1": "view", "ver": "view", "listar": "view",
-  "2": "add", "adicionar": "add", "novo": "add", "criar": "add",
-  "3": "update", "atualizar": "update", "alterar": "update", "mudar": "update",
-  "4": "remove", "remover": "remove", "excluir": "remove", "apagar": "remove",
-  
-  // Formas de pagamento
-  "pix": "pix", "débito": "debito", "debito": "debito", "crédito": "credito", "credito": "credito",
-  "dinheiro": "dinheiro", "cartao": "credito", "cartão": "credito",
-};
-
-// ALIASES PARA FORMA DE PAGAMENTO (normalização)
-const PAYMENT_METHOD_ALIASES: Record<string, string> = {
-  "pix": "pix", "débito": "debito", "debito": "debito", "cartão de débito": "debito",
-  "crédito": "credito", "credito": "credito", "cartão de crédito": "credito", "cartão": "credito",
-  "dinheiro": "dinheiro", "cash": "dinheiro", "espécie": "dinheiro",
+const PAYMENT_ALIASES: Record<string, string> = {
+  "pix": "pix", "débito": "debito", "debito": "debito", 
+  "crédito": "credito", "credito": "credito", "cartão": "credito",
+  "dinheiro": "dinheiro", "cash": "dinheiro",
   "pay_pix": "pix", "pay_debito": "debito", "pay_credito": "credito", "pay_dinheiro": "dinheiro"
 };
 
 // ============================================================================
-// 🧠 GERENCIADOR DE CONTEXTO (MEMÓRIA DE CURTO PRAZO)
+// 📊 LOGGING ESTRUTURADO
 // ============================================================================
 
-interface PendingContext {
-  id: string;
-  user_id: string;
-  intent: string;
-  slots: Record<string, any>;
-  status: "collecting" | "confirming" | "done" | "expired";
-  last_message_id: string | null;
-  pending_slot: string | null;
-  created_at: string;
-  updated_at: string;
-  expires_at: string;
+function logDecision(data: {
+  messageId: string;
+  referencedMessageId?: string | null;
+  activeActionId?: string | null;
+  activeActionType?: string | null;
+  dedupeHash?: string | null;
+  decision: string;
+  details?: any;
+}) {
+  console.log(`📊 [DECISION] ${JSON.stringify({
+    msg_id: data.messageId?.slice(-8),
+    ref_msg: data.referencedMessageId?.slice(-8) || null,
+    action_id: data.activeActionId?.slice(-8) || null,
+    action_type: data.activeActionType || null,
+    hash: data.dedupeHash?.slice(-12) || null,
+    decision: data.decision,
+    ...data.details
+  })}`);
 }
 
-/**
- * Busca contexto ativo do usuário (máximo 1)
- * Expira contextos antigos (> 5 minutos)
- */
-async function getActiveContext(userId: string): Promise<PendingContext | null> {
-  // Expirar contextos antigos
+// ============================================================================
+// 🔐 HASH SEMÂNTICO + ANTI-DUPLICAÇÃO (3 MIN WINDOW)
+// ============================================================================
+
+function normalizeText(text: string): string {
+  return (text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, "")
+    .trim();
+}
+
+function gerarDedupeHash(
+  userId: string,
+  valor: number | undefined,
+  descricao: string | undefined,
+  formaPagamento: string | undefined
+): string {
+  const valorCentavos = Math.round((valor || 0) * 100);
+  const descNorm = normalizeText(descricao || "");
+  const pagamento = (formaPagamento || "unknown").toLowerCase();
+  
+  const hashInput = `${userId}|${valorCentavos}|${descNorm}|${pagamento}`;
+  
+  let hash = 0;
+  for (let i = 0; i < hashInput.length; i++) {
+    hash = ((hash << 5) - hash) + hashInput.charCodeAt(i);
+    hash = hash & hash;
+  }
+  
+  return `dedupe_${userId.slice(0, 8)}_${Math.abs(hash).toString(36)}`;
+}
+
+async function verificarDuplicacao(
+  userId: string,
+  dedupeHash: string,
+  windowMinutes: number = 3
+): Promise<{ isDuplicate: boolean; existingTx?: any; minutesAgo?: number }> {
+  const windowStart = new Date(Date.now() - windowMinutes * 60 * 1000).toISOString();
+  
+  // Buscar transação com mesmo hash criada recentemente
+  const { data: existing } = await supabase
+    .from("transacoes")
+    .select("id, valor, descricao, created_at")
+    .eq("usuario_id", userId)
+    .eq("idempotency_key", dedupeHash)
+    .gte("created_at", windowStart)
+    .eq("status", "confirmada")
+    .limit(1)
+    .single();
+  
+  if (existing) {
+    const minutesAgo = Math.round((Date.now() - new Date(existing.created_at).getTime()) / 60000);
+    console.log(`🔒 [DEDUPE] Hash ${dedupeHash} existe há ${minutesAgo} min`);
+    return { isDuplicate: true, existingTx: existing, minutesAgo };
+  }
+  
+  return { isDuplicate: false };
+}
+
+// ============================================================================
+// 🎯 GERENCIADOR DE ACTIVE ACTIONS (MEMÓRIA DE CURTO PRAZO)
+// ============================================================================
+
+async function getActiveAction(userId: string): Promise<ActiveAction | null> {
+  // Expirar actions antigas (5 min)
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   
   await supabase
     .from("actions")
     .update({ status: "expired" })
     .eq("user_id", userId)
-    .in("status", ["collecting", "awaiting_input"])
+    .in("status", ["collecting", "awaiting_input", "pending_selection"])
     .lt("updated_at", fiveMinutesAgo);
   
-  // Buscar contexto ativo
   const { data: action } = await supabase
     .from("actions")
     .select("*")
     .eq("user_id", userId)
-    .in("status", ["collecting", "awaiting_input"])
+    .in("status", ["collecting", "awaiting_input", "pending_selection"])
     .order("created_at", { ascending: false })
     .limit(1)
     .single();
   
   if (!action) return null;
   
-  const meta = action.meta as Record<string, any> || {};
+  const meta = (action.meta || {}) as Record<string, any>;
+  const slots = (action.slots || {}) as Record<string, any>;
   
   return {
     id: action.id,
     user_id: action.user_id,
+    type: meta.action_type || "slot_filling",
     intent: action.action_type,
-    slots: (action.slots || {}) as Record<string, any>,
-    status: action.status as "collecting" | "confirming" | "done" | "expired",
-    last_message_id: meta.last_message_id || null,
+    slots,
+    status: action.status,
     pending_slot: meta.pending_slot || null,
+    pending_selection_id: meta.pending_selection_id || null,
+    origin_message_id: meta.origin_message_id || null,
+    last_message_id: meta.last_message_id || null,
     created_at: action.created_at,
     updated_at: action.updated_at || action.created_at,
     expires_at: meta.expires_at || new Date(Date.now() + 5 * 60 * 1000).toISOString()
   };
 }
 
-/**
- * Cria ou atualiza contexto ativo
- */
-async function upsertContext(
+async function createAction(
   userId: string,
+  type: ActionType,
   intent: string,
   slots: Record<string, any>,
   pendingSlot?: string | null,
-  messageId?: string | null
-): Promise<PendingContext> {
-  const existing = await getActiveContext(userId);
-  
-  if (existing && existing.intent === intent) {
-    // Merge slots
-    const mergedSlots = { ...existing.slots };
-    for (const [key, value] of Object.entries(slots)) {
-      if (value !== null && value !== undefined && value !== "") {
-        mergedSlots[key] = value;
-      }
-    }
-    
-    await supabase
-      .from("actions")
-      .update({
-        slots: mergedSlots,
-        status: "collecting",
-        meta: { 
-          pending_slot: pendingSlot || null,
-          last_message_id: messageId 
-        },
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", existing.id);
-    
-    console.log(`🔄 [CONTEXT] Atualizado: ${intent} | Slots: ${JSON.stringify(mergedSlots)}`);
-    
-    return {
-      ...existing,
-      slots: mergedSlots,
-      pending_slot: pendingSlot || null,
-      last_message_id: messageId || null,
-      updated_at: new Date().toISOString()
-    };
-  }
-  
-  // Expirar contexto anterior se diferente
-  if (existing) {
-    await supabase
-      .from("actions")
-      .update({ status: "expired" })
-      .eq("id", existing.id);
-  }
-  
-  // Criar novo
-  const actionHash = `ctx_${userId.slice(0, 8)}_${Date.now()}`;
+  messageId?: string | null,
+  pendingSelectionId?: string | null
+): Promise<ActiveAction> {
+  const actionHash = `action_${userId.slice(0, 8)}_${Date.now()}`;
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
   
   const { data: newAction, error } = await supabase
     .from("actions")
@@ -303,42 +293,83 @@ async function upsertContext(
       user_id: userId,
       action_type: intent,
       action_hash: actionHash,
-      status: "collecting",
-      slots: slots,
+      status: pendingSelectionId ? "pending_selection" : "collecting",
+      slots,
       meta: { 
-        pending_slot: pendingSlot || null,
-        last_message_id: messageId,
-        expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+        action_type: type,
+        pending_slot: pendingSlot || undefined,
+        pending_selection_id: pendingSelectionId || undefined,
+        origin_message_id: messageId || undefined,
+        last_message_id: messageId || undefined,
+        expires_at: expiresAt
       }
     })
     .select()
     .single();
   
   if (error) {
-    console.error("❌ [CONTEXT] Erro ao criar:", error);
+    console.error("❌ [ACTION] Erro ao criar:", error);
     throw error;
   }
   
-  console.log(`✨ [CONTEXT] Criado: ${intent} | Slots: ${JSON.stringify(slots)}`);
+  console.log(`✨ [ACTION] Criado: ${type} | ${intent} | Slots: ${JSON.stringify(slots)}`);
   
   return {
     id: newAction.id,
     user_id: userId,
-    intent: intent,
-    slots: slots,
+    type,
+    intent,
+    slots,
     status: "collecting",
-    last_message_id: messageId || null,
-    pending_slot: pendingSlot || null,
+    pending_slot: pendingSlot || undefined,
+    pending_selection_id: pendingSelectionId || undefined,
+    origin_message_id: messageId || undefined,
+    last_message_id: messageId || undefined,
     created_at: newAction.created_at,
     updated_at: newAction.created_at,
-    expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+    expires_at: expiresAt
   };
 }
 
-/**
- * Fecha contexto (marca como done)
- */
-async function closeContext(contextId: string, entityId?: string): Promise<void> {
+async function updateAction(
+  actionId: string,
+  updates: {
+    slots?: Record<string, any>;
+    status?: string;
+    pending_slot?: string | null;
+    pending_selection_id?: string | null;
+    last_message_id?: string | null;
+  }
+): Promise<void> {
+  const { data: existing } = await supabase
+    .from("actions")
+    .select("meta")
+    .eq("id", actionId)
+    .single();
+  
+  const meta = { ...(existing?.meta as Record<string, any> || {}) };
+  
+  if (updates.pending_slot !== undefined) meta.pending_slot = updates.pending_slot;
+  if (updates.pending_selection_id !== undefined) meta.pending_selection_id = updates.pending_selection_id;
+  if (updates.last_message_id) meta.last_message_id = updates.last_message_id;
+  
+  const updateData: Record<string, any> = {
+    meta,
+    updated_at: new Date().toISOString()
+  };
+  
+  if (updates.slots) updateData.slots = updates.slots;
+  if (updates.status) updateData.status = updates.status;
+  
+  await supabase
+    .from("actions")
+    .update(updateData)
+    .eq("id", actionId);
+  
+  console.log(`🔄 [ACTION] Atualizado: ${actionId.slice(-8)}`);
+}
+
+async function closeAction(actionId: string, entityId?: string): Promise<void> {
   await supabase
     .from("actions")
     .update({ 
@@ -346,85 +377,74 @@ async function closeContext(contextId: string, entityId?: string): Promise<void>
       entity_id: entityId,
       updated_at: new Date().toISOString() 
     })
-    .eq("id", contextId);
+    .eq("id", actionId);
   
-  console.log(`✅ [CONTEXT] Fechado: ${contextId}`);
+  console.log(`✅ [ACTION] Fechado: ${actionId.slice(-8)}`);
 }
 
-/**
- * Cancela contexto ativo
- */
-async function cancelContext(userId: string): Promise<boolean> {
-  const context = await getActiveContext(userId);
-  
-  if (!context) return false;
+async function cancelAction(userId: string): Promise<boolean> {
+  const action = await getActiveAction(userId);
+  if (!action) return false;
   
   await supabase
     .from("actions")
     .update({ status: "cancelled", updated_at: new Date().toISOString() })
-    .eq("id", context.id);
+    .eq("id", action.id);
   
-  console.log(`🗑️ [CONTEXT] Cancelado: ${context.id}`);
+  console.log(`🗑️ [ACTION] Cancelado: ${action.id.slice(-8)}`);
   return true;
 }
 
 // ============================================================================
-// 🔐 IDEMPOTÊNCIA - HASH SEMÂNTICO
+// 📋 PENDING SELECTIONS
 // ============================================================================
 
-/**
- * Hash semântico baseado em:
- * - user_id
- * - action_type
- * - valor arredondado
- * - categoria normalizada
- * - forma_pagamento
- * - janela de 60 segundos
- */
-function gerarHashSemantico(
+async function createPendingSelection(
   userId: string,
-  actionType: string,
-  valor: number | undefined,
-  categoria: string | undefined,
-  formaPagamento?: string
-): string {
-  const now = new Date();
-  const timeBucket = Math.floor(now.getTime() / 60000);
-  const valorCentavos = Math.round((valor || 0) * 100);
-  const categoriaNorm = (categoria || "outros").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-  const pagamento = (formaPagamento || "unknown").toLowerCase();
+  options: Array<{ index: number; tx_id?: string; label: string; meta?: any }>,
+  awaitingField: string,
+  ttlMinutes: number = 2
+): Promise<string> {
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+  const token = crypto.randomUUID();
   
-  const hashInput = `${userId}|${actionType}|${valorCentavos}|${categoriaNorm}|${pagamento}|${timeBucket}`;
+  const { data } = await supabase.from("pending_selections").insert({
+    user_id: userId,
+    token,
+    options,
+    awaiting_field: awaitingField,
+    consumed: false,
+    expires_at: expiresAt.toISOString()
+  }).select("id").single();
   
-  let hash = 0;
-  for (let i = 0; i < hashInput.length; i++) {
-    const char = hashInput.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  
-  return `${actionType}_${userId.slice(0, 8)}_${Math.abs(hash).toString(36)}_${timeBucket}`;
+  console.log(`📋 [PENDING] Criado: ${awaitingField} | ${options.length} opções`);
+  return data?.id || token;
 }
 
-/**
- * Verifica duplicação antes de registrar
- */
-async function verificarDuplicacao(
+async function getPendingSelection(
   userId: string,
-  actionHash: string
-): Promise<{ isDuplicate: boolean; existingId?: string }> {
-  const { data: existing } = await supabase
-    .from("actions")
-    .select("id, status")
-    .eq("action_hash", actionHash)
+  awaitingField: string
+): Promise<{ id: string; options: any[] } | null> {
+  const { data } = await supabase
+    .from("pending_selections")
+    .select("id, options")
+    .eq("user_id", userId)
+    .eq("awaiting_field", awaitingField)
+    .eq("consumed", false)
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false })
+    .limit(1)
     .single();
   
-  if (existing) {
-    console.log(`🔒 [DEDUPE] Hash ${actionHash} JÁ EXISTE`);
-    return { isDuplicate: true, existingId: existing.id };
-  }
-  
-  return { isDuplicate: false };
+  if (!data) return null;
+  return { id: data.id, options: data.options as any[] };
+}
+
+async function consumePendingSelection(pendingId: string): Promise<void> {
+  await supabase
+    .from("pending_selections")
+    .update({ consumed: true })
+    .eq("id", pendingId);
 }
 
 // ============================================================================
@@ -481,12 +501,12 @@ async function sendWhatsAppVonage(to: string, text: string): Promise<boolean> {
   }
 }
 
-async function sendWhatsAppMessage(to: string, text: string, source: MessageSource): Promise<boolean> {
+async function sendMessage(to: string, text: string, source: MessageSource): Promise<boolean> {
   if (source === "vonage") return sendWhatsAppVonage(to, text);
   return sendWhatsAppMeta(to, text);
 }
 
-async function sendWhatsAppButtons(
+async function sendButtons(
   to: string, 
   bodyText: string, 
   buttons: Array<{ id: string; title: string }>,
@@ -494,7 +514,7 @@ async function sendWhatsAppButtons(
 ): Promise<boolean> {
   if (source !== "meta") {
     const fallbackText = bodyText + "\n\n" + buttons.map((b, i) => `${i + 1}. ${b.title}`).join("\n");
-    return sendWhatsAppMessage(to, fallbackText, source);
+    return sendMessage(to, fallbackText, source);
   }
 
   try {
@@ -527,7 +547,7 @@ async function sendWhatsAppButtons(
     return response.ok;
   } catch (error) {
     console.error("[Meta Buttons] Erro:", error);
-    return sendWhatsAppMessage(to, bodyText, source);
+    return sendMessage(to, bodyText, source);
   }
 }
 
@@ -761,25 +781,26 @@ Se não for financeiro: {"intent": "outro", "confianca": 0.1}`
 }
 
 // ============================================================================
-// 🧠 INTERPRETAÇÃO IA v3.0 - SLOT FILLING INTELIGENTE
+// 🧠 INTERPRETAÇÃO IA
 // ============================================================================
 
 async function interpretarMensagem(
   mensagem: string, 
   historicoRecente: string,
-  contextoAtivo?: PendingContext | null
+  activeAction?: ActiveAction | null
 ): Promise<{ intent: ExtractedIntent; confianca: number }> {
   try {
-    // Construir contexto para IA
     let contextoInfo = "";
-    if (contextoAtivo) {
+    if (activeAction) {
       contextoInfo = `
-⚠️ CONTEXTO ATIVO:
-Intent: ${contextoAtivo.intent}
-Slots preenchidos: ${JSON.stringify(contextoAtivo.slots)}
-Slot aguardando: ${contextoAtivo.pending_slot || "nenhum"}
+⚠️ ACTIVE ACTION:
+Type: ${activeAction.type}
+Intent: ${activeAction.intent}
+Slots: ${JSON.stringify(activeAction.slots)}
+Pending slot: ${activeAction.pending_slot || "none"}
 
-A mensagem pode ser uma resposta ao slot pendente ou uma nova intenção.
+Se a mensagem parece responder ao slot pendente, extraia o valor para esse slot.
+Se a mensagem é uma nova intenção clara, retorne a nova intenção.
 `;
     }
     
@@ -794,76 +815,64 @@ A mensagem pode ser uma resposta ao slot pendente ou uma nova intenção.
         messages: [
           {
             role: "system",
-            content: `Você é um analisador de intenções financeiras com SLOT FILLING INTELIGENTE.
-
-⚠️ REGRA FUNDAMENTAL: APENAS EXTRAIA DADOS, NUNCA DECIDA SE REGISTRA.
+            content: `Você é um analisador de intenções financeiras.
 
 ${contextoInfo}
 
-🎯 INTENTS E SLOTS:
-
-📱 CARTÕES:
-- "update_card": atualizar cartão (slots: card, field, value)
-- "add_card": adicionar cartão (slots: card_name, limit, due_day)
-- "remove_card": remover cartão (slots: card)
-- "view_cards": ver cartões cadastrados
-- "gerenciar_cartoes": intenção genérica de cartões
-
-💸 TRANSAÇÕES:
+🎯 INTENTS:
 - "registrar_gasto": gasto/despesa (slots: amount, description, category, payment_method)
-- "registrar_entrada": receita/entrada (slots: amount, description, category)
+- "registrar_entrada": receita (slots: amount, description)
 - "cancelar_transacao": cancelar gasto
-- "criar_parcelamento": compra parcelada
-- "criar_recorrente": gasto repetitivo
-
-📊 OUTROS:
+- "update_card": atualizar cartão (slots: card, field, value)
+- "add_card": adicionar cartão
+- "view_cards": ver cartões
 - "consultar_resumo": resumo/quanto gastei
-- "saudacao": oi, olá, bom dia
+- "saudacao": oi, olá
 - "ajuda": como funciona
-- "confirmar": sim, pode registrar
+- "confirmar": sim, pode, ok
 - "negar": não, cancela, deixa pra lá
-- "fornecer_slot": quando usuário responde uma pergunta de slot
+- "fornecer_slot": resposta a uma pergunta de slot
 
 🔴 REGRAS CRÍTICAS:
 
-1. "Anota um gasto" ou "Registra uma despesa" = INTENÇÃO SEM DADOS
-   Retorne intent="registrar_gasto" com slots={} vazios
-   
+1. "Anota um gasto" ou "Registra despesa" = intent="registrar_gasto" com slots={}
+
 2. Número sozinho (ex: "39,08"):
-   - Se há contexto ativo esperando amount → slots: { amount: 39.08 }
-   - Se não há contexto → intent="fornecer_slot" com slots: { amount: 39.08 }
+   - Se há active action esperando amount → intent="fornecer_slot", slots: {amount: 39.08}
+   - Se não há active action → intent="fornecer_slot", slots: {amount: 39.08}
 
-3. Forma de pagamento:
-   - "pix", "no pix", "via pix" → payment_method: "pix"
+3. Forma pagamento:
+   - "pix", "no pix" → payment_method: "pix"
    - "débito", "no débito" → payment_method: "debito"
-   - "crédito", "no crédito", "cartão" → payment_method: "credito"
-   - "dinheiro", "cash" → payment_method: "dinheiro"
+   - "crédito", "cartão" → payment_method: "credito"
+   - "dinheiro" → payment_method: "dinheiro"
 
-4. MÚLTIPLOS GASTOS: Se houver MAIS DE UM gasto com valores distintos:
-   Retorne acoes_detectadas: [{intent, slots}, {intent, slots}]
+4. MÚLTIPLOS GASTOS (ex: "lanche 7 e refri 5"):
+   Retorne itens: [{descricao, valor}, ...]
 
-5. CATEGORIZAÇÃO (nunca "outros" se inferível):
+5. CATEGORIZAÇÃO:
    café/pão/lanche/água/almoço/jantar/ifood → "alimentacao"
-   mercado/supermercado/feira → "mercado"
-   uber/99/táxi/ônibus/gasolina → "transporte"
-   farmácia/remédio/médico → "saude"
-   cinema/netflix/spotify → "lazer"
+   mercado/supermercado → "mercado"
+   uber/táxi/gasolina → "transporte"
+   farmácia/remédio → "saude"
+   cinema/netflix → "lazer"
    aluguel/luz/internet → "moradia"
    roupa/loja → "compras"
 
-6. CANCELAR:
-   "cancela", "deixa pra lá", "esquece" = intent="negar"
+6. CANCELAR/NEGAR:
+   "cancela", "deixa pra lá", "não" = intent="negar"
 
 Responda APENAS JSON:
 {
   "intent": "string",
-  "slots": { ... } ou null,
+  "slots": {} ou null,
   "valor": number ou null,
   "categoria": "string" ou null,
   "descricao": "string" ou null,
   "forma_pagamento": "pix"|"dinheiro"|"debito"|"credito" ou null,
   "confianca": number,
-  "acoes_detectadas": [{...}] ou null
+  "itens": [{descricao, valor}] ou null,
+  "acoes_detectadas": [{intent, slots}] ou null
 }
 
 ${historicoRecente ? `HISTÓRICO:\n${historicoRecente}` : ""}`
@@ -891,27 +900,25 @@ ${historicoRecente ? `HISTÓRICO:\n${historicoRecente}` : ""}`
 }
 
 // ============================================================================
-// 🏷️ MAPEAMENTO SEMÂNTICO DE CATEGORIAS
+// 🏷️ INFERIR CATEGORIA
 // ============================================================================
 
 function inferirCategoria(descricao: string, categoriaOriginal?: string): string {
-  const desc = (descricao || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const desc = normalizeText(descricao);
   
-  // Se já tem categoria válida e não é "outros", usar
   if (categoriaOriginal && categoriaOriginal !== "outros") {
     return categoriaOriginal;
   }
   
-  // Mapeamento semântico
   const mapa: Record<string, string[]> = {
-    alimentacao: ["cafe", "pao", "lanche", "agua", "refrigerante", "almoço", "almoco", "jantar", "ifood", "rappi", "comida", "restaurante", "padaria", "salgado", "pizza", "hamburguer", "acai", "sorvete", "doce"],
-    mercado: ["mercado", "supermercado", "feira", "hortifruti", "acougue", "peixaria", "atacadao", "atacado"],
-    transporte: ["uber", "99", "taxi", "onibus", "metro", "gasolina", "combustivel", "estacionamento", "pedagio", "passagem"],
-    saude: ["farmacia", "remedio", "medico", "hospital", "consulta", "exame", "dentista", "otica", "oculos"],
-    lazer: ["cinema", "netflix", "spotify", "show", "festa", "bar", "balada", "jogo", "game", "livro", "museu"],
-    moradia: ["aluguel", "condominio", "luz", "energia", "agua", "gas", "internet", "telefone", "iptu"],
-    compras: ["roupa", "sapato", "loja", "shopping", "presente", "eletronico", "celular"],
-    servicos: ["salao", "barbearia", "manicure", "lavanderia", "faxina", "conserto"]
+    alimentacao: ["cafe", "pao", "lanche", "agua", "refrigerante", "almoco", "jantar", "ifood", "rappi", "comida", "restaurante", "padaria", "pizza", "acai", "sorvete"],
+    mercado: ["mercado", "supermercado", "feira", "hortifruti", "atacadao"],
+    transporte: ["uber", "99", "taxi", "onibus", "gasolina", "combustivel", "estacionamento", "pedagio"],
+    saude: ["farmacia", "remedio", "medico", "hospital", "consulta", "exame", "dentista"],
+    lazer: ["cinema", "netflix", "spotify", "show", "festa", "bar", "jogo", "game"],
+    moradia: ["aluguel", "condominio", "luz", "energia", "gas", "internet", "telefone"],
+    compras: ["roupa", "sapato", "loja", "shopping", "presente", "celular"],
+    servicos: ["salao", "barbearia", "manicure", "lavanderia", "faxina"]
   };
   
   for (const [categoria, palavras] of Object.entries(mapa)) {
@@ -924,341 +931,106 @@ function inferirCategoria(descricao: string, categoriaOriginal?: string): string
 }
 
 // ============================================================================
-// 📋 PENDING SELECTIONS (PARA BATCH/CANCELAMENTO)
+// 🔧 SLOT HELPERS
 // ============================================================================
 
-async function criarPendingSelection(
-  userId: string,
-  options: Array<{ index: number; tx_id?: string; label: string; meta?: any }>,
-  awaitingField: string,
-  ttlMinutes: number = 2
-): Promise<string> {
-  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
-  const token = crypto.randomUUID();
+function getMissingSlots(intent: string, currentSlots: Record<string, any>): string[] {
+  const requirements = SLOT_REQUIREMENTS[intent];
+  if (!requirements) return [];
   
-  await supabase.from("pending_selections").insert({
-    user_id: userId,
-    token,
-    options,
-    awaiting_field: awaitingField,
-    consumed: false,
-    expires_at: expiresAt.toISOString()
+  return requirements.required.filter(slot => {
+    const value = currentSlots[slot];
+    return value === null || value === undefined || value === "";
   });
-  
-  console.log(`📋 [PENDING] Criado: ${awaitingField}`);
-  return token;
 }
 
-async function consumirPendingSelection(
-  userId: string,
-  awaitingField: string
-): Promise<{ options: any[]; id: string } | null> {
-  const { data, error } = await supabase
-    .from("pending_selections")
-    .select("id, options")
-    .eq("user_id", userId)
-    .eq("awaiting_field", awaitingField)
-    .eq("consumed", false)
-    .gt("expires_at", new Date().toISOString())
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
-  
-  if (error || !data) return null;
-  
-  await supabase
-    .from("pending_selections")
-    .update({ consumed: true })
-    .eq("id", data.id);
-  
-  return { options: data.options as any[], id: data.id };
+function isNumericOnly(text: string): boolean {
+  const cleaned = text.replace(/[^\d.,]/g, "").replace(",", ".");
+  return /^\d+([.,]\d+)?$/.test(cleaned) && parseFloat(cleaned) > 0;
+}
+
+function parseNumericValue(text: string): number | null {
+  const cleaned = text.replace(/[^\d.,]/g, "").replace(",", ".");
+  const value = parseFloat(cleaned);
+  return isNaN(value) || value <= 0 ? null : value;
+}
+
+function normalizePaymentMethod(text: string): string | null {
+  const normalized = normalizeText(text);
+  return PAYMENT_ALIASES[normalized] || null;
 }
 
 // ============================================================================
-// 💾 HIPÓTESES (PARA CONFIRMAÇÃO COM BOTÕES)
+// 💾 REGISTRAR TRANSAÇÃO
 // ============================================================================
 
-async function criarHipotese(
-  userId: string,
-  eventoId: string | null,
-  dados: ExtractedIntent,
-  confianca: number
-): Promise<{ hipoteseId: string | null; actionId: string | null }> {
-  try {
-    // Expirar hipóteses antigas
-    await supabase
-      .from("hipoteses_registro")
-      .update({ status: "expirada" })
-      .eq("user_id", userId)
-      .eq("status", "pendente");
-    
-    // Criar ACTION
-    const actionHash = `hipotese_${userId.slice(0,8)}_${Date.now()}`;
-    
-    const { data: actionData, error: actionError } = await supabase
-      .from("actions")
-      .insert({
-        user_id: userId,
-        action_type: dados.intent === "registrar_entrada" ? "registrar_entrada" : "registrar_gasto",
-        action_hash: actionHash,
-        status: "pending_confirmation",
-        slots: {
-          amount: dados.valor,
-          description: dados.descricao,
-          category: dados.categoria,
-          payment_method: dados.forma_pagamento
-        },
-        meta: {
-          valor: dados.valor,
-          categoria: dados.categoria || "outros",
-          descricao: dados.descricao,
-          forma_pagamento: dados.forma_pagamento,
-          evento_id: eventoId,
-          confianca
-        }
-      })
-      .select("id")
-      .single();
-    
-    if (actionError) {
-      console.error("❌ [HIPOTESE] Erro action:", actionError);
-      return { hipoteseId: null, actionId: null };
-    }
-    
-    // Criar hipótese
-    const { data: hipoteseData, error: hipoteseError } = await supabase
-      .from("hipoteses_registro")
-      .insert({
-        user_id: userId,
-        evento_id: eventoId,
-        tipo: dados.intent,
-        dados: { ...dados, action_id: actionData.id },
-        confianca,
-        status: "pendente",
-        idempotency_key: actionHash
-      })
-      .select("id")
-      .single();
-    
-    if (hipoteseError) {
-      console.error("❌ [HIPOTESE] Erro:", hipoteseError);
-      return { hipoteseId: null, actionId: actionData.id };
-    }
-    
-    console.log(`💡 [HIPOTESE] Criada: ${hipoteseData.id} -> Action: ${actionData.id}`);
-    return { hipoteseId: hipoteseData.id, actionId: actionData.id };
-  } catch (e) {
-    console.error("❌ [HIPOTESE] Exceção:", e);
-    return { hipoteseId: null, actionId: null };
-  }
-}
-
-async function buscarHipotesePendente(userId: string): Promise<any | null> {
-  const { data } = await supabase
-    .from("hipoteses_registro")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("status", "pendente")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
-  
-  if (!data) return null;
-  
-  // Verificar expiração (5 min)
-  const createdAt = new Date(data.created_at);
-  const diffMinutos = (Date.now() - createdAt.getTime()) / 1000 / 60;
-  
-  if (diffMinutos > 5) {
-    await supabase
-      .from("hipoteses_registro")
-      .update({ status: "expirada" })
-      .eq("id", data.id);
-    return null;
-  }
-  
-  return data;
-}
-
-async function executarActionConfirmada(
-  actionId: string,
-  userId: string
-): Promise<{ sucesso: boolean; mensagem: string; jaDuplicado?: boolean }> {
-  try {
-    const { data: action } = await supabase
-      .from("actions")
-      .select("*")
-      .eq("id", actionId)
-      .eq("user_id", userId)
-      .single();
-    
-    if (!action) {
-      return { sucesso: false, mensagem: "Essa confirmação expirou 😕\n\nMe conta de novo o gasto." };
-    }
-    
-    if (action.status === "done") {
-      return { sucesso: false, jaDuplicado: true, mensagem: "Esse gasto já foi registrado 👍" };
-    }
-    
-    if (action.status !== "pending_confirmation") {
-      return { sucesso: false, mensagem: "Essa confirmação não está mais disponível." };
-    }
-    
-    const slots = action.slots as Record<string, any> || {};
-    const meta = action.meta as Record<string, any> || {};
-    const tipoTransacao = action.action_type === "registrar_entrada" ? "entrada" : "saida";
-    
-    const valor = slots.amount || meta.valor;
-    const categoria = inferirCategoria(slots.description || meta.descricao || "", slots.category || meta.categoria);
-    const descricao = slots.description || meta.descricao;
-    const formaPagamento = slots.payment_method || meta.forma_pagamento;
-    
-    const agora = new Date();
-    
-    const { data: transacao, error: txError } = await supabase.from("transacoes").insert({
-      usuario_id: userId,
-      valor: valor,
-      categoria: categoria,
-      tipo: tipoTransacao,
-      descricao: descricao,
-      observacao: descricao,
-      data: agora.toISOString(),
-      origem: "whatsapp",
-      forma_pagamento: formaPagamento,
-      status: "confirmada",
-      idempotency_key: action.action_hash
-    }).select("id").single();
-    
-    if (txError) {
-      console.error("❌ [ACTION] Erro transação:", txError);
-      return { sucesso: false, mensagem: "Algo deu errado ao salvar 😕\n\nTenta de novo?" };
-    }
-    
-    await supabase
-      .from("actions")
-      .update({ status: "done", entity_id: transacao.id, updated_at: new Date().toISOString() })
-      .eq("id", actionId);
-    
-    await supabase.from("finax_logs").insert({
-      user_id: userId,
-      action_type: "confirmar_registro",
-      entity_type: "transacao",
-      entity_id: transacao.id,
-      new_data: { action_id: actionId, valor, categoria, descricao, formaPagamento }
-    });
-    
-    const dataFormatada = agora.toLocaleDateString("pt-BR");
-    const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-    const sinal = tipoTransacao === "entrada" ? "+" : "-";
-    const tipoTexto = tipoTransacao === "entrada" ? "Entrada registrada" : "Gasto registrado";
-    
-    return {
-      sucesso: true,
-      mensagem: `✅ *${tipoTexto}!*\n\n` +
-        `💸 *${sinal}R$ ${valor?.toFixed(2)}*\n` +
-        `📂 ${categoria}\n` +
-        (descricao ? `📝 ${descricao}\n` : "") +
-        (formaPagamento ? `💳 ${formaPagamento}\n` : "") +
-        `📅 ${dataFormatada} às ${horaFormatada}`
-    };
-    
-  } catch (e) {
-    console.error("❌ [ACTION] Exceção:", e);
-    return { sucesso: false, mensagem: "Erro ao processar confirmação 😕" };
-  }
-}
-
-async function cancelarActionPendente(actionId: string, userId: string): Promise<void> {
-  await supabase
-    .from("actions")
-    .update({ status: "cancelled", updated_at: new Date().toISOString() })
-    .eq("id", actionId)
-    .eq("user_id", userId);
-}
-
-// ============================================================================
-// 💰 REGISTRO DE TRANSAÇÃO (IDEMPOTENTE)
-// ============================================================================
-
-function gerarIdTransacao(): string {
-  const agora = new Date();
-  const data = agora.toISOString().slice(0, 10).replace(/-/g, "");
-  const random = Math.floor(Math.random() * 9999).toString().padStart(4, "0");
-  return `TRX-${data}-${random}`;
-}
-
-async function registrarTransacaoComSlots(
+async function registrarTransacao(
   userId: string,
   slots: Record<string, any>,
   eventoId: string | null,
-  contextId?: string
-): Promise<{ sucesso: boolean; mensagem: string; transacaoId?: string; jaDuplicado?: boolean }> {
+  actionId?: string
+): Promise<{ sucesso: boolean; mensagem: string; transacaoId?: string; isDuplicate?: boolean }> {
   
-  const tipoTransacao = "saida"; // Por enquanto só gastos usam isso
-  const categoria = inferirCategoria(slots.description || "", slots.category);
   const valor = slots.amount;
+  const descricao = slots.description || "";
+  const categoria = inferirCategoria(descricao, slots.category);
   const formaPagamento = slots.payment_method;
   
-  // Hash semântico
-  const actionHash = gerarHashSemantico(userId, "registrar_gasto", valor, categoria, formaPagamento);
+  // Gerar hash para dedup
+  const dedupeHash = gerarDedupeHash(userId, valor, descricao, formaPagamento);
   
-  console.log(`🔐 [REGISTRO] Hash: ${actionHash} | Valor: ${valor} | Cat: ${categoria} | Pag: ${formaPagamento}`);
+  console.log(`🔐 [REGISTRO] Hash: ${dedupeHash} | Valor: ${valor} | Pag: ${formaPagamento}`);
   
-  // Verificar duplicação
-  const { isDuplicate } = await verificarDuplicacao(userId, actionHash);
+  // Verificar duplicação (janela de 3 min)
+  const { isDuplicate, existingTx, minutesAgo } = await verificarDuplicacao(userId, dedupeHash, 3);
   
   if (isDuplicate) {
-    console.log(`🛑 [REGISTRO] Bloqueado - duplicação: ${actionHash}`);
-    if (contextId) await closeContext(contextId);
+    console.log(`🛑 [REGISTRO] Duplicado detectado`);
+    
+    // Criar pending selection para confirmar
+    const options = [
+      { index: 1, label: "Registrar outro igual", meta: { action: "register_another" } },
+      { index: 2, label: "Cancelar", meta: { action: "cancel" } }
+    ];
+    
+    await createPendingSelection(userId, options, "duplicate_confirm", 2);
+    
+    // Criar action para aguardar resposta
+    await createAction(userId, "duplicate_confirm", "registrar_gasto", slots, null, null, null);
+    
+    if (actionId) await closeAction(actionId);
+    
     return {
       sucesso: false,
-      jaDuplicado: true,
-      mensagem: "Esse gasto já foi registrado há instantes 👍"
+      isDuplicate: true,
+      mensagem: `⚠️ Parece duplicado!\n\nVi um gasto igual há ${minutesAgo || 1} minuto(s).\n\nFoi repetido sem querer?`
     };
   }
   
-  // Criar action para idempotência
-  const { error: actionError } = await supabase
-    .from("actions")
-    .insert({
-      user_id: userId,
-      action_type: "registrar_gasto",
-      action_hash: actionHash,
-      status: "done",
-      slots: slots,
-      meta: { valor, categoria, formaPagamento, descricao: slots.description }
-    });
-  
-  if (actionError && actionError.code === '23505') {
-    if (contextId) await closeContext(contextId);
-    return { sucesso: false, jaDuplicado: true, mensagem: "Esse gasto já foi registrado 👍" };
-  }
-  
   // Criar transação
-  const transacaoId = gerarIdTransacao();
   const agora = new Date();
   
   const { data: transacao, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
     valor: valor,
     categoria: categoria,
-    tipo: tipoTransacao,
-    descricao: slots.description,
-    observacao: slots.description,
+    tipo: "saida",
+    descricao: descricao,
+    observacao: descricao,
     data: agora.toISOString(),
     origem: "whatsapp",
     forma_pagamento: formaPagamento,
     status: "confirmada",
-    idempotency_key: actionHash
+    idempotency_key: dedupeHash
   }).select("id").single();
   
   if (error) {
     console.error("❌ [REGISTRO] Erro:", error);
-    return { sucesso: false, mensagem: "Algo deu errado ao salvar 😕\n\nTenta de novo?" };
+    return { sucesso: false, mensagem: "Algo deu errado 😕\n\nTenta de novo?" };
   }
   
-  // Fechar contexto
-  if (contextId) await closeContext(contextId, transacao.id);
+  // Fechar action
+  if (actionId) await closeAction(actionId, transacao.id);
   
   // Log
   await supabase.from("finax_logs").insert({
@@ -1266,23 +1038,24 @@ async function registrarTransacaoComSlots(
     action_type: "registrar_transacao",
     entity_type: "transacao",
     entity_id: transacao.id,
-    new_data: { ...slots, action_hash: actionHash }
+    new_data: { ...slots, dedupe_hash: dedupeHash }
   });
   
   const dataFormatada = agora.toLocaleDateString("pt-BR");
   const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
   
-  console.log(`✅ [REGISTRO] Sucesso: ${transacaoId}`);
+  console.log(`✅ [REGISTRO] Sucesso: ${transacao.id}`);
   
   return {
     sucesso: true,
-    transacaoId,
+    transacaoId: transacao.id,
     mensagem: `✅ *Gasto registrado!*\n\n` +
       `💸 *-R$ ${valor?.toFixed(2)}*\n` +
       `📂 ${categoria}\n` +
-      (slots.description ? `📝 ${slots.description}\n` : "") +
-      `💳 ${formaPagamento || "não informado"}\n` +
-      `📅 ${dataFormatada} às ${horaFormatada}`
+      (descricao ? `📝 ${descricao}\n` : "") +
+      `💳 ${formaPagamento}\n` +
+      `📅 ${dataFormatada} às ${horaFormatada}\n\n` +
+      `_Se quiser corrigir, responda com "corrigir"._`
   };
 }
 
@@ -1302,54 +1075,7 @@ async function listarTransacoesParaCancelar(userId: string): Promise<any[]> {
   return data || [];
 }
 
-async function buscarTransacaoPorMensagem(
-  userId: string,
-  messageId: string
-): Promise<any | null> {
-  // Buscar evento bruto vinculado à mensagem
-  const { data: evento } = await supabase
-    .from("eventos_brutos")
-    .select("id")
-    .eq("message_id", messageId)
-    .single();
-  
-  if (!evento) return null;
-  
-  // Buscar transação vinculada ao evento
-  const { data: hipotese } = await supabase
-    .from("hipoteses_registro")
-    .select("dados")
-    .eq("evento_id", evento.id)
-    .eq("status", "confirmada")
-    .single();
-  
-  if (hipotese?.dados?.action_id) {
-    const { data: action } = await supabase
-      .from("actions")
-      .select("entity_id")
-      .eq("id", hipotese.dados.action_id)
-      .single();
-    
-    if (action?.entity_id) {
-      const { data: transacao } = await supabase
-        .from("transacoes")
-        .select("*")
-        .eq("id", action.entity_id)
-        .eq("usuario_id", userId)
-        .single();
-      
-      return transacao;
-    }
-  }
-  
-  return null;
-}
-
-async function cancelarTransacao(
-  userId: string,
-  transacaoId: string
-): Promise<{ sucesso: boolean; mensagem: string }> {
-  
+async function cancelarTransacao(userId: string, transacaoId: string): Promise<{ sucesso: boolean; mensagem: string }> {
   const { data: transacao } = await supabase
     .from("transacoes")
     .select("*")
@@ -1362,7 +1088,7 @@ async function cancelarTransacao(
   }
   
   if (transacao.status === "cancelada") {
-    return { sucesso: false, mensagem: "Essa transação já foi cancelada 👍" };
+    return { sucesso: false, mensagem: "Já foi cancelada 👍" };
   }
   
   await supabase.from("finax_logs").insert({
@@ -1387,64 +1113,75 @@ async function cancelarTransacao(
     sucesso: true,
     mensagem: `✅ *Transação cancelada!*\n\n` +
       `🗑️ R$ ${transacao.valor?.toFixed(2)} - ${transacao.descricao || transacao.categoria}\n\n` +
-      `_Se foi um engano, manda de novo que eu registro!_`
+      `_Se foi engano, manda de novo!_`
   };
 }
 
-// ============================================================================
-// 🔧 SLOT FILLING - FUNÇÕES AUXILIARES
-// ============================================================================
-
-function getMissingSlots(intent: string, currentSlots: Record<string, any>): string[] {
-  const requirements = SLOT_REQUIREMENTS[intent];
-  if (!requirements) return [];
+async function buscarTransacaoPorReply(userId: string, replyMessageId: string): Promise<any | null> {
+  // Buscar evento bruto pela message_id
+  const { data: evento } = await supabase
+    .from("eventos_brutos")
+    .select("id")
+    .eq("message_id", replyMessageId)
+    .single();
   
-  return requirements.required.filter(slot => {
-    const value = currentSlots[slot];
-    return value === null || value === undefined || value === "";
-  });
-}
-
-function normalizePaymentMethod(value: string): string | null {
-  const normalized = value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-  return PAYMENT_METHOD_ALIASES[normalized] || null;
-}
-
-function extractSlotsFromMessage(
-  message: string,
-  pendingSlot: string | null
-): Record<string, any> {
-  const msg = message.trim();
-  const slots: Record<string, any> = {};
+  if (!evento) return null;
   
-  // Número puro
-  const numMatch = msg.replace(/[^\d.,]/g, "").replace(",", ".");
-  const numValue = parseFloat(numMatch);
+  // Buscar action relacionada
+  const { data: action } = await supabase
+    .from("actions")
+    .select("entity_id")
+    .eq("status", "done")
+    .not("entity_id", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(10);
   
-  if (!isNaN(numValue) && numValue > 0) {
-    if (pendingSlot === "amount" || !pendingSlot) {
-      slots.amount = numValue;
-    } else if (["limit", "value", "due_day", "closing_day", "installments"].includes(pendingSlot)) {
-      slots[pendingSlot] = numValue;
+  if (!action || action.length === 0) return null;
+  
+  // Buscar transação mais recente
+  for (const a of action) {
+    if (a.entity_id) {
+      const { data: tx } = await supabase
+        .from("transacoes")
+        .select("*")
+        .eq("id", a.entity_id)
+        .eq("usuario_id", userId)
+        .single();
+      
+      if (tx) return tx;
     }
   }
   
-  // Forma de pagamento
-  const paymentMethod = normalizePaymentMethod(msg);
-  if (paymentMethod) {
-    slots.payment_method = paymentMethod;
-  }
-  
-  // Texto para descrição
-  if (pendingSlot === "description" && !slots.amount) {
-    slots.description = msg;
-  }
-  
-  return slots;
+  return null;
 }
 
 // ============================================================================
-// 🔄 PROCESSAMENTO DO JOB PRINCIPAL
+// 💳 CARTÕES
+// ============================================================================
+
+async function listarCartoes(userId: string): Promise<any[]> {
+  const { data } = await supabase
+    .from("cartoes_credito")
+    .select("*")
+    .eq("usuario_id", userId)
+    .eq("ativo", true);
+  
+  return data || [];
+}
+
+async function encontrarCartao(userId: string, nomeCartao: string): Promise<any | null> {
+  const cartoes = await listarCartoes(userId);
+  
+  const nomeLower = normalizeText(nomeCartao);
+  
+  return cartoes.find(c => 
+    normalizeText(c.nome || "").includes(nomeLower) ||
+    nomeLower.includes(normalizeText(c.nome || ""))
+  ) || null;
+}
+
+// ============================================================================
+// 🔄 PROCESSAMENTO PRINCIPAL
 // ============================================================================
 
 async function processarJob(job: any): Promise<void> {
@@ -1452,7 +1189,9 @@ async function processarJob(job: any): Promise<void> {
   const userId = job.user_id;
   const eventoId = payload.evento_id;
   
-  console.log(`🔄 [WORKER] Job ${job.id} | ${payload.messageType} | User: ${userId?.slice(0,8)}`);
+  console.log(`\n🔄 [WORKER] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📩 [WORKER] Job ${job.id?.slice(-8)} | ${payload.messageType} | User: ${userId?.slice(0, 8)}`);
+  console.log(`💬 [WORKER] Msg: "${payload.messageText?.slice(0, 50)}${payload.messageText?.length > 50 ? '...' : ''}"`);
   
   try {
     // Buscar usuário
@@ -1464,23 +1203,19 @@ async function processarJob(job: any): Promise<void> {
     
     const nomeUsuario = usuario?.nome || "amigo(a)";
     
-    // Verificar se é novo usuário
+    // Verificar novo usuário
     const { count: historicoCount } = await supabase
       .from("historico_conversas")
       .select("id", { count: "exact", head: true })
       .eq("phone_number", payload.phoneNumber);
     
-    const isNovoUsuario = (historicoCount || 0) === 0;
-    
     // ONBOARDING
-    if (isNovoUsuario) {
+    if ((historicoCount || 0) === 0) {
       console.log(`🎉 [WORKER] Novo usuário: ${payload.phoneNumber}`);
       
-      const primeiroNome = nomeUsuario.split(" ")[0];
-      
-      await sendWhatsAppMessage(
+      await sendMessage(
         payload.phoneNumber,
-        `Oi, ${primeiroNome}! 👋\n\nPrazer, eu sou o *Finax* — seu assistente financeiro pessoal.\n\nPode me mandar gastos por texto, áudio ou foto de comprovante.\n\nPra começar, me conta: quanto você costuma ganhar por mês? 💰`,
+        `Oi, ${nomeUsuario.split(" ")[0]}! 👋\n\nSou o *Finax* — seu assistente financeiro.\n\nPode me mandar gastos por texto, áudio ou foto.\n\nPra começar, me conta: quanto você costuma ganhar por mês? 💰`,
         payload.messageSource
       );
       
@@ -1496,327 +1231,562 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
-    // 🧠 BUSCAR CONTEXTO ATIVO (MEMÓRIA DE CURTO PRAZO)
+    // 🎯 BUSCAR ACTIVE ACTION (MEMÓRIA)
     // ========================================================================
-    const contextoAtivo = await getActiveContext(userId);
+    const activeAction = await getActiveAction(userId);
     
-    console.log(`📋 [CONTEXT] Ativo: ${contextoAtivo ? contextoAtivo.intent : "nenhum"} | Slots: ${JSON.stringify(contextoAtivo?.slots || {})}`);
+    logDecision({
+      messageId: payload.messageId,
+      referencedMessageId: payload.replyToMessageId,
+      activeActionId: activeAction?.id,
+      activeActionType: activeAction?.type,
+      decision: "checking_priority"
+    });
     
     // ========================================================================
-    // 🔘 TRATAR CALLBACK DE BOTÃO (PRIORIDADE MÁXIMA)
+    // 📩 PRIORIDADE 1: CANCELAR VIA REPLY
+    // ========================================================================
+    if (payload.replyToMessageId) {
+      console.log(`↩️ [REPLY] Detectado reply para: ${payload.replyToMessageId?.slice(-8)}`);
+      
+      const msgLower = payload.messageText.toLowerCase();
+      if (msgLower.includes("cancela") || msgLower.includes("apaga") || msgLower.includes("remove")) {
+        const transacao = await buscarTransacaoPorReply(userId, payload.replyToMessageId);
+        
+        if (transacao) {
+          await sendButtons(
+            payload.phoneNumber,
+            `Confirmar cancelamento?\n\n💸 R$ ${transacao.valor?.toFixed(2)} - ${transacao.descricao || transacao.categoria}`,
+            [
+              { id: "cancel_confirm_yes", title: "✅ Sim, cancelar" },
+              { id: "cancel_confirm_no", title: "❌ Não" }
+            ],
+            payload.messageSource
+          );
+          
+          // Criar action para aguardar confirmação
+          await createAction(userId, "cancel_selection", "cancelar_transacao", { transaction_id: transacao.id });
+          return;
+        }
+      }
+    }
+    
+    // ========================================================================
+    // 🔘 PRIORIDADE 2: CALLBACK DE BOTÃO
     // ========================================================================
     if (payload.buttonReplyId) {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
       
-      // FORMA DE PAGAMENTO via botão
+      // FORMA DE PAGAMENTO
       if (payload.buttonReplyId.startsWith("pay_")) {
-        const paymentMethod = PAYMENT_METHOD_ALIASES[payload.buttonReplyId];
+        const paymentMethod = PAYMENT_ALIASES[payload.buttonReplyId];
         
-        if (paymentMethod && contextoAtivo) {
-          const updatedSlots = { ...contextoAtivo.slots, payment_method: paymentMethod };
-          const missing = getMissingSlots(contextoAtivo.intent, updatedSlots);
+        if (paymentMethod && activeAction && activeAction.type === "slot_filling") {
+          const updatedSlots = { ...activeAction.slots, payment_method: paymentMethod };
+          
+          // Se crédito e múltiplos cartões, perguntar qual
+          if (paymentMethod === "credito") {
+            const cartoes = await listarCartoes(userId);
+            
+            if (cartoes.length > 1) {
+              const options = cartoes.map((c, i) => ({
+                index: i + 1,
+                tx_id: c.id,
+                label: c.nome,
+                meta: { card_id: c.id }
+              }));
+              
+              const pendingId = await createPendingSelection(userId, options, "card_selection", 2);
+              
+              await updateAction(activeAction.id, {
+                slots: updatedSlots,
+                pending_slot: "card",
+                pending_selection_id: pendingId,
+                status: "pending_selection"
+              });
+              
+              const msgCartoes = `Qual cartão?\n\n${cartoes.map((c, i) => `${i + 1}. ${c.nome}`).join("\n")}\n\n_Responde com o número_`;
+              await sendMessage(payload.phoneNumber, msgCartoes, payload.messageSource);
+              return;
+            } else if (cartoes.length === 1) {
+              // Apenas 1 cartão: associar automaticamente
+              updatedSlots.card = cartoes[0].id;
+            }
+          }
+          
+          const missing = getMissingSlots(activeAction.intent, updatedSlots);
           
           if (missing.length === 0) {
-            // TODOS OS SLOTS COMPLETOS → REGISTRAR
-            const resultado = await registrarTransacaoComSlots(userId, updatedSlots, eventoId, contextoAtivo.id);
-            await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+            const resultado = await registrarTransacao(userId, updatedSlots, eventoId, activeAction.id);
+            await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
             
             await supabase.from("historico_conversas").insert({
               phone_number: payload.phoneNumber,
               user_id: userId,
               user_message: `[BOTÃO ${paymentMethod.toUpperCase()}]`,
               ai_response: resultado.mensagem,
-              tipo: resultado.jaDuplicado ? "duplicado_bloqueado" : "registro_slot_filling"
+              tipo: resultado.isDuplicate ? "duplicado" : "registro"
             });
-            
             return;
+          }
+          
+          // Ainda faltam slots
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
+          
+          const prompt = SLOT_PROMPTS[missing[0]];
+          if (prompt.useButtons && prompt.buttons) {
+            await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
           } else {
-            // Atualizar contexto e pedir próximo slot
-            await upsertContext(userId, contextoAtivo.intent, updatedSlots, missing[0], payload.messageId);
-            
-            const prompt = SLOT_PROMPTS[missing[0]];
-            if (prompt.useButtons && prompt.buttons) {
-              await sendWhatsAppButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
-            } else {
-              await sendWhatsAppMessage(payload.phoneNumber, prompt.text, payload.messageSource);
-            }
-            return;
+            await sendMessage(payload.phoneNumber, prompt.text, payload.messageSource);
           }
-        }
-      }
-      
-      // CONFIRMAR HIPÓTESE
-      if (payload.buttonReplyId === "confirm_yes") {
-        const hipotesePendente = await buscarHipotesePendente(userId);
-        
-        if (hipotesePendente?.dados?.action_id) {
-          const resultado = await executarActionConfirmada(hipotesePendente.dados.action_id, userId);
-          
-          await supabase.from("hipoteses_registro")
-            .update({ status: resultado.sucesso ? "confirmada" : "erro" })
-            .eq("id", hipotesePendente.id);
-          
-          await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
           return;
         }
-        
-        await sendWhatsAppMessage(payload.phoneNumber, "Essa confirmação expirou 😕\n\nMe conta de novo o gasto.", payload.messageSource);
-        return;
       }
       
-      // NEGAR HIPÓTESE
-      if (payload.buttonReplyId === "confirm_no") {
-        const hipotesePendente = await buscarHipotesePendente(userId);
-        
-        if (hipotesePendente) {
-          await supabase.from("hipoteses_registro")
-            .update({ status: "cancelada" })
-            .eq("id", hipotesePendente.id);
-          
-          if (hipotesePendente.dados?.action_id) {
-            await cancelarActionPendente(hipotesePendente.dados.action_id, userId);
-          }
+      // CONFIRMAR CANCELAMENTO
+      if (payload.buttonReplyId === "cancel_confirm_yes") {
+        if (activeAction && activeAction.type === "cancel_selection") {
+          const txId = activeAction.slots.transaction_id;
+          const resultado = await cancelarTransacao(userId, txId);
+          await closeAction(activeAction.id);
+          await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          return;
         }
-        
-        // Cancelar contexto ativo também
-        await cancelContext(userId);
-        
-        await sendWhatsAppMessage(payload.phoneNumber, "Sem problemas! 👍 Já descartei.\n\nMe conta novamente como foi.", payload.messageSource);
+      }
+      
+      if (payload.buttonReplyId === "cancel_confirm_no") {
+        if (activeAction) {
+          await closeAction(activeAction.id);
+        }
+        await sendMessage(payload.phoneNumber, "Ok, mantido! 👍", payload.messageSource);
         return;
       }
       
-      // BATCH SEPARATE
+      // BATCH SEPARADO
       if (payload.buttonReplyId === "batch_separate") {
-        const pending = await consumirPendingSelection(userId, "batch_expense");
+        const pending = await getPendingSelection(userId, "batch_expense");
         
-        if (!pending || pending.options.length === 0) {
-          await sendWhatsAppMessage(payload.phoneNumber, "Essa seleção expirou 😕", payload.messageSource);
-          return;
-        }
-        
-        const resultados: string[] = [];
-        
-        for (const opt of pending.options) {
-          const meta = opt.meta as { valor: number; descricao: string; categoria: string; forma_pagamento?: string };
-          const slots = {
-            amount: meta.valor,
-            description: meta.descricao,
-            category: inferirCategoria(meta.descricao, meta.categoria),
-            payment_method: meta.forma_pagamento || "pix"
-          };
+        if (pending) {
+          await consumePendingSelection(pending.id);
           
-          const resultado = await registrarTransacaoComSlots(userId, slots, eventoId);
-          if (resultado.sucesso) {
-            resultados.push(`✅ R$ ${meta.valor.toFixed(2)} - ${meta.descricao}`);
+          const resultados: string[] = [];
+          for (const opt of pending.options) {
+            const meta = opt.meta as { valor: number; descricao: string; categoria?: string };
+            
+            // Cada item precisa de payment_method - criar action para o primeiro
+            if (resultados.length === 0) {
+              await createAction(userId, "slot_filling", "registrar_gasto", {
+                amount: meta.valor,
+                description: meta.descricao,
+                category: inferirCategoria(meta.descricao, meta.categoria),
+                batch_remaining: pending.options.slice(1)
+              }, "payment_method");
+              
+              await sendButtons(
+                payload.phoneNumber,
+                `Primeiro: R$ ${meta.valor.toFixed(2)} - ${meta.descricao}\n\nComo pagou?`,
+                SLOT_PROMPTS.payment_method.buttons!,
+                payload.messageSource
+              );
+              return;
+            }
           }
         }
-        
-        await sendWhatsAppMessage(payload.phoneNumber, `*${pending.options.length} gastos registrados!*\n\n${resultados.join("\n")}`, payload.messageSource);
         return;
       }
       
-      // BATCH SINGLE
+      // BATCH ÚNICO
       if (payload.buttonReplyId === "batch_single") {
-        const pending = await consumirPendingSelection(userId, "batch_expense");
+        const pending = await getPendingSelection(userId, "batch_expense");
         
-        if (!pending || pending.options.length === 0) {
-          await sendWhatsAppMessage(payload.phoneNumber, "Essa seleção expirou 😕", payload.messageSource);
+        if (pending) {
+          await consumePendingSelection(pending.id);
+          
+          const somaTotal = pending.options.reduce((sum, o) => sum + (o.meta?.valor || 0), 0);
+          const descricoes = pending.options.map(o => o.meta?.descricao).filter(Boolean).join(" + ");
+          
+          await createAction(userId, "slot_filling", "registrar_gasto", {
+            amount: somaTotal,
+            description: descricoes,
+            category: "outros"
+          }, "payment_method");
+          
+          await sendButtons(
+            payload.phoneNumber,
+            `Total: R$ ${somaTotal.toFixed(2)}\n\nComo pagou?`,
+            SLOT_PROMPTS.payment_method.buttons!,
+            payload.messageSource
+          );
           return;
         }
-        
-        const somaTotal = pending.options.reduce((sum, o) => sum + (o.meta?.valor || 0), 0);
-        const descricoes = pending.options.map(o => o.meta?.descricao).filter(Boolean).join(", ");
-        
-        const slots = {
-          amount: somaTotal,
-          description: descricoes,
-          category: "outros",
-          payment_method: "pix"
-        };
-        
-        const resultado = await registrarTransacaoComSlots(userId, slots, eventoId);
-        await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+      }
+      
+      // DUPLICADO - REGISTRAR OUTRO
+      if (payload.buttonReplyId === "dup_register") {
+        if (activeAction && activeAction.type === "duplicate_confirm") {
+          // Forçar registro
+          const dedupeHash = `forced_${userId.slice(0, 8)}_${Date.now()}`;
+          
+          const agora = new Date();
+          const slots = activeAction.slots;
+          
+          const { data: transacao, error } = await supabase.from("transacoes").insert({
+            usuario_id: userId,
+            valor: slots.amount,
+            categoria: inferirCategoria(slots.description, slots.category),
+            tipo: "saida",
+            descricao: slots.description,
+            data: agora.toISOString(),
+            origem: "whatsapp",
+            forma_pagamento: slots.payment_method,
+            status: "confirmada",
+            idempotency_key: dedupeHash
+          }).select("id").single();
+          
+          if (!error && transacao) {
+            await closeAction(activeAction.id, transacao.id);
+            
+            await sendMessage(
+              payload.phoneNumber,
+              `✅ *Outro gasto registrado!*\n\n💸 *-R$ ${slots.amount?.toFixed(2)}*\n📂 ${inferirCategoria(slots.description, slots.category)}\n💳 ${slots.payment_method}`,
+              payload.messageSource
+            );
+          }
+          return;
+        }
+      }
+      
+      // DUPLICADO - CANCELAR
+      if (payload.buttonReplyId === "dup_cancel") {
+        if (activeAction) {
+          await closeAction(activeAction.id);
+        }
+        await sendMessage(payload.phoneNumber, "Ok, descartado! 👍", payload.messageSource);
         return;
       }
     }
     
     // ========================================================================
-    // 📷 PROCESSAR MÍDIA (ÁUDIO / IMAGEM)
+    // 📋 PRIORIDADE 3: PENDING SELECTION (SELEÇÃO NUMÉRICA)
+    // ========================================================================
+    if (activeAction && activeAction.type === "cancel_selection") {
+      const pending = await getPendingSelection(userId, "cancel_transaction");
+      
+      if (pending && isNumericOnly(payload.messageText)) {
+        const index = parseInt(payload.messageText.trim());
+        const option = pending.options.find(o => o.index === index);
+        
+        if (option && option.tx_id) {
+          await consumePendingSelection(pending.id);
+          
+          const resultado = await cancelarTransacao(userId, option.tx_id);
+          await closeAction(activeAction.id);
+          
+          await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          
+          logDecision({
+            messageId: payload.messageId,
+            activeActionId: activeAction.id,
+            activeActionType: "cancel_selection",
+            decision: "cancel_by_number",
+            details: { selected_index: index, tx_id: option.tx_id }
+          });
+          return;
+        }
+        
+        await sendMessage(payload.phoneNumber, `Número inválido. Escolha entre 1 e ${pending.options.length}.`, payload.messageSource);
+        return;
+      }
+    }
+    
+    // Card selection
+    if (activeAction && activeAction.pending_slot === "card") {
+      const pending = await getPendingSelection(userId, "card_selection");
+      
+      if (pending && isNumericOnly(payload.messageText)) {
+        const index = parseInt(payload.messageText.trim());
+        const option = pending.options.find(o => o.index === index);
+        
+        if (option && option.meta?.card_id) {
+          await consumePendingSelection(pending.id);
+          
+          const updatedSlots = { ...activeAction.slots, card: option.meta.card_id };
+          const missing = getMissingSlots(activeAction.intent, updatedSlots);
+          
+          if (missing.length === 0) {
+            const resultado = await registrarTransacao(userId, updatedSlots, eventoId, activeAction.id);
+            await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+            return;
+          }
+          
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
+          const prompt = SLOT_PROMPTS[missing[0]];
+          await sendMessage(payload.phoneNumber, prompt.text, payload.messageSource);
+          return;
+        }
+      }
+    }
+    
+    // ========================================================================
+    // 📷 PROCESSAR MÍDIA
     // ========================================================================
     let conteudoProcessado = payload.messageText;
-    let confiancaMidia = 0.9;
     
-    // ÁUDIO
     if (payload.messageType === "audio" && payload.mediaId) {
       const audioBase64 = await downloadWhatsAppMedia(payload.mediaId, eventoId || undefined);
       
       if (!audioBase64) {
-        await sendWhatsAppMessage(payload.phoneNumber, "Não peguei o áudio direito 🎤\n\n👉 Pode escrever rapidinho o que você disse?", payload.messageSource);
+        await sendMessage(payload.phoneNumber, "Não peguei o áudio 🎤\n\n👉 Pode escrever?", payload.messageSource);
         return;
       }
       
       const transcricao = await transcreverAudio(audioBase64);
       
       if (!transcricao.texto) {
-        await sendWhatsAppMessage(payload.phoneNumber, "Não peguei o áudio direito 🎤\n\n👉 Pode escrever rapidinho o que você disse?", payload.messageSource);
+        await sendMessage(payload.phoneNumber, "Não entendi o áudio 🎤\n\n👉 Pode escrever?", payload.messageSource);
         return;
       }
       
       conteudoProcessado = transcricao.texto;
-      confiancaMidia = transcricao.confianca * 0.9;
     }
     
-    // IMAGEM
     if (payload.messageType === "image" && payload.mediaId) {
       const imageBase64 = await downloadWhatsAppMedia(payload.mediaId, eventoId || undefined);
       
       if (!imageBase64) {
-        await sendWhatsAppMessage(payload.phoneNumber, "Não consegui baixar a imagem 📷\n\n👉 Pode tentar enviar de novo?", payload.messageSource);
+        await sendMessage(payload.phoneNumber, "Não baixei a imagem 📷\n\n👉 Tenta de novo?", payload.messageSource);
         return;
       }
       
       const analise = await analisarImagem(imageBase64, payload.mediaMimeType, eventoId, payload.messageId);
       
-      if (!analise.dados || analise.dados.intent === "outro" || analise.confianca < 0.3) {
-        await sendWhatsAppMessage(payload.phoneNumber, "Vi a imagem 📷\n\n👉 Me conta: *quanto foi* e *o que era*?", payload.messageSource);
+      if (!analise.dados || analise.dados.intent === "outro") {
+        await sendMessage(payload.phoneNumber, "Vi a imagem 📷\n\n👉 Me conta: *quanto foi* e *o que era*?", payload.messageSource);
         return;
       }
       
-      // Imagem cria hipótese para confirmação
-      const { hipoteseId } = await criarHipotese(userId, eventoId, analise.dados, analise.confianca);
+      // Criar action para confirmar
+      await createAction(userId, "slot_filling", "registrar_gasto", {
+        amount: analise.dados.valor,
+        description: analise.dados.descricao,
+        category: analise.dados.categoria,
+        payment_method: analise.dados.forma_pagamento
+      });
       
-      if (!hipoteseId) {
-        await sendWhatsAppMessage(payload.phoneNumber, "Algo deu errado 😕\n\n👉 Tenta de novo?", payload.messageSource);
-        return;
-      }
-      
-      const msgConfirmacao = `Entendi assim 👇\n\n` +
-        `💸 *Gasto*: R$ ${analise.dados.valor?.toFixed(2)}\n` +
-        (analise.dados.descricao ? `📝 *O quê*: ${analise.dados.descricao}\n` : "") +
-        (analise.dados.categoria ? `📂 *Categoria*: ${analise.dados.categoria}\n` : "") +
-        (analise.dados.forma_pagamento ? `💳 *Pagamento*: ${analise.dados.forma_pagamento}\n` : "") +
-        `\nPosso registrar?`;
-      
-      await sendWhatsAppButtons(
+      await sendButtons(
         payload.phoneNumber,
-        msgConfirmacao,
+        `Entendi assim 👇\n\n💸 R$ ${analise.dados.valor?.toFixed(2)}\n${analise.dados.descricao ? `📝 ${analise.dados.descricao}` : ""}\n\nPosso registrar?`,
         [
           { id: "confirm_yes", title: "✅ Sim" },
           { id: "confirm_no", title: "❌ Não" }
         ],
         payload.messageSource
       );
-      
       return;
     }
     
     // ========================================================================
-    // 🧠 INTERPRETAR MENSAGEM COM IA (CONSIDERANDO CONTEXTO)
+    // 🔢 PRIORIDADE 4: NÚMERO ISOLADO
     // ========================================================================
-    
-    // Buscar histórico recente
-    const { data: historico } = await supabase
-      .from("historico_conversas")
-      .select("user_message, ai_response, tipo")
-      .eq("phone_number", payload.phoneNumber)
-      .order("created_at", { ascending: false })
-      .limit(3);
-    
-    const historicoFormatado = historico?.map(h => 
-      `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 100)}...`
-    ).reverse().join("\n") || "";
-    
-    const { intent: interpretacao, confianca: confIA } = await interpretarMensagem(
-      conteudoProcessado, 
-      historicoFormatado,
-      contextoAtivo
-    );
-    
-    console.log(`🎯 [INTENT] ${interpretacao.intent} | Conf: ${confIA} | Slots: ${JSON.stringify(interpretacao.slots || {})}`);
-    
-    // ========================================================================
-    // 🚫 NEGAR / CANCELAR
-    // ========================================================================
-    if (interpretacao.intent === "negar") {
-      const cancelled = await cancelContext(userId);
+    if (isNumericOnly(conteudoProcessado)) {
+      const numValue = parseNumericValue(conteudoProcessado);
       
-      if (cancelled) {
-        await sendWhatsAppMessage(payload.phoneNumber, "Ok, descartei! 👍\n\nO que você gostaria de fazer?", payload.messageSource);
-      } else {
-        await sendWhatsAppMessage(payload.phoneNumber, "Não tinha nada pendente 🤔\n\nComo posso te ajudar?", payload.messageSource);
+      logDecision({
+        messageId: payload.messageId,
+        activeActionId: activeAction?.id,
+        activeActionType: activeAction?.type,
+        decision: "numeric_routing",
+        details: { value: numValue, pending_slot: activeAction?.pending_slot }
+      });
+      
+      // Se há action ativa de slot_filling esperando amount
+      if (activeAction && activeAction.type === "slot_filling" && 
+          (activeAction.pending_slot === "amount" || !activeAction.slots.amount)) {
+        
+        const updatedSlots = { ...activeAction.slots, amount: numValue };
+        const missing = getMissingSlots(activeAction.intent, updatedSlots);
+        
+        if (missing.length === 0) {
+          const resultado = await registrarTransacao(userId, updatedSlots, eventoId, activeAction.id);
+          await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          return;
+        }
+        
+        await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
+        
+        const prompt = SLOT_PROMPTS[missing[0]];
+        if (prompt.useButtons && prompt.buttons) {
+          await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+        } else {
+          await sendMessage(payload.phoneNumber, prompt.text, payload.messageSource);
+        }
+        return;
       }
+      
+      // Número sem contexto → perguntar o que foi
+      await createAction(userId, "slot_filling", "registrar_gasto", { amount: numValue }, "description");
+      await sendMessage(payload.phoneNumber, "Esse valor foi gasto com o quê?", payload.messageSource);
       
       await supabase.from("historico_conversas").insert({
         phone_number: payload.phoneNumber,
         user_id: userId,
         user_message: conteudoProcessado,
-        ai_response: "[CANCELADO]",
-        tipo: "cancelamento"
+        ai_response: "Esse valor foi gasto com o quê?",
+        tipo: "slot_filling"
       });
-      
       return;
     }
     
     // ========================================================================
-    // 💸 REGISTRAR GASTO (SLOT FILLING INTELIGENTE)
+    // 🧠 INTERPRETAÇÃO IA
+    // ========================================================================
+    const { data: historico } = await supabase
+      .from("historico_conversas")
+      .select("user_message, ai_response")
+      .eq("phone_number", payload.phoneNumber)
+      .order("created_at", { ascending: false })
+      .limit(3);
+    
+    const historicoFormatado = historico?.map(h => 
+      `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 80)}...`
+    ).reverse().join("\n") || "";
+    
+    const { intent: interpretacao, confianca } = await interpretarMensagem(
+      conteudoProcessado, 
+      historicoFormatado,
+      activeAction
+    );
+    
+    logDecision({
+      messageId: payload.messageId,
+      activeActionId: activeAction?.id,
+      decision: "ai_interpretation",
+      details: { intent: interpretacao.intent, confianca }
+    });
+    
+    // ========================================================================
+    // 🚫 NEGAR / CANCELAR
+    // ========================================================================
+    if (interpretacao.intent === "negar") {
+      const cancelled = await cancelAction(userId);
+      
+      await sendMessage(
+        payload.phoneNumber, 
+        cancelled ? "Ok, descartei! 👍\n\nO que você gostaria de fazer?" : "Não tinha nada pendente 🤔\n\nComo posso ajudar?",
+        payload.messageSource
+      );
+      return;
+    }
+    
+    // ========================================================================
+    // 📦 MÚLTIPLOS ITENS
+    // ========================================================================
+    if (interpretacao.itens && interpretacao.itens.length > 1) {
+      const total = interpretacao.itens.reduce((sum, i) => sum + i.valor, 0);
+      
+      const options = interpretacao.itens.map((item, i) => ({
+        index: i + 1,
+        label: `R$ ${item.valor.toFixed(2)} - ${item.descricao}`,
+        meta: { valor: item.valor, descricao: item.descricao, categoria: item.categoria }
+      }));
+      
+      await createPendingSelection(userId, options, "batch_expense", 3);
+      
+      const listaItens = interpretacao.itens
+        .map((item, i) => `${i + 1}) ${item.descricao} — R$ ${item.valor.toFixed(2)}`)
+        .join("\n");
+      
+      await sendButtons(
+        payload.phoneNumber,
+        `Identifiquei ${interpretacao.itens.length} itens:\n\n${listaItens}\n\nComo prefere registrar?`,
+        [
+          { id: "batch_separate", title: "📋 Separado" },
+          { id: "batch_single", title: `💰 Único (R$ ${total.toFixed(2)})` }
+        ],
+        payload.messageSource
+      );
+      return;
+    }
+    
+    // ========================================================================
+    // 💸 REGISTRAR GASTO / FORNECER SLOT
     // ========================================================================
     if (interpretacao.intent === "registrar_gasto" || interpretacao.intent === "fornecer_slot") {
       
-      // Extrair slots da mensagem
-      let novoSlots: Record<string, any> = interpretacao.slots || {};
+      let slots: Record<string, any> = interpretacao.slots || {};
       
-      // Adicionar valor e descrição do nível superior se existirem
-      if (interpretacao.valor) novoSlots.amount = interpretacao.valor;
-      if (interpretacao.descricao) novoSlots.description = interpretacao.descricao;
-      if (interpretacao.categoria) novoSlots.category = interpretacao.categoria;
-      if (interpretacao.forma_pagamento) novoSlots.payment_method = interpretacao.forma_pagamento;
+      // Pegar valores do nível superior
+      if (interpretacao.valor) slots.amount = interpretacao.valor;
+      if (interpretacao.descricao) slots.description = interpretacao.descricao;
+      if (interpretacao.categoria) slots.category = interpretacao.categoria;
+      if (interpretacao.forma_pagamento) slots.payment_method = interpretacao.forma_pagamento;
       
-      // Se é uma resposta de slot (número sozinho, etc)
-      if (contextoAtivo && contextoAtivo.intent === "registrar_gasto") {
-        const extracted = extractSlotsFromMessage(conteudoProcessado, contextoAtivo.pending_slot);
-        novoSlots = { ...novoSlots, ...extracted };
+      // Se há action ativa, fazer merge
+      if (activeAction && activeAction.type === "slot_filling" && activeAction.intent === "registrar_gasto") {
+        slots = { ...activeAction.slots, ...slots };
+        
+        // Se esperando description e recebeu texto
+        if (activeAction.pending_slot === "description" && !slots.description) {
+          slots.description = conteudoProcessado;
+        }
+        
+        // Se esperando payment_method e texto tem forma de pagamento
+        if (activeAction.pending_slot === "payment_method") {
+          const pm = normalizePaymentMethod(conteudoProcessado);
+          if (pm) slots.payment_method = pm;
+        }
       }
       
-      // Merge com contexto ativo
-      let slotsAtuais = contextoAtivo?.intent === "registrar_gasto" 
-        ? { ...contextoAtivo.slots, ...novoSlots }
-        : novoSlots;
-      
       // Verificar slots faltantes
-      const missing = getMissingSlots("registrar_gasto", slotsAtuais);
+      const missing = getMissingSlots("registrar_gasto", slots);
       
-      console.log(`📊 [SLOTS] Atuais: ${JSON.stringify(slotsAtuais)} | Faltando: ${missing.join(", ")}`);
+      console.log(`📊 [SLOTS] Atuais: ${JSON.stringify(slots)} | Faltando: ${missing.join(", ")}`);
       
       if (missing.length === 0) {
-        // TODOS OS SLOTS COMPLETOS → REGISTRAR
-        const contextId = contextoAtivo?.intent === "registrar_gasto" ? contextoAtivo.id : undefined;
-        const resultado = await registrarTransacaoComSlots(userId, slotsAtuais, eventoId, contextId);
+        // Tudo completo → registrar
+        const actionId = activeAction?.type === "slot_filling" ? activeAction.id : undefined;
+        const resultado = await registrarTransacao(userId, slots, eventoId, actionId);
         
-        await sendWhatsAppMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+        // Se duplicado, mostra botões
+        if (resultado.isDuplicate) {
+          await sendButtons(
+            payload.phoneNumber,
+            resultado.mensagem,
+            [
+              { id: "dup_register", title: "📋 Registrar outro" },
+              { id: "dup_cancel", title: "❌ Cancelar" }
+            ],
+            payload.messageSource
+          );
+        } else {
+          await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+        }
         
         await supabase.from("historico_conversas").insert({
           phone_number: payload.phoneNumber,
           user_id: userId,
           user_message: conteudoProcessado,
           ai_response: resultado.mensagem,
-          tipo: resultado.jaDuplicado ? "duplicado_bloqueado" : "registro_slot_filling"
+          tipo: resultado.isDuplicate ? "duplicado" : "registro"
         });
-        
         return;
       }
       
-      // SLOTS FALTANDO → PERGUNTAR
+      // Faltam slots → criar/atualizar action e perguntar
       const nextSlot = missing[0];
       
-      // Criar/atualizar contexto
-      await upsertContext(userId, "registrar_gasto", slotsAtuais, nextSlot, payload.messageId);
+      if (activeAction && activeAction.type === "slot_filling") {
+        await updateAction(activeAction.id, { slots, pending_slot: nextSlot });
+      } else {
+        await createAction(userId, "slot_filling", "registrar_gasto", slots, nextSlot, payload.messageId);
+      }
       
       const prompt = SLOT_PROMPTS[nextSlot];
       
       if (prompt.useButtons && prompt.buttons) {
-        await sendWhatsAppButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+        await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
       } else {
-        await sendWhatsAppMessage(payload.phoneNumber, prompt.text, payload.messageSource);
+        await sendMessage(payload.phoneNumber, prompt.text, payload.messageSource);
       }
       
       await supabase.from("historico_conversas").insert({
@@ -1826,7 +1796,6 @@ async function processarJob(job: any): Promise<void> {
         ai_response: prompt.text,
         tipo: "slot_filling"
       });
-      
       return;
     }
     
@@ -1840,7 +1809,7 @@ async function processarJob(job: any): Promise<void> {
       
       const { data: transacoes } = await supabase
         .from("transacoes")
-        .select("valor, tipo, categoria")
+        .select("valor, tipo")
         .eq("usuario_id", userId)
         .gte("data", inicioMes.toISOString())
         .eq("status", "confirmada");
@@ -1856,17 +1825,11 @@ async function processarJob(job: any): Promise<void> {
       
       const saldo = totalEntradas - totalSaidas;
       
-      let resposta = "";
-      if (!transacoes || transacoes.length === 0) {
-        resposta = "Você ainda não tem transações este mês 📊\n\nManda um gasto que eu começo a organizar!";
-      } else {
-        resposta = `📊 *Resumo do Mês*\n\n` +
-          `💵 Entradas: *R$ ${totalEntradas.toFixed(2)}*\n` +
-          `💸 Saídas: *R$ ${totalSaidas.toFixed(2)}*\n` +
-          `📈 Saldo: *R$ ${saldo.toFixed(2)}*`;
-      }
+      const resposta = !transacoes || transacoes.length === 0
+        ? "Você ainda não tem transações este mês 📊\n\nManda um gasto!"
+        : `📊 *Resumo do Mês*\n\n💵 Entradas: *R$ ${totalEntradas.toFixed(2)}*\n💸 Saídas: *R$ ${totalSaidas.toFixed(2)}*\n📈 Saldo: *R$ ${saldo.toFixed(2)}*`;
       
-      await sendWhatsAppMessage(payload.phoneNumber, resposta, payload.messageSource);
+      await sendMessage(payload.phoneNumber, resposta, payload.messageSource);
       return;
     }
     
@@ -1877,7 +1840,7 @@ async function processarJob(job: any): Promise<void> {
       const transacoes = await listarTransacoesParaCancelar(userId);
       
       if (transacoes.length === 0) {
-        await sendWhatsAppMessage(payload.phoneNumber, "Você não tem transações para cancelar 🤔", payload.messageSource);
+        await sendMessage(payload.phoneNumber, "Você não tem transações para cancelar 🤔", payload.messageSource);
         return;
       }
       
@@ -1888,109 +1851,153 @@ async function processarJob(job: any): Promise<void> {
         meta: { tx_id: t.id }
       }));
       
-      await criarPendingSelection(userId, lista, "cancel_transaction", 2);
+      const pendingId = await createPendingSelection(userId, lista, "cancel_transaction", 2);
       
-      const msgLista = `Qual transação você quer cancelar?\n\n` +
-        lista.map(l => `${l.index}. ${l.label}`).join("\n") +
-        `\n\n_Responde com o número_`;
+      await createAction(userId, "cancel_selection", "cancelar_transacao", {}, null, payload.messageId, pendingId);
       
-      await sendWhatsAppMessage(payload.phoneNumber, msgLista, payload.messageSource);
+      const msgLista = `Qual transação cancelar?\n\n${lista.map(l => `${l.index}. ${l.label}`).join("\n")}\n\n_Responde com o número_`;
+      
+      await sendMessage(payload.phoneNumber, msgLista, payload.messageSource);
+      
+      logDecision({
+        messageId: payload.messageId,
+        decision: "show_cancel_list",
+        details: { count: lista.length }
+      });
       return;
     }
     
     // ========================================================================
-    // 💳 GERENCIAR CARTÕES (SLOT FILLING)
+    // 💳 CARTÕES
     // ========================================================================
-    if (["gerenciar_cartoes", "update_card", "add_card", "remove_card", "view_cards"].includes(interpretacao.intent)) {
-      // [Mantém a lógica existente de cartões - simplificado aqui]
+    if (interpretacao.intent === "view_cards") {
+      const cartoes = await listarCartoes(userId);
       
-      if (interpretacao.intent === "view_cards") {
-        const { data: cartoes } = await supabase
-          .from("cartoes_credito")
-          .select("*")
-          .eq("usuario_id", userId)
-          .eq("ativo", true);
-        
-        if (!cartoes || cartoes.length === 0) {
-          await sendWhatsAppMessage(payload.phoneNumber, "Você ainda não tem cartões cadastrados 💳\n\nQuer adicionar um?", payload.messageSource);
-          return;
-        }
-        
-        const lista = cartoes.map((c, i) => 
-          `${i + 1}. *${c.nome}*\n   Limite: R$ ${Number(c.limite_total || 0).toFixed(2)}\n   Vencimento: dia ${c.dia_vencimento}`
-        ).join("\n\n");
-        
-        await sendWhatsAppMessage(payload.phoneNumber, `*Seus cartões* 💳\n\n${lista}`, payload.messageSource);
+      if (cartoes.length === 0) {
+        await sendMessage(payload.phoneNumber, "Você não tem cartões cadastrados 💳\n\nPra adicionar: \"Adicionar cartão Nubank limite 5000\"", payload.messageSource);
         return;
       }
       
-      // Outros casos de cartão...
-      await sendWhatsAppMessage(
+      const lista = cartoes.map(c => 
+        `💳 *${c.nome}*\n   Limite: R$ ${c.limite_total?.toFixed(2) || "não informado"}\n   Venc: dia ${c.dia_vencimento || "?"}`
+      ).join("\n\n");
+      
+      await sendMessage(payload.phoneNumber, `Seus cartões:\n\n${lista}`, payload.messageSource);
+      return;
+    }
+    
+    if (interpretacao.intent === "update_card") {
+      const slots = interpretacao.slots || {};
+      
+      // Tentar encontrar o cartão
+      if (slots.card) {
+        const cartao = await encontrarCartao(userId, slots.card);
+        
+        if (cartao && slots.value) {
+          // Atualizar limite diretamente
+          await supabase
+            .from("cartoes_credito")
+            .update({ limite_total: slots.value, limite_disponivel: slots.value })
+            .eq("id", cartao.id);
+          
+          await sendMessage(
+            payload.phoneNumber,
+            `✅ Limite do *${cartao.nome}* atualizado para R$ ${slots.value.toFixed(2)}`,
+            payload.messageSource
+          );
+          return;
+        }
+      }
+      
+      // Listar cartões para escolher
+      const cartoes = await listarCartoes(userId);
+      
+      if (cartoes.length === 0) {
+        await sendMessage(payload.phoneNumber, "Você não tem cartões cadastrados 💳", payload.messageSource);
+        return;
+      }
+      
+      const options = cartoes.map((c, i) => ({
+        index: i + 1,
+        tx_id: c.id,
+        label: c.nome,
+        meta: { card_id: c.id }
+      }));
+      
+      await createPendingSelection(userId, options, "card_update_selection", 2);
+      await createAction(userId, "card_update", "update_card", slots || {}, "card", payload.messageId);
+      
+      const msgCartoes = `Qual cartão atualizar?\n\n${cartoes.map((c, i) => `${i + 1}. ${c.nome}`).join("\n")}`;
+      await sendMessage(payload.phoneNumber, msgCartoes, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // 👋 SAUDAÇÃO
+    // ========================================================================
+    if (interpretacao.intent === "saudacao") {
+      const primeiroNome = nomeUsuario.split(" ")[0];
+      await sendMessage(payload.phoneNumber, `Oi, ${primeiroNome}! 👋\n\nMe conta um gasto ou pergunta seu resumo.`, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // ❓ AJUDA
+    // ========================================================================
+    if (interpretacao.intent === "ajuda") {
+      await sendMessage(
         payload.phoneNumber,
-        "O que você quer fazer com cartões?\n\n1️⃣ Ver cartões\n2️⃣ Adicionar cartão\n3️⃣ Atualizar cartão\n4️⃣ Remover cartão",
+        `*Como usar o Finax* 📊\n\n` +
+        `💸 *Registrar gasto:*\n"Gastei 50 no mercado"\n"Café 8 reais pix"\n\n` +
+        `📊 *Ver resumo:*\n"Quanto gastei?"\n"Resumo"\n\n` +
+        `🗑️ *Cancelar:*\n"Cancela" ou responda uma mensagem antiga\n\n` +
+        `💳 *Cartões:*\n"Ver cartões"\n"Atualiza limite Nubank 5000"`,
         payload.messageSource
       );
       return;
     }
     
     // ========================================================================
-    // 👋 SAUDAÇÃO / AJUDA / OUTRO
+    // 🔄 RESPOSTA GENÉRICA (COM CONTEXTO ATIVO)
     // ========================================================================
-    
-    // REGRA: Nunca "como posso ajudar" se há contexto ativo
-    if (contextoAtivo && contextoAtivo.intent === "registrar_gasto") {
-      const missing = getMissingSlots("registrar_gasto", contextoAtivo.slots);
+    if (activeAction && activeAction.type === "slot_filling") {
+      // Re-perguntar o slot pendente
+      const pendingSlot = activeAction.pending_slot || getMissingSlots(activeAction.intent, activeAction.slots)[0];
       
-      if (missing.length > 0) {
-        const nextSlot = missing[0];
-        const prompt = SLOT_PROMPTS[nextSlot];
-        
-        // Re-perguntar slot pendente
-        const rePrompt = `Desculpa, não entendi 🤔\n\n${prompt.text}`;
+      if (pendingSlot) {
+        const prompt = SLOT_PROMPTS[pendingSlot];
         
         if (prompt.useButtons && prompt.buttons) {
-          await sendWhatsAppButtons(payload.phoneNumber, rePrompt, prompt.buttons, payload.messageSource);
+          await sendButtons(payload.phoneNumber, `Não entendi 🤔\n\n${prompt.text}`, prompt.buttons, payload.messageSource);
         } else {
-          await sendWhatsAppMessage(payload.phoneNumber, rePrompt, payload.messageSource);
+          await sendMessage(payload.phoneNumber, `Não entendi 🤔\n\n${prompt.text}`, payload.messageSource);
         }
-        
         return;
       }
     }
     
-    let respostaGenerica = "";
-    
-    if (interpretacao.intent === "saudacao") {
-      const primeiroNome = nomeUsuario.split(" ")[0];
-      respostaGenerica = `Fala, ${primeiroNome}! 👋\n\nComo posso ajudar?\n\n💸 Registrar gasto\n📊 Ver resumo\n📷 Manda foto de comprovante`;
-    } else if (interpretacao.intent === "ajuda") {
-      respostaGenerica = `*Como usar o Finax* 📱\n\n` +
-        `💸 *Registrar gasto*: "Gastei 50 no mercado"\n` +
-        `📷 *Comprovante*: Manda foto do Pix\n` +
-        `🎤 *Áudio*: Manda áudio falando o gasto\n` +
-        `📊 *Resumo*: "Quanto gastei esse mês?"`;
-    } else {
-      respostaGenerica = `Como posso te ajudar? 🤔\n\n💸 Registrar gasto\n📊 Ver resumo\n\n_Exemplo: "Gastei 50 no mercado"_`;
-    }
-    
-    await sendWhatsAppMessage(payload.phoneNumber, respostaGenerica, payload.messageSource);
-    
-    await supabase.from("historico_conversas").insert({
-      phone_number: payload.phoneNumber,
-      user_id: userId,
-      user_message: conteudoProcessado,
-      ai_response: respostaGenerica,
-      tipo: interpretacao.intent
-    });
+    // ========================================================================
+    // ❓ RESPOSTA GENÉRICA FINAL
+    // ========================================================================
+    await sendMessage(
+      payload.phoneNumber,
+      `Não entendi 🤔\n\nPode me dizer:\n• Um gasto (ex: "café 8 reais pix")\n• "Resumo" pra ver seus gastos\n• "Cancelar" pra desfazer algo`,
+      payload.messageSource
+    );
     
   } catch (error) {
-    console.error(`❌ [WORKER] Erro job ${job.id}:`, error);
-    throw error;
+    console.error("❌ [WORKER] Erro:", error);
+    
+    await sendMessage(
+      payload.phoneNumber,
+      "Ops, algo deu errado 😕\n\nTenta de novo?",
+      payload.messageSource
+    );
   }
 }
 
 // ============================================================================
-// 🚀 ENDPOINT
+// 🚀 SERVE
 // ============================================================================
 
 serve(async (req) => {
@@ -1999,38 +2006,39 @@ serve(async (req) => {
   }
 
   try {
-    const { data: jobs, error: fetchError } = await supabase
+    // Buscar jobs pendentes
+    const { data: jobs, error } = await supabase
       .from("webhook_jobs")
       .select("*")
       .eq("status", "pending")
       .order("created_at", { ascending: true })
       .limit(10);
-    
-    if (fetchError) {
-      console.error("❌ [WORKER] Erro fetch jobs:", fetchError);
-      return new Response(JSON.stringify({ error: "fetch_error" }), {
+
+    if (error) {
+      console.error("Erro ao buscar jobs:", error);
+      return new Response(JSON.stringify({ error: "Erro interno" }), {
         status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    
+
     if (!jobs || jobs.length === 0) {
-      return new Response(JSON.stringify({ status: "ok", jobs_processed: 0 }), {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      return new Response(JSON.stringify({ processed: 0 }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    
-    let processed = 0;
-    let errors = 0;
-    
+
+    console.log(`📋 [WORKER] ${jobs.length} job(s) para processar`);
+
+    // Marcar como processando
+    const jobIds = jobs.map(j => j.id);
+    await supabase
+      .from("webhook_jobs")
+      .update({ status: "processing" })
+      .in("id", jobIds);
+
+    // Processar cada job
     for (const job of jobs) {
-      await supabase
-        .from("webhook_jobs")
-        .update({ status: "processing", attempts: job.attempts + 1 })
-        .eq("id", job.id)
-        .eq("status", "pending");
-      
       try {
         await processarJob(job);
         
@@ -2038,55 +2046,30 @@ serve(async (req) => {
           .from("webhook_jobs")
           .update({ status: "done", processed_at: new Date().toISOString() })
           .eq("id", job.id);
+          
+      } catch (jobError) {
+        console.error(`❌ [JOB ${job.id}] Erro:`, jobError);
         
-        processed++;
-        console.log(`✅ [WORKER] Job ${job.id} concluído`);
-        
-      } catch (error) {
-        console.error(`❌ [WORKER] Job ${job.id} falhou:`, error);
-        
-        const newAttempts = job.attempts + 1;
-        
-        if (newAttempts >= 3) {
-          await supabase
-            .from("webhook_jobs")
-            .update({ 
-              status: "error", 
-              last_error: String(error),
-              error: String(error)
-            })
-            .eq("id", job.id);
-        } else {
-          const nextRetry = new Date(Date.now() + Math.pow(2, newAttempts) * 1000);
-          await supabase
-            .from("webhook_jobs")
-            .update({ 
-              status: "pending", 
-              last_error: String(error),
-              next_retry_at: nextRetry.toISOString()
-            })
-            .eq("id", job.id);
-        }
-        
-        errors++;
+        await supabase
+          .from("webhook_jobs")
+          .update({ 
+            status: "error", 
+            last_error: String(jobError),
+            attempts: (job.attempts || 0) + 1 
+          })
+          .eq("id", job.id);
       }
     }
-    
-    return new Response(
-      JSON.stringify({ 
-        status: "ok", 
-        jobs_processed: processed,
-        jobs_failed: errors,
-        total_jobs: jobs.length
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+
+    return new Response(JSON.stringify({ processed: jobs.length }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
 
   } catch (error) {
-    console.error("❌ [WORKER] Erro fatal:", error);
-    return new Response(
-      JSON.stringify({ error: "internal_error", details: String(error) }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    console.error("Erro geral:", error);
+    return new Response(JSON.stringify({ error: String(error) }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
