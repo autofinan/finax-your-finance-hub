@@ -105,12 +105,14 @@ interface ActiveAction {
 
 const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[] }> = {
   registrar_gasto: { required: ["amount", "payment_method"], optional: ["description", "category", "card"] },
+  // ENTRADA: amount é obrigatório, source/description são opcionais mas preferíveis
   registrar_entrada: { required: ["amount"], optional: ["description", "source"] },
   update_card: { required: ["card", "value"], optional: ["field"] },
   add_card: { required: ["card_name", "limit", "due_day"], optional: ["closing_day"] },
   remove_card: { required: ["card"], optional: [] },
   criar_parcelamento: { required: ["amount", "installments", "description"], optional: ["category", "card"] },
   criar_recorrente: { required: ["amount", "description", "recurrence_type"], optional: ["category", "day_of_month"] },
+  numero_isolado: { required: ["amount", "type_choice"], optional: [] },
 };
 
 const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons?: Array<{ id: string; title: string }> }> = {
@@ -878,77 +880,54 @@ Se a mensagem é uma nova intenção clara, retorne a nova intenção.
         messages: [
           {
             role: "system",
-            content: `Você é um analisador de intenções financeiras.
+            content: `Você é um analisador de intenções financeiras INTELIGENTE.
 
 ${contextoInfo}
 
-🎯 INTENTS (ORDEM DE PRIORIDADE):
+🎯 REGRAS ABSOLUTAS (ORDEM DE PRIORIDADE):
 
-1. "registrar_entrada": RECEITA/ENTRADA - quando usuário RECEBEU dinheiro
-   - Palavras-chave: recebi, entrada, ganhei, caiu, pix recebido, salário, pagamento recebido
-   - Slots: amount, description, source
-   - NUNCA confundir entrada com gasto!
+1. 🟢 ENTRADA = "recebi", "caiu", "entrada", "ganhei", "salário", "pagamento recebido"
+   - "Recebi 200" → intent="registrar_entrada", slots={amount: 200}
+   - "Caiu 500 de pix" → intent="registrar_entrada", slots={amount: 500, source: "pix"}
+   - NUNCA perguntar se é gasto quando verbo indica entrada!
 
-2. "update_card": ATUALIZAR CARTÃO/LIMITE
-   - Palavras-chave: limite, atualiza limite, meu limite, novo limite
-   - Slots: card (nome do cartão), value (novo limite)
-   - Ex: "limite do nubank 6400" → card="nubank", value=6400
+2. 🟡 CARTÃO = "limite", "atualiza cartão", nome de banco + número
+   - "Limite do nubank 6400" → intent="update_card", slots={card: "nubank", value: 6400}
+   - "O limite foi atualizado para 5000" → intent="update_card", slots={value: 5000}
 
-3. "registrar_gasto": GASTO/DESPESA - quando usuário GASTOU dinheiro
-   - Palavras-chave: gastei, comprei, paguei, foi, custou
-   - Slots: amount, description, category, payment_method
+3. 🔴 GASTO = "gastei", "comprei", "paguei", "foi", "custou"
+   - "Gastei 50 no mercado" → intent="registrar_gasto", slots={amount: 50, description: "mercado"}
+   - "Comprei um café" → intent="registrar_gasto", slots={description: "café"}
 
-4. "cancelar_transacao": cancelar um registro anterior
-5. "view_cards": ver cartões cadastrados
-6. "consultar_resumo": resumo de gastos/quanto gastei
-7. "saudacao": oi, olá
-8. "ajuda": como funciona
-9. "confirmar": sim, pode, ok
-10. "negar": não, cancela, deixa pra lá
-11. "fornecer_slot": resposta a uma pergunta de slot
+4. ⚪ NÚMERO ISOLADO (SEM VERBO):
+   - Se há active action pendente de amount → intent="fornecer_slot", slots={amount: X}
+   - Se NÃO há active action → intent="numero_isolado", slots={amount: X}
+   - NUNCA assumir gasto ou entrada sem verbo!
 
-🔴 REGRAS CRÍTICAS:
+5. ✅ RESPOSTAS A PERGUNTAS (quando active action existe):
+   - Texto simples (ex: "café", "mercado") → intent="fornecer_slot", slots={description: "café"}
+   - Forma pagamento → intent="fornecer_slot", slots={payment_method: "pix"}
+   - Fonte entrada (pix, dinheiro) → intent="fornecer_slot", slots={source: "pix"}
 
-1. "Recebi 200" ou "Caiu 500" = intent="registrar_entrada" (NÃO É GASTO!)
-   - SEMPRE que tiver "recebi/caiu/entrada/salário" = ENTRADA
-   
-2. "Limite do Nubank 6400" = intent="update_card"
-   - SEMPRE que tiver "limite" + banco/cartão + número = UPDATE_CARD
-   - slots: { card: "nubank", value: 6400 }
+🔒 REGRA DE OURO:
+Se a mensagem TEM VERBO indicando direção do dinheiro, INFIRA automaticamente:
+- Verbos de ENTRADA: recebi, ganhei, caiu, entrou
+- Verbos de SAÍDA: gastei, paguei, comprei, custou
 
-3. "Anota um gasto" ou "Registra despesa" = intent="registrar_gasto" com slots={}
-
-4. Número sozinho (ex: "39,08"):
-   - Se há active action → intent="fornecer_slot", slots: {amount: 39.08}
-   - Se NÃO há active action → intent="numero_isolado", slots: {amount: 39.08}
-   - NÃO ASSUMIR QUE É GASTO!
-
-5. Forma pagamento (APENAS em contexto de gasto):
-   - "pix", "no pix" → payment_method: "pix"
-   - "débito", "no débito" → payment_method: "debito"
-   - "crédito", "cartão" → payment_method: "credito"
-   - "dinheiro" → payment_method: "dinheiro"
-
-6. MÚLTIPLAS AÇÕES (ex: "gastei 29 no mercado e recebi 200 no pix"):
-   - Retorne acoes_detectadas: [{intent: "registrar_gasto", slots: {amount: 29}}, {intent: "registrar_entrada", slots: {amount: 200}}]
-
-7. CATEGORIZAÇÃO (apenas para gastos):
-   café/pão/lanche/água/almoço/jantar/ifood → "alimentacao"
-   mercado/supermercado → "mercado"
-   uber/táxi/gasolina → "transporte"
-
-8. CANCELAR/NEGAR:
-   "cancela", "deixa pra lá", "não" = intent="negar"
+📊 CATEGORIZAÇÃO (gastos):
+café/pão/lanche → alimentacao
+mercado/super → mercado
+uber/táxi → transporte
 
 Responda APENAS JSON:
 {
   "intent": "string",
-  "slots": {} ou null,
+  "slots": {"amount": num, "description": "str", "payment_method": "str", "source": "str"} ou {},
   "valor": number ou null,
   "categoria": "string" ou null,
   "descricao": "string" ou null,
   "forma_pagamento": "pix"|"dinheiro"|"debito"|"credito" ou null,
-  "confianca": number,
+  "confianca": 0.0-1.0,
   "itens": [{descricao, valor}] ou null,
   "acoes_detectadas": [{intent, slots}] ou null
 }
@@ -1446,18 +1425,21 @@ async function processarJob(job: any): Promise<void> {
         const source = SOURCE_ALIASES[payload.buttonReplyId];
         
         if (source && activeAction && activeAction.intent === "registrar_entrada") {
-          const updatedSlots = { ...activeAction.slots, source };
-          const missing = getMissingSlots("registrar_entrada", updatedSlots);
+          // MERGE: preservar slots existentes, adicionar source
+          const updatedSlots: Record<string, any> = { ...activeAction.slots, source };
           
-          if (missing.length === 0) {
-            const resultado = await registrarEntrada(userId, updatedSlots, eventoId, activeAction.id);
-            await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          console.log(`📊 [SRC BUTTON] Slots antes: ${JSON.stringify(activeAction.slots)} | Depois: ${JSON.stringify(updatedSlots)}`);
+          
+          // Verificar se temos amount (obrigatório)
+          if (!updatedSlots.amount) {
+            await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: "amount" });
+            await sendMessage(payload.phoneNumber, SLOT_PROMPTS.amount_entrada.text, payload.messageSource);
             return;
           }
           
-          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
-          const prompt = SLOT_PROMPTS[missing[0]];
-          await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
+          // Temos tudo → registrar!
+          const resultado = await registrarEntrada(userId, updatedSlots, eventoId, activeAction.id);
+          await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
           return;
         }
       }
@@ -2025,45 +2007,70 @@ async function processarJob(job: any): Promise<void> {
     // 💰 REGISTRAR ENTRADA
     // ========================================================================
     if (interpretacao.intent === "registrar_entrada") {
-      let slots: Record<string, any> = interpretacao.slots || {};
+      let slots: Record<string, any> = {};
       
+      // Primeiro: pegar slots do nível superior da interpretação (IA já extraiu)
       if (interpretacao.valor) slots.amount = interpretacao.valor;
       if (interpretacao.descricao) slots.description = interpretacao.descricao;
+      if (interpretacao.slots?.amount) slots.amount = interpretacao.slots.amount;
+      if (interpretacao.slots?.source) slots.source = interpretacao.slots.source;
+      if (interpretacao.slots?.description) slots.description = interpretacao.slots.description;
       
-      // Se há action ativa de entrada, fazer merge
+      // Depois: fazer merge com action ativa (se existir) - NÃO sobrescrever slots já preenchidos
       if (activeAction && activeAction.intent === "registrar_entrada") {
-        slots = { ...activeAction.slots, ...slots };
+        // Merge: slots novos têm prioridade, mas não apagam slots existentes
+        slots = { 
+          ...activeAction.slots, // slots existentes
+          ...Object.fromEntries(Object.entries(slots).filter(([_, v]) => v != null)) // novos não-nulos
+        };
         
-        if (activeAction.pending_slot === "description" && !slots.description) {
+        // Se estava esperando description e recebeu texto livre
+        if (activeAction.pending_slot === "description" && !slots.description && conteudoProcessado) {
           slots.description = conteudoProcessado;
+        }
+        
+        // Se estava esperando source e recebeu texto
+        if (activeAction.pending_slot === "source") {
+          const sourceNorm = SOURCE_ALIASES[normalizeText(conteudoProcessado)];
+          if (sourceNorm) slots.source = sourceNorm;
         }
       }
       
-      const missing = getMissingSlots("registrar_entrada", slots);
+      console.log(`📊 [ENTRADA SLOTS] ${JSON.stringify(slots)}`);
       
-      if (missing.length === 0) {
-        const actionId = activeAction?.intent === "registrar_entrada" ? activeAction.id : undefined;
-        const resultado = await registrarEntrada(userId, slots, eventoId, actionId);
-        await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+      // Verificar se amount está presente (OBRIGATÓRIO)
+      if (!slots.amount) {
+        // Não temos valor → perguntar
+        if (activeAction && activeAction.intent === "registrar_entrada") {
+          await updateAction(activeAction.id, { pending_slot: "amount" });
+        } else {
+          await createAction(userId, "slot_filling", "registrar_entrada", slots, "amount", payload.messageId);
+        }
+        await sendMessage(payload.phoneNumber, SLOT_PROMPTS.amount_entrada.text, payload.messageSource);
         return;
       }
       
-      const nextSlot = missing[0];
-      
-      if (activeAction && activeAction.intent === "registrar_entrada") {
-        await updateAction(activeAction.id, { slots, pending_slot: nextSlot });
-      } else {
-        await createAction(userId, "slot_filling", "registrar_entrada", slots, nextSlot, payload.messageId);
+      // Temos amount! Perguntar source se não tiver (OPCIONAL mas perguntamos uma vez)
+      if (!slots.source) {
+        if (activeAction && activeAction.intent === "registrar_entrada") {
+          await updateAction(activeAction.id, { slots, pending_slot: "source" });
+        } else {
+          await createAction(userId, "slot_filling", "registrar_entrada", slots, "source", payload.messageId);
+        }
+        
+        await sendButtons(
+          payload.phoneNumber, 
+          `💰 R$ ${slots.amount?.toFixed(2)}\n\nComo você recebeu?`,
+          SLOT_PROMPTS.source.buttons!,
+          payload.messageSource
+        );
+        return;
       }
       
-      const promptKey = nextSlot === "description" ? "description_entrada" : nextSlot;
-      const prompt = SLOT_PROMPTS[promptKey] || SLOT_PROMPTS[nextSlot];
-      
-      if (prompt?.useButtons && prompt.buttons) {
-        await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
-      } else {
-        await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
-      }
+      // Temos tudo → registrar!
+      const actionId = activeAction?.intent === "registrar_entrada" ? activeAction.id : undefined;
+      const resultado = await registrarEntrada(userId, slots, eventoId, actionId);
+      await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
       return;
     }
     
