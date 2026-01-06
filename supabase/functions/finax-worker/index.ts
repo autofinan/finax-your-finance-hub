@@ -105,8 +105,8 @@ interface ActiveAction {
 
 const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[] }> = {
   registrar_gasto: { required: ["amount", "payment_method"], optional: ["description", "category", "card"] },
-  registrar_entrada: { required: ["amount"], optional: ["description", "category"] },
-  update_card: { required: ["card", "field", "value"], optional: [] },
+  registrar_entrada: { required: ["amount"], optional: ["description", "source"] },
+  update_card: { required: ["card", "value"], optional: ["field"] },
   add_card: { required: ["card_name", "limit", "due_day"], optional: ["closing_day"] },
   remove_card: { required: ["card"], optional: [] },
   criar_parcelamento: { required: ["amount", "installments", "description"], optional: ["category", "card"] },
@@ -115,7 +115,14 @@ const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[]
 
 const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons?: Array<{ id: string; title: string }> }> = {
   amount: { text: "Qual foi o valor? 💸" },
+  amount_entrada: { text: "Qual foi o valor que entrou? 💰" },
   description: { text: "O que foi essa compra?" },
+  description_entrada: { text: "De onde veio esse dinheiro?" },
+  source: { text: "Como você recebeu?", useButtons: true, buttons: [
+    { id: "src_pix", title: "📱 Pix" },
+    { id: "src_dinheiro", title: "💵 Dinheiro" },
+    { id: "src_transf", title: "🏦 Transferência" }
+  ]},
   category: { text: "Qual categoria?" },
   payment_method: { 
     text: "Como você pagou?", 
@@ -132,7 +139,7 @@ const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons
   due_day: { text: "Qual o dia de vencimento? (1-31)" },
   closing_day: { text: "Qual o dia de fechamento?" },
   field: { text: "O que quer atualizar? (limite, vencimento ou nome)" },
-  value: { text: "Qual o novo valor?" },
+  value: { text: "Qual o novo valor do limite?" },
   installments: { text: "Em quantas vezes?" },
   recurrence_type: { text: "É mensal, semanal ou anual?" },
 };
@@ -143,6 +150,62 @@ const PAYMENT_ALIASES: Record<string, string> = {
   "dinheiro": "dinheiro", "cash": "dinheiro",
   "pay_pix": "pix", "pay_debito": "debito", "pay_credito": "credito", "pay_dinheiro": "dinheiro"
 };
+
+const SOURCE_ALIASES: Record<string, string> = {
+  "pix": "pix", "dinheiro": "dinheiro", "transferencia": "transferencia",
+  "src_pix": "pix", "src_dinheiro": "dinheiro", "src_transf": "transferencia"
+};
+
+// ============================================================================
+// 🎯 DOMÍNIOS - Classificação por palavras-chave (ANTES da IA)
+// ============================================================================
+
+const DOMAIN_KEYWORDS = {
+  entrada: ["recebi", "recebimento", "entrada", "ganhei", "caiu", "pix recebido", "salario", "salário", "pagamento recebido", "receita"],
+  cartao: ["limite", "cartão", "cartao", "credito", "crédito", "nubank", "itau", "itaú", "bradesco", "santander", "c6", "inter", "picpay"],
+  cancelar: ["cancela", "cancelar", "desfaz", "desfazer", "remove", "remover"]
+};
+
+function detectDomainFromText(text: string): "entrada" | "cartao" | "gasto" | "cancelar" | null {
+  const normalized = normalizeText(text);
+  
+  // Verificar entradas (PRIORIDADE ALTA)
+  if (DOMAIN_KEYWORDS.entrada.some(kw => normalized.includes(kw))) {
+    return "entrada";
+  }
+  
+  // Verificar cartão/limite
+  if (DOMAIN_KEYWORDS.cartao.some(kw => normalized.includes(kw))) {
+    // Verificar se é gasto no crédito vs atualização de cartão
+    if (normalized.includes("limite") || normalized.includes("atualiz") || normalized.includes("alter")) {
+      return "cartao";
+    }
+  }
+  
+  // Verificar cancelamento
+  if (DOMAIN_KEYWORDS.cancelar.some(kw => normalized.includes(kw))) {
+    return "cancelar";
+  }
+  
+  return null; // Não detectado por keywords, deixar para IA
+}
+
+function shouldAutoDiscardContext(activeAction: ActiveAction | null, newDomain: string | null): boolean {
+  if (!activeAction || !newDomain) return false;
+  
+  const currentDomain = activeAction.intent.includes("entrada") ? "entrada" 
+    : activeAction.intent.includes("card") ? "cartao"
+    : activeAction.intent.includes("gasto") ? "gasto"
+    : null;
+  
+  // Se domínios são claramente diferentes, descartar
+  if (currentDomain && newDomain !== currentDomain && newDomain !== "cancelar") {
+    console.log(`🔄 [CONTEXT] Auto-descarte: ${currentDomain} → ${newDomain}`);
+    return true;
+  }
+  
+  return false;
+}
 
 // ============================================================================
 // 📊 LOGGING ESTRUTURADO
@@ -819,47 +882,62 @@ Se a mensagem é uma nova intenção clara, retorne a nova intenção.
 
 ${contextoInfo}
 
-🎯 INTENTS:
-- "registrar_gasto": gasto/despesa (slots: amount, description, category, payment_method)
-- "registrar_entrada": receita (slots: amount, description)
-- "cancelar_transacao": cancelar gasto
-- "update_card": atualizar cartão (slots: card, field, value)
-- "add_card": adicionar cartão
-- "view_cards": ver cartões
-- "consultar_resumo": resumo/quanto gastei
-- "saudacao": oi, olá
-- "ajuda": como funciona
-- "confirmar": sim, pode, ok
-- "negar": não, cancela, deixa pra lá
-- "fornecer_slot": resposta a uma pergunta de slot
+🎯 INTENTS (ORDEM DE PRIORIDADE):
+
+1. "registrar_entrada": RECEITA/ENTRADA - quando usuário RECEBEU dinheiro
+   - Palavras-chave: recebi, entrada, ganhei, caiu, pix recebido, salário, pagamento recebido
+   - Slots: amount, description, source
+   - NUNCA confundir entrada com gasto!
+
+2. "update_card": ATUALIZAR CARTÃO/LIMITE
+   - Palavras-chave: limite, atualiza limite, meu limite, novo limite
+   - Slots: card (nome do cartão), value (novo limite)
+   - Ex: "limite do nubank 6400" → card="nubank", value=6400
+
+3. "registrar_gasto": GASTO/DESPESA - quando usuário GASTOU dinheiro
+   - Palavras-chave: gastei, comprei, paguei, foi, custou
+   - Slots: amount, description, category, payment_method
+
+4. "cancelar_transacao": cancelar um registro anterior
+5. "view_cards": ver cartões cadastrados
+6. "consultar_resumo": resumo de gastos/quanto gastei
+7. "saudacao": oi, olá
+8. "ajuda": como funciona
+9. "confirmar": sim, pode, ok
+10. "negar": não, cancela, deixa pra lá
+11. "fornecer_slot": resposta a uma pergunta de slot
 
 🔴 REGRAS CRÍTICAS:
 
-1. "Anota um gasto" ou "Registra despesa" = intent="registrar_gasto" com slots={}
+1. "Recebi 200" ou "Caiu 500" = intent="registrar_entrada" (NÃO É GASTO!)
+   - SEMPRE que tiver "recebi/caiu/entrada/salário" = ENTRADA
+   
+2. "Limite do Nubank 6400" = intent="update_card"
+   - SEMPRE que tiver "limite" + banco/cartão + número = UPDATE_CARD
+   - slots: { card: "nubank", value: 6400 }
 
-2. Número sozinho (ex: "39,08"):
-   - Se há active action esperando amount → intent="fornecer_slot", slots: {amount: 39.08}
-   - Se não há active action → intent="fornecer_slot", slots: {amount: 39.08}
+3. "Anota um gasto" ou "Registra despesa" = intent="registrar_gasto" com slots={}
 
-3. Forma pagamento:
+4. Número sozinho (ex: "39,08"):
+   - Se há active action → intent="fornecer_slot", slots: {amount: 39.08}
+   - Se NÃO há active action → intent="numero_isolado", slots: {amount: 39.08}
+   - NÃO ASSUMIR QUE É GASTO!
+
+5. Forma pagamento (APENAS em contexto de gasto):
    - "pix", "no pix" → payment_method: "pix"
    - "débito", "no débito" → payment_method: "debito"
    - "crédito", "cartão" → payment_method: "credito"
    - "dinheiro" → payment_method: "dinheiro"
 
-4. MÚLTIPLOS GASTOS (ex: "lanche 7 e refri 5"):
-   Retorne itens: [{descricao, valor}, ...]
+6. MÚLTIPLAS AÇÕES (ex: "gastei 29 no mercado e recebi 200 no pix"):
+   - Retorne acoes_detectadas: [{intent: "registrar_gasto", slots: {amount: 29}}, {intent: "registrar_entrada", slots: {amount: 200}}]
 
-5. CATEGORIZAÇÃO:
+7. CATEGORIZAÇÃO (apenas para gastos):
    café/pão/lanche/água/almoço/jantar/ifood → "alimentacao"
    mercado/supermercado → "mercado"
    uber/táxi/gasolina → "transporte"
-   farmácia/remédio → "saude"
-   cinema/netflix → "lazer"
-   aluguel/luz/internet → "moradia"
-   roupa/loja → "compras"
 
-6. CANCELAR/NEGAR:
+8. CANCELAR/NEGAR:
    "cancela", "deixa pra lá", "não" = intent="negar"
 
 Responda APENAS JSON:
@@ -1056,6 +1134,66 @@ async function registrarTransacao(
       `💳 ${formaPagamento}\n` +
       `📅 ${dataFormatada} às ${horaFormatada}\n\n` +
       `_Se quiser corrigir, responda com "corrigir"._`
+  };
+}
+
+// ============================================================================
+// 💰 REGISTRAR ENTRADA
+// ============================================================================
+
+async function registrarEntrada(
+  userId: string,
+  slots: Record<string, any>,
+  eventoId: string | null,
+  actionId?: string
+): Promise<{ sucesso: boolean; mensagem: string; transacaoId?: string }> {
+  
+  const valor = slots.amount;
+  const descricao = slots.description || "";
+  const source = slots.source || "outro";
+  
+  const agora = new Date();
+  
+  const { data: transacao, error } = await supabase.from("transacoes").insert({
+    usuario_id: userId,
+    valor: valor,
+    categoria: "entrada",
+    tipo: "entrada",
+    descricao: descricao,
+    observacao: descricao,
+    data: agora.toISOString(),
+    origem: "whatsapp",
+    forma_pagamento: source,
+    status: "confirmada"
+  }).select("id").single();
+  
+  if (error) {
+    console.error("❌ [ENTRADA] Erro:", error);
+    return { sucesso: false, mensagem: "Algo deu errado 😕\n\nTenta de novo?" };
+  }
+  
+  if (actionId) await closeAction(actionId, transacao.id);
+  
+  await supabase.from("finax_logs").insert({
+    user_id: userId,
+    action_type: "registrar_entrada",
+    entity_type: "transacao",
+    entity_id: transacao.id,
+    new_data: slots
+  });
+  
+  const dataFormatada = agora.toLocaleDateString("pt-BR");
+  const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  
+  console.log(`✅ [ENTRADA] Sucesso: ${transacao.id}`);
+  
+  return {
+    sucesso: true,
+    transacaoId: transacao.id,
+    mensagem: `✅ *Entrada registrada!*\n\n` +
+      `💰 *+R$ ${valor?.toFixed(2)}*\n` +
+      (descricao ? `📝 ${descricao}\n` : "") +
+      `📅 ${dataFormatada} às ${horaFormatada}`
   };
 }
 
@@ -1276,6 +1414,53 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     if (payload.buttonReplyId) {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
+      
+      // NÚMERO ISOLADO - GASTO
+      if (payload.buttonReplyId === "num_gasto") {
+        if (activeAction && activeAction.intent === "numero_isolado") {
+          const amount = activeAction.slots.amount;
+          await closeAction(activeAction.id);
+          
+          // Criar nova action para gasto
+          await createAction(userId, "slot_filling", "registrar_gasto", { amount }, "description");
+          await sendMessage(payload.phoneNumber, "Esse valor foi gasto com o quê?", payload.messageSource);
+          return;
+        }
+      }
+      
+      // NÚMERO ISOLADO - ENTRADA
+      if (payload.buttonReplyId === "num_entrada") {
+        if (activeAction && activeAction.intent === "numero_isolado") {
+          const amount = activeAction.slots.amount;
+          await closeAction(activeAction.id);
+          
+          // Criar nova action para entrada
+          await createAction(userId, "slot_filling", "registrar_entrada", { amount }, "description");
+          await sendMessage(payload.phoneNumber, "De onde veio esse dinheiro?", payload.messageSource);
+          return;
+        }
+      }
+      
+      // SOURCE DE ENTRADA (Pix, Dinheiro, Transferência)
+      if (payload.buttonReplyId.startsWith("src_")) {
+        const source = SOURCE_ALIASES[payload.buttonReplyId];
+        
+        if (source && activeAction && activeAction.intent === "registrar_entrada") {
+          const updatedSlots = { ...activeAction.slots, source };
+          const missing = getMissingSlots("registrar_entrada", updatedSlots);
+          
+          if (missing.length === 0) {
+            const resultado = await registrarEntrada(userId, updatedSlots, eventoId, activeAction.id);
+            await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+            return;
+          }
+          
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
+          const prompt = SLOT_PROMPTS[missing[0]];
+          await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
+          return;
+        }
+      }
       
       // FORMA DE PAGAMENTO
       if (payload.buttonReplyId.startsWith("pay_")) {
@@ -1599,7 +1784,7 @@ async function processarJob(job: any): Promise<void> {
         details: { value: numValue, pending_slot: activeAction?.pending_slot }
       });
       
-      // Se há action ativa de slot_filling esperando amount
+      // Se há action ativa de slot_filling esperando amount OU valor não preenchido
       if (activeAction && activeAction.type === "slot_filling" && 
           (activeAction.pending_slot === "amount" || !activeAction.slots.amount)) {
         
@@ -1607,34 +1792,71 @@ async function processarJob(job: any): Promise<void> {
         const missing = getMissingSlots(activeAction.intent, updatedSlots);
         
         if (missing.length === 0) {
-          const resultado = await registrarTransacao(userId, updatedSlots, eventoId, activeAction.id);
-          await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          // Verificar se é gasto ou entrada
+          if (activeAction.intent === "registrar_entrada") {
+            const resultado = await registrarEntrada(userId, updatedSlots, eventoId, activeAction.id);
+            await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          } else {
+            const resultado = await registrarTransacao(userId, updatedSlots, eventoId, activeAction.id);
+            await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+          }
           return;
         }
         
         await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
         
-        const prompt = SLOT_PROMPTS[missing[0]];
-        if (prompt.useButtons && prompt.buttons) {
+        // Usar prompt específico para entrada ou gasto
+        const promptKey = activeAction.intent === "registrar_entrada" && missing[0] === "description" 
+          ? "description_entrada" 
+          : missing[0];
+        const prompt = SLOT_PROMPTS[promptKey] || SLOT_PROMPTS[missing[0]];
+        
+        if (prompt?.useButtons && prompt.buttons) {
           await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
         } else {
-          await sendMessage(payload.phoneNumber, prompt.text, payload.messageSource);
+          await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
         }
         return;
       }
       
-      // Número sem contexto → perguntar o que foi
-      await createAction(userId, "slot_filling", "registrar_gasto", { amount: numValue }, "description");
-      await sendMessage(payload.phoneNumber, "Esse valor foi gasto com o quê?", payload.messageSource);
+      // Número sem contexto → PERGUNTAR SE É GASTO OU ENTRADA (NÃO ASSUMIR!)
+      await sendButtons(
+        payload.phoneNumber,
+        `💰 R$ ${numValue?.toFixed(2)}\n\nEsse valor foi um gasto ou uma entrada?`,
+        [
+          { id: "num_gasto", title: "💸 Gasto" },
+          { id: "num_entrada", title: "💰 Entrada" }
+        ],
+        payload.messageSource
+      );
+      
+      // Criar action aguardando escolha
+      await createAction(userId, "slot_filling", "numero_isolado", { amount: numValue }, "type_choice");
       
       await supabase.from("historico_conversas").insert({
         phone_number: payload.phoneNumber,
         user_id: userId,
         user_message: conteudoProcessado,
-        ai_response: "Esse valor foi gasto com o quê?",
+        ai_response: "Esse valor foi um gasto ou uma entrada?",
         tipo: "slot_filling"
       });
       return;
+    }
+    
+    // ========================================================================
+    // 🎯 DETECÇÃO DE DOMÍNIO (ANTES DA IA) - Auto-descarte de contexto
+    // ========================================================================
+    const detectedDomain = detectDomainFromText(conteudoProcessado);
+    
+    if (detectedDomain) {
+      console.log(`🎯 [DOMAIN] Detectado: ${detectedDomain} por keywords`);
+      
+      // Se há contexto ativo de domínio diferente, descartar automaticamente
+      if (shouldAutoDiscardContext(activeAction, detectedDomain)) {
+        console.log(`🗑️ [CONTEXT] Auto-descartando contexto de ${activeAction?.intent} → ${detectedDomain}`);
+        await cancelAction(userId);
+        // Não podemos reatribuir const, mas cancelAction já limpa no banco
+      }
     }
     
     // ========================================================================
@@ -1796,6 +2018,52 @@ async function processarJob(job: any): Promise<void> {
         ai_response: prompt.text,
         tipo: "slot_filling"
       });
+      return;
+    }
+    
+    // ========================================================================
+    // 💰 REGISTRAR ENTRADA
+    // ========================================================================
+    if (interpretacao.intent === "registrar_entrada") {
+      let slots: Record<string, any> = interpretacao.slots || {};
+      
+      if (interpretacao.valor) slots.amount = interpretacao.valor;
+      if (interpretacao.descricao) slots.description = interpretacao.descricao;
+      
+      // Se há action ativa de entrada, fazer merge
+      if (activeAction && activeAction.intent === "registrar_entrada") {
+        slots = { ...activeAction.slots, ...slots };
+        
+        if (activeAction.pending_slot === "description" && !slots.description) {
+          slots.description = conteudoProcessado;
+        }
+      }
+      
+      const missing = getMissingSlots("registrar_entrada", slots);
+      
+      if (missing.length === 0) {
+        const actionId = activeAction?.intent === "registrar_entrada" ? activeAction.id : undefined;
+        const resultado = await registrarEntrada(userId, slots, eventoId, actionId);
+        await sendMessage(payload.phoneNumber, resultado.mensagem, payload.messageSource);
+        return;
+      }
+      
+      const nextSlot = missing[0];
+      
+      if (activeAction && activeAction.intent === "registrar_entrada") {
+        await updateAction(activeAction.id, { slots, pending_slot: nextSlot });
+      } else {
+        await createAction(userId, "slot_filling", "registrar_entrada", slots, nextSlot, payload.messageId);
+      }
+      
+      const promptKey = nextSlot === "description" ? "description_entrada" : nextSlot;
+      const prompt = SLOT_PROMPTS[promptKey] || SLOT_PROMPTS[nextSlot];
+      
+      if (prompt?.useButtons && prompt.buttons) {
+        await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+      } else {
+        await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
+      }
       return;
     }
     
