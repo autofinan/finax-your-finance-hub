@@ -178,119 +178,216 @@ function logDecision(data: { messageId: string; decision: string; details?: any 
 }
 
 // ============================================================================
-// 🧠 DECISION ENGINE - CLASSIFICAÇÃO SEMÂNTICA
+// 🧠 DECISION ENGINE - ARQUITETURA CORRIGIDA
+// ============================================================================
+// REGRAS DE OURO:
+// 1. Heurística NÃO decide - apenas ESTIMA confiança
+// 2. Se confiança >= 0.90 E slots completos → EXECUTA DIRETO (sem perguntas!)
+// 3. IA é fallback, não muleta
+// 4. Fluxos legados são BLOQUEADOS quando decisão semântica foi tomada
 // ============================================================================
 
-function classifySemanticIntent(message: string): { actionType: ActionType; confidence: number; slots: ExtractedSlots } | null {
-  const normalized = normalizeText(message);
-  
-  // 🟢 ENTRADA - Prioridade ALTA
-  const incomePatterns = ["recebi", "recebimento", "entrada", "ganhei", "caiu", "pix recebido", "salario", "salário", "pagamento recebido"];
-  if (incomePatterns.some(p => normalized.includes(p))) {
-    const amount = extractAmount(message);
-    const source = extractSource(normalized);
-    return { actionType: "income", confidence: 0.95, slots: { amount, source } };
-  }
-  
-  // 🟡 CARTÃO - Prioridade ALTA  
-  const cardPatterns = ["limite", "atualiza cartao", "atualiza cartão", "atualizar limite"];
-  if (cardPatterns.some(p => normalized.includes(p))) {
-    const amount = extractAmount(message);
-    const card = extractCardName(normalized);
-    return { actionType: "card_event", confidence: 0.9, slots: { value: amount, card } };
-  }
-  
-  // 🔴 GASTO - Padrões claros
-  const expensePatterns = ["gastei", "comprei", "paguei", "custou", "foi"];
-  if (expensePatterns.some(p => normalized.includes(p))) {
-    const amount = extractAmount(message);
-    const paymentMethod = extractPaymentMethod(normalized);
-    const description = extractDescription(message);
-    return { actionType: "expense", confidence: 0.9, slots: { amount, payment_method: paymentMethod, description } };
-  }
-  
-  // 🗑️ CANCELAR
-  const cancelPatterns = ["cancela", "cancelar", "desfaz", "desfazer", "remove", "apaga"];
-  if (cancelPatterns.some(p => normalized.includes(p))) {
-    return { actionType: "cancel", confidence: 0.9, slots: {} };
-  }
-  
-  // 📊 CONSULTA
-  const queryPatterns = ["quanto gastei", "resumo", "saldo", "extrato", "quanto tenho"];
-  if (queryPatterns.some(p => normalized.includes(p))) {
-    return { actionType: "query", confidence: 0.9, slots: {} };
-  }
-  
-  return null; // Não classificado por keywords
+interface SemanticResult {
+  actionType: ActionType;
+  confidence: number;
+  slots: ExtractedSlots;
+  reason: string;
+  canExecuteDirectly: boolean; // NOVO: indica se pode executar sem perguntas
 }
 
-function extractAmount(text: string): number | undefined {
-  const patterns = [
+const SEMANTIC_PATTERNS = {
+  income: {
+    verbs: ["recebi", "recebido", "ganhei", "caiu", "entrou", "entrada de"],
+    contexts: ["salario", "salário", "pagamento recebido", "pix recebido"],
+    weight: 0.95
+  },
+  card_event: {
+    verbs: ["limite"],
+    contexts: [],
+    weight: 0.92
+  },
+  expense: {
+    verbs: ["gastei", "comprei", "paguei", "custou"],
+    contexts: [],
+    weight: 0.90
+  },
+  cancel: {
+    verbs: ["cancela", "cancelar", "desfaz", "apaga"],
+    contexts: ["deixa pra la", "esquece", "nao quero"],
+    weight: 0.95
+  },
+  query: {
+    verbs: ["quanto gastei", "resumo", "saldo", "quanto tenho"],
+    contexts: [],
+    weight: 0.92
+  }
+};
+
+function classifySemanticHeuristic(message: string): SemanticResult {
+  const normalized = normalizeText(message);
+  const original = message;
+  
+  // Extrair slots básicos primeiro
+  const slots: ExtractedSlots = {};
+  
+  // 1. EXTRAIR VALOR
+  const valuePatterns = [
     /r\$\s*([\d.,]+)/i,
     /([\d.,]+)\s*(?:reais|real)/i,
-    /(?:gastei|recebi|paguei|comprei|custou|foi|caiu|entrada de|limite)\s*([\d.,]+)/i,
-    /([\d.,]+)/
+    /(?:recebi|gastei|paguei|comprei|caiu|entrada de|limite)\s*([\d.,]+)/i,
   ];
-  
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
+  for (const pattern of valuePatterns) {
+    const match = original.match(pattern);
     if (match) {
-      const value = parseFloat(match[1].replace(",", "."));
-      if (!isNaN(value) && value > 0) return value;
+      slots.amount = parseFloat(match[1].replace(",", "."));
+      break;
     }
   }
-  return undefined;
-}
-
-function extractPaymentMethod(text: string): string | undefined {
-  const normalized = normalizeText(text);
-  if (normalized.includes("pix")) return "pix";
-  if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
-  if (normalized.includes("credito") || normalized.includes("crédito") || normalized.includes("cartao")) return "credito";
-  if (normalized.includes("dinheiro") || normalized.includes("cash")) return "dinheiro";
-  return undefined;
-}
-
-function extractSource(text: string): string | undefined {
-  if (text.includes("pix")) return "pix";
-  if (text.includes("dinheiro")) return "dinheiro";
-  if (text.includes("transferencia") || text.includes("transf")) return "transferencia";
-  return undefined;
-}
-
-function extractCardName(text: string): string | undefined {
-  const banks = ["nubank", "itau", "itaú", "bradesco", "santander", "c6", "inter", "picpay", "next", "original"];
-  for (const bank of banks) {
-    if (text.includes(bank)) return bank;
+  // Fallback: qualquer número na mensagem
+  if (!slots.amount) {
+    const numMatch = original.match(/(\d+[.,]?\d*)/);
+    if (numMatch) slots.amount = parseFloat(numMatch[1].replace(",", "."));
   }
-  return undefined;
-}
-
-function extractDescription(text: string): string | undefined {
-  // Remove patterns conhecidos para extrair descrição
-  const cleaned = text
-    .replace(/gastei|comprei|paguei|r\$|reais|real|no|na|em|com|de|pix|débito|crédito|cartão|dinheiro/gi, "")
+  
+  // 2. EXTRAIR FONTE/PAGAMENTO
+  if (normalized.includes("pix")) {
+    slots.source = "pix";
+    slots.payment_method = "pix";
+  } else if (normalized.includes("dinheiro")) {
+    slots.source = "dinheiro";
+    slots.payment_method = "dinheiro";
+  } else if (normalized.includes("transferencia") || normalized.includes("transf")) {
+    slots.source = "transferencia";
+  } else if (normalized.includes("debito") || normalized.includes("débito")) {
+    slots.payment_method = "debito";
+  } else if (normalized.includes("credito") || normalized.includes("crédito") || normalized.includes("cartao") || normalized.includes("cartão")) {
+    slots.payment_method = "credito";
+  }
+  
+  // 3. EXTRAIR DESCRIÇÃO (texto restante)
+  let desc = original
+    .replace(/recebi|gastei|paguei|comprei|caiu|r\$|reais|real|no|na|em|de|pix|debito|credito|dinheiro|cartao|cartão/gi, "")
     .replace(/[\d.,]+/g, "")
     .trim();
+  if (desc.length > 2) slots.description = desc;
   
-  return cleaned.length > 2 ? cleaned : undefined;
+  // 4. EXTRAIR CARTÃO (para card_event)
+  const banks = ["nubank", "itau", "itaú", "bradesco", "santander", "c6", "inter", "picpay", "next"];
+  for (const bank of banks) {
+    if (normalized.includes(bank)) {
+      slots.card = bank;
+      break;
+    }
+  }
+  if (slots.amount && normalized.includes("limite")) {
+    slots.value = slots.amount;
+  }
+  
+  // ========================================================================
+  // CLASSIFICAÇÃO POR PADRÕES (HEURÍSTICA - NÃO DECISÃO!)
+  // ========================================================================
+  
+  // 🟢 INCOME - Prioridade MÁXIMA
+  for (const verb of SEMANTIC_PATTERNS.income.verbs) {
+    if (normalized.includes(verb)) {
+      // Verificar se pode executar diretamente (tem amount)
+      const canExecute = !!slots.amount;
+      return {
+        actionType: "income",
+        confidence: SEMANTIC_PATTERNS.income.weight,
+        slots,
+        reason: `Verbo de entrada: "${verb}"`,
+        canExecuteDirectly: canExecute
+      };
+    }
+  }
+  
+  // 🟡 CARD_EVENT
+  if (normalized.includes("limite")) {
+    const canExecute = !!(slots.card && slots.value);
+    return {
+      actionType: "card_event",
+      confidence: SEMANTIC_PATTERNS.card_event.weight,
+      slots,
+      reason: `Atualização de limite detectada`,
+      canExecuteDirectly: canExecute
+    };
+  }
+  
+  // 🔴 EXPENSE
+  for (const verb of SEMANTIC_PATTERNS.expense.verbs) {
+    if (normalized.includes(verb)) {
+      const canExecute = !!(slots.amount && slots.payment_method);
+      return {
+        actionType: "expense",
+        confidence: SEMANTIC_PATTERNS.expense.weight,
+        slots,
+        reason: `Verbo de gasto: "${verb}"`,
+        canExecuteDirectly: canExecute
+      };
+    }
+  }
+  
+  // 🗑️ CANCEL
+  for (const verb of SEMANTIC_PATTERNS.cancel.verbs) {
+    if (normalized.includes(verb)) {
+      return {
+        actionType: "cancel",
+        confidence: SEMANTIC_PATTERNS.cancel.weight,
+        slots,
+        reason: `Cancelamento: "${verb}"`,
+        canExecuteDirectly: true
+      };
+    }
+  }
+  for (const ctx of SEMANTIC_PATTERNS.cancel.contexts) {
+    if (normalized.includes(ctx)) {
+      return {
+        actionType: "cancel",
+        confidence: 0.9,
+        slots,
+        reason: `Contexto de cancelamento: "${ctx}"`,
+        canExecuteDirectly: true
+      };
+    }
+  }
+  
+  // 📊 QUERY
+  for (const verb of SEMANTIC_PATTERNS.query.verbs) {
+    if (normalized.includes(verb)) {
+      return {
+        actionType: "query",
+        confidence: SEMANTIC_PATTERNS.query.weight,
+        slots,
+        reason: `Consulta: "${verb}"`,
+        canExecuteDirectly: true
+      };
+    }
+  }
+  
+  // ❓ UNKNOWN
+  return {
+    actionType: "unknown",
+    confidence: 0.2,
+    slots,
+    reason: "Não classificado por heurística",
+    canExecuteDirectly: false
+  };
 }
 
 async function callAIForDecision(
   message: string, 
   context: { hasActiveAction: boolean; activeActionType?: string; activeActionSlots?: Record<string, any>; pendingSlot?: string | null },
   history?: string
-): Promise<DecisionOutput> {
+): Promise<SemanticResult> {
   try {
     let contextInfo = "";
     if (context.hasActiveAction) {
       contextInfo = `
 CONTEXTO ATIVO:
 - Tipo: ${context.activeActionType}
-- Slots preenchidos: ${JSON.stringify(context.activeActionSlots)}
+- Slots: ${JSON.stringify(context.activeActionSlots)}
 - Slot pendente: ${context.pendingSlot || "nenhum"}
-
-Se a mensagem responde ao slot pendente, extraia o valor.
 `;
     }
 
@@ -305,42 +402,25 @@ Se a mensagem responde ao slot pendente, extraia o valor.
         messages: [
           {
             role: "system",
-            content: `Você é o motor de decisão do Finax, um assistente financeiro inteligente.
+            content: `Você é o Decision Engine do Finax. Classifique e extraia TUDO da mensagem.
 
 ${contextInfo}
 
-🎯 SUA TAREFA:
-Classifique a mensagem do usuário e extraia informações.
-
-📋 TIPOS DE AÇÃO (escolha UM):
-- expense: gasto/compra/pagamento
-- income: entrada/recebimento de dinheiro
-- card_event: atualização de cartão/limite
-- cancel: cancelar transação
-- query: consulta/resumo
-- control: saudação, ajuda, negação
-- unknown: não identificado
-
 🔒 REGRAS ABSOLUTAS:
-1. "Recebi X" ou "Caiu X" = SEMPRE income (NUNCA expense)
-2. "Limite" + banco/valor = SEMPRE card_event (NUNCA expense)  
+1. "Recebi X" / "Caiu X" / "Entrada de X" = SEMPRE income
+2. "Limite do cartão" = SEMPRE card_event  
 3. "Gastei/Comprei/Paguei X" = expense
-4. Número isolado SEM verbo e SEM contexto = unknown (perguntar)
-5. Se há contexto ativo de income e recebe valor → preencher slot de income
+4. Se há valor + verbo + meio (pix/dinheiro) → EXTRAIA TUDO, shouldExecute=true
+5. NUNCA retorne shouldAsk=true se todos os dados estão na mensagem
 
 Responda APENAS JSON:
 {
-  "actionType": "expense|income|card_event|cancel|query|control|unknown",
+  "actionType": "expense|income|card_event|cancel|query|unknown",
   "confidence": 0.0-1.0,
-  "reasoning": "explicação curta",
-  "slots": {"amount": num, "description": "str", "payment_method": "str", "source": "str"},
-  "shouldExecute": true/false,
-  "shouldAsk": true/false,
-  "question": "pergunta se shouldAsk=true",
-  "buttons": [{"id": "x", "title": "Y"}] ou null
-}
-
-${history ? `HISTÓRICO:\n${history}` : ""}`
+  "slots": {"amount": num, "description": "str", "payment_method": "str", "source": "str", "card": "str", "value": num},
+  "shouldExecute": true se tem tudo necessário,
+  "reasoning": "explicação"
+}`
           },
           { role: "user", content: message }
         ],
@@ -352,31 +432,23 @@ ${history ? `HISTÓRICO:\n${history}` : ""}`
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
     const parsed = JSON.parse(cleanJson);
     
-    console.log(`🧠 [AI DECISION] ${parsed.actionType} | Conf: ${parsed.confidence} | ${parsed.reasoning}`);
+    console.log(`🤖 [AI] ${parsed.actionType} | Conf: ${parsed.confidence} | Exec: ${parsed.shouldExecute}`);
     
     return {
       actionType: parsed.actionType || "unknown",
       confidence: parsed.confidence || 0.5,
-      reasoning: parsed.reasoning || "",
       slots: parsed.slots || {},
-      missingSlots: [],
-      shouldExecute: parsed.shouldExecute || false,
-      shouldAsk: parsed.shouldAsk || false,
-      question: parsed.question || null,
-      buttons: parsed.buttons || null
+      reason: parsed.reasoning || "",
+      canExecuteDirectly: parsed.shouldExecute || false
     };
   } catch (error) {
-    console.error("❌ [AI DECISION] Erro:", error);
+    console.error("❌ [AI] Erro:", error);
     return {
       actionType: "unknown",
       confidence: 0.3,
-      reasoning: "Erro na IA",
       slots: {},
-      missingSlots: [],
-      shouldExecute: false,
-      shouldAsk: true,
-      question: "Não entendi. Pode reformular?",
-      buttons: null
+      reason: "Erro na IA",
+      canExecuteDirectly: false
     };
   }
 }
@@ -391,50 +463,137 @@ function getMissingSlots(actionType: ActionType, currentSlots: Record<string, an
   });
 }
 
-function buildDecision(
-  actionType: ActionType,
-  confidence: number,
-  slots: ExtractedSlots,
-  context: { hasActiveAction: boolean; activeActionType?: string; activeActionSlots?: Record<string, any> }
-): DecisionOutput {
-  // Merge com slots do contexto se mesmo tipo
-  let finalSlots = { ...slots };
-  if (context.hasActiveAction && context.activeActionSlots) {
-    finalSlots = { ...context.activeActionSlots, ...Object.fromEntries(Object.entries(slots).filter(([_, v]) => v != null)) };
+// ============================================================================
+// 🎯 DECISION ENGINE PRINCIPAL
+// ============================================================================
+
+async function decisionEngine(
+  message: string,
+  activeAction: ActiveAction | null,
+  history?: string
+): Promise<{ result: SemanticResult; shouldBlockLegacyFlow: boolean }> {
+  
+  console.log(`\n🧠 [DECISION ENGINE] ━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📩 Mensagem: "${message.slice(0, 60)}..."`);
+  
+  // PASSO 1: Heurística rápida (NÃO DECIDE, apenas estima)
+  const heuristic = classifySemanticHeuristic(message);
+  console.log(`🏷️ Heurística: ${heuristic.actionType} | Conf: ${(heuristic.confidence * 100).toFixed(0)}% | Exec: ${heuristic.canExecuteDirectly}`);
+  
+  // PASSO 2: Se confiança ALTA e pode executar → BLOQUEAR fluxos legados
+  if (heuristic.confidence >= 0.90 && heuristic.actionType !== "unknown") {
+    // Verificar se tem tudo necessário
+    const missing = getMissingSlots(heuristic.actionType, heuristic.slots);
+    
+    if (missing.length === 0 || heuristic.canExecuteDirectly) {
+      console.log(`⚡ EXECUÇÃO DIRETA: ${heuristic.actionType} (bloqueando fluxos legados)`);
+      return {
+        result: { ...heuristic, canExecuteDirectly: true },
+        shouldBlockLegacyFlow: true // 🔒 BLOQUEIA PERGUNTAS GENÉRICAS
+      };
+    }
+    
+    // Tem alta confiança mas falta slot → perguntar APENAS o que falta
+    console.log(`📝 Alta confiança, mas falta: ${missing.join(", ")}`);
+    return {
+      result: heuristic,
+      shouldBlockLegacyFlow: true // Ainda bloqueia perguntas genéricas!
+    };
   }
   
-  const missingSlots = getMissingSlots(actionType, finalSlots);
-  const shouldExecute = missingSlots.length === 0 && confidence >= 0.7;
-  const shouldAsk = missingSlots.length > 0;
-  
-  let question: string | null = null;
-  let buttons: Array<{ id: string; title: string }> | null = null;
-  
-  if (shouldAsk && missingSlots[0]) {
-    const promptKey = actionType === "income" && missingSlots[0] === "amount" ? "amount_income" 
-      : actionType === "income" && missingSlots[0] === "description" ? "description_income"
-      : missingSlots[0];
+  // PASSO 3: Se há contexto ativo e mensagem parece resposta a slot pendente
+  if (activeAction && activeAction.pending_slot) {
+    const slotValue = extractSlotValue(message, activeAction.pending_slot);
     
-    const prompt = SLOT_PROMPTS[promptKey] || SLOT_PROMPTS[missingSlots[0]];
-    if (prompt) {
-      question = prompt.text;
-      if (prompt.useButtons && prompt.buttons) {
-        buttons = prompt.buttons;
-      }
+    if (slotValue !== null) {
+      console.log(`📥 Preenchendo slot pendente "${activeAction.pending_slot}": ${slotValue}`);
+      
+      const actionType = activeAction.intent.includes("income") ? "income" 
+        : activeAction.intent.includes("expense") ? "expense"
+        : activeAction.intent as ActionType;
+      
+      const mergedSlots = { ...activeAction.slots, [activeAction.pending_slot]: slotValue };
+      
+      return {
+        result: {
+          actionType,
+          confidence: 0.95,
+          slots: mergedSlots,
+          reason: `Slot ${activeAction.pending_slot} preenchido`,
+          canExecuteDirectly: getMissingSlots(actionType, mergedSlots).length === 0
+        },
+        shouldBlockLegacyFlow: true
+      };
     }
   }
   
+  // PASSO 4: Confiança baixa → chamar IA
+  if (heuristic.confidence < 0.85 || heuristic.actionType === "unknown") {
+    console.log(`🤖 Chamando IA (confiança baixa ou unknown)`);
+    
+    const aiResult = await callAIForDecision(
+      message,
+      {
+        hasActiveAction: !!activeAction,
+        activeActionType: activeAction?.intent,
+        activeActionSlots: activeAction?.slots,
+        pendingSlot: activeAction?.pending_slot
+      },
+      history
+    );
+    
+    // Se IA retorna alta confiança → bloquear fluxos legados
+    if (aiResult.confidence >= 0.85 && aiResult.canExecuteDirectly) {
+      return {
+        result: aiResult,
+        shouldBlockLegacyFlow: true
+      };
+    }
+    
+    return {
+      result: aiResult,
+      shouldBlockLegacyFlow: aiResult.confidence >= 0.75 // Bloqueia se razoavelmente confiante
+    };
+  }
+  
+  // Caso padrão: usar heurística
   return {
-    actionType,
-    confidence,
-    reasoning: "",
-    slots: finalSlots,
-    missingSlots,
-    shouldExecute,
-    shouldAsk,
-    question,
-    buttons
+    result: heuristic,
+    shouldBlockLegacyFlow: heuristic.confidence >= 0.80
   };
+}
+
+function extractSlotValue(message: string, slotType: string): any {
+  const normalized = normalizeText(message);
+  
+  switch (slotType) {
+    case "amount":
+    case "value":
+      const numMatch = message.match(/(\d+[.,]?\d*)/);
+      if (numMatch) return parseFloat(numMatch[1].replace(",", "."));
+      return null;
+      
+    case "payment_method":
+      if (normalized.includes("pix")) return "pix";
+      if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
+      if (normalized.includes("credito") || normalized.includes("crédito")) return "credito";
+      if (normalized.includes("dinheiro")) return "dinheiro";
+      return null;
+      
+    case "source":
+      if (normalized.includes("pix")) return "pix";
+      if (normalized.includes("dinheiro")) return "dinheiro";
+      if (normalized.includes("transfer")) return "transferencia";
+      return null;
+      
+    case "type_choice":
+      if (normalized.includes("gasto") || normalized.includes("gastei") || normalized.includes("paguei")) return "expense";
+      if (normalized.includes("entrada") || normalized.includes("recebi") || normalized.includes("ganhei")) return "income";
+      return null;
+      
+    default:
+      return message.trim() || null;
+  }
 }
 
 // ============================================================================
@@ -1060,47 +1219,37 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
-    // 🧠 DECISION ENGINE - CLASSIFICAÇÃO
+    // 🧠 DECISION ENGINE - CLASSIFICAÇÃO UNIFICADA
     // ========================================================================
     
-    // Passo 1: Tentar classificação rápida por keywords
-    const quickClassification = classifySemanticIntent(conteudoProcessado);
+    // Buscar histórico para contexto da IA
+    const { data: historico } = await supabase
+      .from("historico_conversas")
+      .select("user_message, ai_response")
+      .eq("phone_number", payload.phoneNumber)
+      .order("created_at", { ascending: false })
+      .limit(3);
     
-    let decision: DecisionOutput;
+    const historicoFormatado = historico?.map(h => `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 80)}...`).reverse().join("\n") || "";
     
-    if (quickClassification && quickClassification.confidence >= 0.9) {
-      // Alta confiança → usar classificação rápida
-      console.log(`⚡ [QUICK] ${quickClassification.actionType} | Conf: ${quickClassification.confidence}`);
-      decision = buildDecision(
-        quickClassification.actionType,
-        quickClassification.confidence,
-        quickClassification.slots,
-        { hasActiveAction: !!activeAction, activeActionType: activeAction?.intent, activeActionSlots: activeAction?.slots }
-      );
-    } else {
-      // Baixa confiança → chamar IA
-      const { data: historico } = await supabase
-        .from("historico_conversas")
-        .select("user_message, ai_response")
-        .eq("phone_number", payload.phoneNumber)
-        .order("created_at", { ascending: false })
-        .limit(3);
-      
-      const historicoFormatado = historico?.map(h => `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 80)}...`).reverse().join("\n") || "";
-      
-      decision = await callAIForDecision(
-        conteudoProcessado,
-        { 
-          hasActiveAction: !!activeAction, 
-          activeActionType: activeAction?.intent, 
-          activeActionSlots: activeAction?.slots,
-          pendingSlot: activeAction?.pending_slot
-        },
-        historicoFormatado
-      );
-    }
+    // 🔒 DECISION ENGINE - Única fonte de verdade
+    const { result: decision, shouldBlockLegacyFlow } = await decisionEngine(
+      conteudoProcessado,
+      activeAction,
+      historicoFormatado
+    );
     
-    logDecision({ messageId: payload.messageId, decision: "classified", details: { type: decision.actionType, conf: decision.confidence, slots: decision.slots } });
+    logDecision({ 
+      messageId: payload.messageId, 
+      decision: "classified", 
+      details: { 
+        type: decision.actionType, 
+        conf: decision.confidence, 
+        slots: decision.slots,
+        canExec: decision.canExecuteDirectly,
+        blocked: shouldBlockLegacyFlow
+      } 
+    });
     
     // ========================================================================
     // 🔄 AUTO-DESCARTE DE CONTEXTO
@@ -1117,6 +1266,16 @@ async function processarJob(job: any): Promise<void> {
     if (decision.actionType === "income") {
       const slots = decision.slots;
       
+      // 🔒 SE PODE EXECUTAR DIRETAMENTE → EXECUTA (sem perguntas!)
+      if (decision.canExecuteDirectly && slots.amount) {
+        console.log(`⚡ [INCOME] Execução direta: R$ ${slots.amount}`);
+        const actionId = activeAction?.intent === "income" ? activeAction.id : undefined;
+        const result = await registerIncome(userId, slots, actionId);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      // Falta amount
       if (!slots.amount) {
         if (activeAction && activeAction.intent === "income") {
           await updateAction(activeAction.id, { pending_slot: "amount" });
@@ -1127,7 +1286,8 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      if (!slots.source) {
+      // Tem amount mas falta source → perguntar APENAS source (não "gasto ou entrada?")
+      if (!slots.source && shouldBlockLegacyFlow) {
         if (activeAction && activeAction.intent === "income") {
           await updateAction(activeAction.id, { slots, pending_slot: "source" });
         } else {
@@ -1148,6 +1308,16 @@ async function processarJob(job: any): Promise<void> {
     if (decision.actionType === "expense") {
       const slots = decision.slots;
       
+      // 🔒 SE PODE EXECUTAR DIRETAMENTE → EXECUTA (sem perguntas!)
+      if (decision.canExecuteDirectly && slots.amount && slots.payment_method) {
+        console.log(`⚡ [EXPENSE] Execução direta: R$ ${slots.amount} via ${slots.payment_method}`);
+        const actionId = activeAction?.intent === "expense" ? activeAction.id : undefined;
+        const result = await registerExpense(userId, slots, actionId);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      // Falta amount
       if (!slots.amount) {
         if (activeAction && activeAction.intent === "expense") {
           await updateAction(activeAction.id, { pending_slot: "amount" });
@@ -1158,13 +1328,14 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      // Falta payment_method
       if (!slots.payment_method) {
         if (activeAction && activeAction.intent === "expense") {
           await updateAction(activeAction.id, { slots, pending_slot: "payment_method" });
         } else {
           await createAction(userId, "expense", "expense", slots, "payment_method", payload.messageId);
         }
-        await sendButtons(payload.phoneNumber, "Como você pagou?", SLOT_PROMPTS.payment_method.buttons!, payload.messageSource);
+        await sendButtons(payload.phoneNumber, `💸 R$ ${slots.amount?.toFixed(2)}\n\nComo você pagou?`, SLOT_PROMPTS.payment_method.buttons!, payload.messageSource);
         return;
       }
       
