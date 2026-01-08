@@ -104,12 +104,43 @@ interface ActiveAction {
 // 🎰 CONSTANTS
 // ============================================================================
 
+// ============================================================================
+// 📜 CONTRATOS DE SLOT (FONTE ÚNICA DE VERDADE)
+// ============================================================================
+// Cada intenção tem slots OBRIGATÓRIOS e opcionais.
+// Execução direta SÓ acontece quando TODOS os obrigatórios estão preenchidos.
+// Perguntas SÓ são feitas para slots obrigatórios faltantes.
+// ============================================================================
+
 const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[] }> = {
   expense: { required: ["amount", "payment_method"], optional: ["description", "category", "card"] },
   income: { required: ["amount"], optional: ["description", "source"] },
   card_event: { required: ["card", "value"], optional: ["field"] },
-  cancel: { required: ["transaction_id"], optional: [] },
+  cancel: { required: [], optional: ["transaction_id"] },
+  query: { required: [], optional: [] },
+  control: { required: [], optional: [] },
+  unknown: { required: [], optional: [] },
 };
+
+// ============================================================================
+// ✅ hasAllRequiredSlots - FUNÇÃO CANÔNICA
+// ============================================================================
+// Retorna true SOMENTE se TODOS os slots obrigatórios estão preenchidos.
+// Não usa heurística. Não infere dados ausentes.
+// ============================================================================
+
+function hasAllRequiredSlots(actionType: ActionType, slots: Record<string, any>): boolean {
+  const requirements = SLOT_REQUIREMENTS[actionType];
+  if (!requirements) return true; // Tipo desconhecido = sem requisitos
+  
+  for (const required of requirements.required) {
+    const value = slots[required];
+    if (value === null || value === undefined || value === "") {
+      return false;
+    }
+  }
+  return true;
+}
 
 const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons?: Array<{ id: string; title: string }> }> = {
   amount: { text: "Qual foi o valor? 💸" },
@@ -453,6 +484,10 @@ Responda APENAS JSON:
   }
 }
 
+// ============================================================================
+// 🔍 getMissingSlots - LISTA SLOTS OBRIGATÓRIOS FALTANTES
+// ============================================================================
+
 function getMissingSlots(actionType: ActionType, currentSlots: Record<string, any>): string[] {
   const requirements = SLOT_REQUIREMENTS[actionType];
   if (!requirements) return [];
@@ -461,6 +496,38 @@ function getMissingSlots(actionType: ActionType, currentSlots: Record<string, an
     const value = currentSlots[slot];
     return value === null || value === undefined || value === "";
   });
+}
+
+// ============================================================================
+// 🚫 GUARD CLAUSES DE DOMÍNIO
+// ============================================================================
+// Depois que o Decision Engine decide uma intenção, é PROIBIDO:
+// - card_event cair em expense/income
+// - income perguntar se é gasto
+// - expense perguntar se é entrada
+// - Número isolado em card_event disparar slot de valor financeiro
+// ============================================================================
+
+function assertDomainIsolation(
+  decidedType: ActionType, 
+  activeAction: ActiveAction | null
+): { valid: boolean; shouldDiscard: boolean } {
+  if (!activeAction) return { valid: true, shouldDiscard: false };
+  
+  const currentType = activeAction.intent.includes("entrada") || activeAction.intent === "income" ? "income"
+    : activeAction.intent.includes("card") || activeAction.intent === "card_event" ? "card_event"
+    : activeAction.intent.includes("gasto") || activeAction.intent === "expense" ? "expense"
+    : activeAction.intent;
+  
+  // Se domínios são diferentes e o novo não é cancel/control → descartar contexto
+  if (decidedType !== "unknown" && decidedType !== "cancel" && decidedType !== "control") {
+    if (decidedType !== currentType) {
+      console.log(`🚫 [GUARD] Domínio incompatível: contexto=${currentType}, decisão=${decidedType} → descartando`);
+      return { valid: true, shouldDiscard: true };
+    }
+  }
+  
+  return { valid: true, shouldDiscard: false };
 }
 
 // ============================================================================
@@ -725,22 +792,7 @@ async function cancelAction(userId: string): Promise<boolean> {
   return true;
 }
 
-function shouldAutoDiscardContext(activeAction: ActiveAction | null, newActionType: ActionType): boolean {
-  if (!activeAction) return false;
-  
-  const currentType = activeAction.intent.includes("entrada") || activeAction.intent === "income" ? "income"
-    : activeAction.intent.includes("card") || activeAction.intent === "card_event" ? "card_event"
-    : activeAction.intent.includes("gasto") || activeAction.intent === "expense" ? "expense"
-    : null;
-  
-  // Se domínios são claramente diferentes, descartar
-  if (currentType && newActionType !== currentType && newActionType !== "cancel" && newActionType !== "unknown") {
-    console.log(`🔄 [CONTEXT] Auto-descarte: ${currentType} → ${newActionType}`);
-    return true;
-  }
-  
-  return false;
-}
+// Função removida - substituída por assertDomainIsolation()
 
 // ============================================================================
 // 📱 MESSAGING
@@ -1176,43 +1228,58 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
-    // 🔢 NÚMERO ISOLADO
+    // 🔢 NÚMERO ISOLADO - REGRA ABSOLUTA
+    // ========================================================================
+    // Mensagem contendo APENAS número (ex: "100"):
+    // - intent = unknown
+    // - DEVE perguntar: "Esse valor é um gasto ou uma entrada?"
+    // - NUNCA assumir gasto ou entrada automaticamente
     // ========================================================================
     if (isNumericOnly(conteudoProcessado)) {
       const numValue = parseNumericValue(conteudoProcessado);
       
       logDecision({ messageId: payload.messageId, decision: "numeric_routing", details: { value: numValue, hasContext: !!activeAction } });
       
-      // Se há contexto ativo esperando amount
-      if (activeAction && (activeAction.pending_slot === "amount" || !activeAction.slots.amount) && numValue) {
+      // CASO 1: Há contexto ativo esperando amount → preencher slot
+      if (activeAction && activeAction.pending_slot === "amount" && numValue) {
         const updatedSlots: ExtractedSlots = { ...activeAction.slots, amount: numValue };
-        const actionType = activeAction.intent === "income" ? "income" : "expense";
-        const missing = getMissingSlots(actionType as ActionType, updatedSlots);
+        const actionType = activeAction.intent === "income" ? "income" : activeAction.intent === "expense" ? "expense" : null;
         
-        if (missing.length === 0) {
-          const result = actionType === "income" 
-            ? await registerIncome(userId, updatedSlots, activeAction.id)
-            : await registerExpense(userId, updatedSlots, activeAction.id);
-          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        if (actionType) {
+          const missing = getMissingSlots(actionType as ActionType, updatedSlots);
+          
+          // Todos slots preenchidos → executar
+          if (hasAllRequiredSlots(actionType as ActionType, updatedSlots)) {
+            const result = actionType === "income" 
+              ? await registerIncome(userId, updatedSlots, activeAction.id)
+              : await registerExpense(userId, updatedSlots, activeAction.id);
+            await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+            return;
+          }
+          
+          // Falta slot → perguntar APENAS o próximo obrigatório
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
+          const prompt = SLOT_PROMPTS[missing[0]];
+          if (prompt?.useButtons && prompt.buttons) {
+            await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+          } else {
+            await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
+          }
           return;
         }
-        
-        await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
-        const promptKey = actionType === "income" && missing[0] === "source" ? "source" : missing[0];
-        const prompt = SLOT_PROMPTS[promptKey];
-        if (prompt?.useButtons && prompt.buttons) {
-          await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
-        } else {
-          await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
-        }
-        return;
       }
       
-      // Número sem contexto → PERGUNTAR (não assumir!)
+      // CASO 2: Número SEM contexto ou contexto NÃO é expense/income
+      // → PERGUNTAR EXPLICITAMENTE (regra absoluta - não assumir!)
       await sendButtons(payload.phoneNumber, `💰 R$ ${numValue?.toFixed(2)}\n\nEsse valor foi um gasto ou uma entrada?`, [
         { id: "num_gasto", title: "💸 Gasto" },
         { id: "num_entrada", title: "💰 Entrada" }
       ], payload.messageSource);
+      
+      // Se tinha contexto de outro tipo, descartar
+      if (activeAction) {
+        await cancelAction(userId);
+      }
       
       await createAction(userId, "unknown", "numero_isolado", { amount: numValue }, "type_choice", payload.messageId);
       return;
@@ -1252,9 +1319,10 @@ async function processarJob(job: any): Promise<void> {
     });
     
     // ========================================================================
-    // 🔄 AUTO-DESCARTE DE CONTEXTO
+    // 🚫 GUARD CLAUSE DE DOMÍNIO + AUTO-DESCARTE
     // ========================================================================
-    if (shouldAutoDiscardContext(activeAction, decision.actionType)) {
+    const domainCheck = assertDomainIsolation(decision.actionType, activeAction);
+    if (domainCheck.shouldDiscard) {
       await cancelAction(userId);
     }
     
@@ -1262,12 +1330,15 @@ async function processarJob(job: any): Promise<void> {
     // 🎯 ROTEAMENTO POR TIPO DE AÇÃO
     // ========================================================================
     
-    // 💰 INCOME
+    // ========================================================================
+    // 💰 INCOME - Contrato: required = ["amount"]
+    // ========================================================================
     if (decision.actionType === "income") {
       const slots = decision.slots;
+      const missing = getMissingSlots("income", slots);
       
-      // 🔒 SE PODE EXECUTAR DIRETAMENTE → EXECUTA (sem perguntas!)
-      if (decision.canExecuteDirectly && slots.amount) {
+      // ✅ EXECUÇÃO DIRETA: hasAllRequiredSlots = true
+      if (hasAllRequiredSlots("income", slots)) {
         console.log(`⚡ [INCOME] Execução direta: R$ ${slots.amount}`);
         const actionId = activeAction?.intent === "income" ? activeAction.id : undefined;
         const result = await registerIncome(userId, slots, actionId);
@@ -1275,41 +1346,36 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // Falta amount
-      if (!slots.amount) {
-        if (activeAction && activeAction.intent === "income") {
-          await updateAction(activeAction.id, { pending_slot: "amount" });
-        } else {
-          await createAction(userId, "income", "income", slots, "amount", payload.messageId);
-        }
-        await sendMessage(payload.phoneNumber, SLOT_PROMPTS.amount_income.text, payload.messageSource);
-        return;
+      // ❌ FALTA SLOT OBRIGATÓRIO → perguntar APENAS o que falta
+      const nextMissing = missing[0]; // Só pergunta UM por vez
+      
+      if (activeAction?.intent === "income") {
+        await updateAction(activeAction.id, { slots, pending_slot: nextMissing });
+      } else {
+        await createAction(userId, "income", "income", slots, nextMissing, payload.messageId);
       }
       
-      // Tem amount mas falta source → perguntar APENAS source (não "gasto ou entrada?")
-      if (!slots.source && shouldBlockLegacyFlow) {
-        if (activeAction && activeAction.intent === "income") {
-          await updateAction(activeAction.id, { slots, pending_slot: "source" });
-        } else {
-          await createAction(userId, "income", "income", slots, "source", payload.messageId);
-        }
-        await sendButtons(payload.phoneNumber, `💰 R$ ${slots.amount?.toFixed(2)}\n\nComo você recebeu?`, SLOT_PROMPTS.source.buttons!, payload.messageSource);
-        return;
-      }
+      // Usar prompt específico para income
+      const promptKey = nextMissing === "amount" ? "amount_income" : nextMissing;
+      const prompt = SLOT_PROMPTS[promptKey] || SLOT_PROMPTS[nextMissing];
       
-      // Tudo pronto → registrar
-      const actionId = activeAction?.intent === "income" ? activeAction.id : undefined;
-      const result = await registerIncome(userId, slots, actionId);
-      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      if (prompt?.useButtons && prompt.buttons) {
+        await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+      } else {
+        await sendMessage(payload.phoneNumber, prompt?.text || `Qual o ${nextMissing}?`, payload.messageSource);
+      }
       return;
     }
     
-    // 💸 EXPENSE
+    // ========================================================================
+    // 💸 EXPENSE - Contrato: required = ["amount", "payment_method"]
+    // ========================================================================
     if (decision.actionType === "expense") {
       const slots = decision.slots;
+      const missing = getMissingSlots("expense", slots);
       
-      // 🔒 SE PODE EXECUTAR DIRETAMENTE → EXECUTA (sem perguntas!)
-      if (decision.canExecuteDirectly && slots.amount && slots.payment_method) {
+      // ✅ EXECUÇÃO DIRETA: hasAllRequiredSlots = true
+      if (hasAllRequiredSlots("expense", slots)) {
         console.log(`⚡ [EXPENSE] Execução direta: R$ ${slots.amount} via ${slots.payment_method}`);
         const actionId = activeAction?.intent === "expense" ? activeAction.id : undefined;
         const result = await registerExpense(userId, slots, actionId);
@@ -1317,54 +1383,64 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // Falta amount
-      if (!slots.amount) {
-        if (activeAction && activeAction.intent === "expense") {
-          await updateAction(activeAction.id, { pending_slot: "amount" });
-        } else {
-          await createAction(userId, "expense", "expense", slots, "amount", payload.messageId);
-        }
-        await sendMessage(payload.phoneNumber, SLOT_PROMPTS.amount.text, payload.messageSource);
-        return;
+      // ❌ FALTA SLOT OBRIGATÓRIO → perguntar APENAS o que falta
+      const nextMissing = missing[0]; // Só pergunta UM por vez
+      
+      if (activeAction?.intent === "expense") {
+        await updateAction(activeAction.id, { slots, pending_slot: nextMissing });
+      } else {
+        await createAction(userId, "expense", "expense", slots, nextMissing, payload.messageId);
       }
       
-      // Falta payment_method
-      if (!slots.payment_method) {
-        if (activeAction && activeAction.intent === "expense") {
-          await updateAction(activeAction.id, { slots, pending_slot: "payment_method" });
-        } else {
-          await createAction(userId, "expense", "expense", slots, "payment_method", payload.messageId);
-        }
-        await sendButtons(payload.phoneNumber, `💸 R$ ${slots.amount?.toFixed(2)}\n\nComo você pagou?`, SLOT_PROMPTS.payment_method.buttons!, payload.messageSource);
-        return;
-      }
+      const prompt = SLOT_PROMPTS[nextMissing];
       
-      // Tudo pronto → registrar
-      const actionId = activeAction?.intent === "expense" ? activeAction.id : undefined;
-      const result = await registerExpense(userId, slots, actionId);
-      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      // Contexto amigável com valor se já temos
+      const prefix = slots.amount ? `💸 R$ ${slots.amount.toFixed(2)}\n\n` : "";
+      
+      if (prompt?.useButtons && prompt.buttons) {
+        await sendButtons(payload.phoneNumber, `${prefix}${prompt.text}`, prompt.buttons, payload.messageSource);
+      } else {
+        await sendMessage(payload.phoneNumber, `${prefix}${prompt?.text || `Qual o ${nextMissing}?`}`, payload.messageSource);
+      }
       return;
     }
     
-    // 💳 CARD EVENT
+    // ========================================================================
+    // 💳 CARD EVENT - Contrato: required = ["card", "value"]
+    // ========================================================================
+    // REGRA ABSOLUTA: card_event NUNCA entra em fluxo de expense/income
+    // ========================================================================
     if (decision.actionType === "card_event") {
-      const { card, value } = decision.slots;
+      const slots = decision.slots;
       
-      if (card && value) {
-        const result = await updateCardLimit(userId, card, value);
+      // ✅ EXECUÇÃO DIRETA: hasAllRequiredSlots = true
+      if (hasAllRequiredSlots("card_event", slots)) {
+        const result = await updateCardLimit(userId, slots.card!, slots.value!);
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         return;
       }
       
-      // Falta informação
-      const cards = await listCardsForUser(userId);
-      if (cards.length === 0) {
-        await sendMessage(payload.phoneNumber, "Você não tem cartões cadastrados 💳", payload.messageSource);
+      // ❌ FALTA SLOT OBRIGATÓRIO
+      const missing = getMissingSlots("card_event", slots);
+      
+      // Se falta cartão, listar opções
+      if (missing.includes("card")) {
+        const cards = await listCardsForUser(userId);
+        if (cards.length === 0) {
+          await sendMessage(payload.phoneNumber, "Você não tem cartões cadastrados 💳", payload.messageSource);
+          return;
+        }
+        const cardList = cards.map((c, i) => `${i + 1}. ${c.nome}`).join("\n");
+        await sendMessage(payload.phoneNumber, `Qual cartão atualizar?\n\n${cardList}`, payload.messageSource);
         return;
       }
       
-      const cardList = cards.map((c, i) => `${i + 1}. ${c.nome}`).join("\n");
-      await sendMessage(payload.phoneNumber, `Qual cartão atualizar?\n\n${cardList}`, payload.messageSource);
+      // Se falta valor
+      if (missing.includes("value")) {
+        await sendMessage(payload.phoneNumber, `Qual o novo limite do *${slots.card}*?`, payload.messageSource);
+        return;
+      }
+      
       return;
     }
     
