@@ -630,6 +630,133 @@ function classifySemanticHeuristic(message: string): SemanticResult {
   };
 }
 
+// ============================================================================
+// 🧠 PROMPT UNIVERSAL FINAX - IA COMO EXTRATORA SEMÂNTICA PRINCIPAL
+// ============================================================================
+const PROMPT_FINAX_UNIVERSAL = `# FINAX - EXTRATOR SEMÂNTICO FINANCEIRO
+
+Você é o cérebro do Finax. Sua função é INTERPRETAR a intenção do usuário e extrair dados estruturados.
+
+## REGRA ABSOLUTA
+- NÃO seja literal. Interprete o SENTIDO, não as palavras.
+- Entenda variações naturais da língua portuguesa.
+
+## TIPOS DE AÇÃO (em ordem de prioridade)
+
+| Tipo | Quando usar | Evidências | Slots obrigatórios |
+|------|-------------|------------|-------------------|
+| recurring | Gasto que se REPETE | "todo mês", "mensal", "assinatura", "por mês", "mensalmente" | amount, description |
+| set_context | Período ESPECIAL temporário | "viagem", "obra", "entre dia X e Y", "vou viajar" | label, start_date, end_date |
+| income | Dinheiro ENTRANDO | "recebi", "caiu", "entrou", "me mandaram", "ganhei" | amount |
+| expense | Gasto ÚNICO (sem recorrência) | "gastei", "paguei", "comprei", "custou" | amount, payment_method |
+| card_event | Atualização de CARTÃO | "limite", "fatura" | card, value |
+| cancel | Cancelar/desfazer | "cancela", "desfaz", "apaga" | - |
+| query | Consultar resumo/saldo | "resumo", "quanto gastei", "saldo" | - |
+| unknown | Não identificado | - | - |
+
+## REGRAS DE CLASSIFICAÇÃO
+
+### RECURRING (Prioridade Máxima)
+SE a mensagem menciona periodicidade → É RECURRING, nunca expense!
+- "Netflix todo mês 40" → recurring (amount=40, description="Netflix", periodicity="monthly")
+- "Aluguel 1500 todo dia 5" → recurring (amount=1500, description="Aluguel", periodicity="monthly", day_of_month=5)
+- "Academia 99 mensal" → recurring (amount=99, description="Academia", periodicity="monthly")
+- "Assinatura Spotify 20" → recurring (amount=20, description="Spotify", periodicity="monthly")
+
+### SET_CONTEXT (Segundo Prioridade)
+SE menciona período/datas + viagem/obra/evento → set_context
+- "Vou viajar pra SP de 15/01 até 20/01" → set_context (label="Viagem SP", start_date="15/01", end_date="20/01")
+- "Entre o dia 09 e 10 vou fazer uma viagem" → set_context (label="Viagem", start_date="09/01", end_date="10/01")
+- "Começando obra semana que vem" → set_context (label="Obra", start_date=<próximo dia>, end_date=<+7 dias>)
+
+### INCOME
+SE dinheiro está ENTRANDO → income
+- "Recebi 200 do pix" → income (amount=200, source="pix")
+- "Caiu 1500 do salário" → income (amount=1500, description="salário")
+- "Me mandaram 77 do tigrinho" → income (amount=77, description="tigrinho")
+
+### EXPENSE (Somente quando NÃO é recurring)
+- "Gastei 50 no uber" → expense (amount=50, description="uber")
+- "Paguei 30 de estacionamento" → expense (amount=30, description="estacionamento")
+
+## NOMES DOS SLOTS (USE EXATAMENTE ESTES)
+- amount: number (valor em reais)
+- description: string (nome do serviço/produto)
+- payment_method: "pix" | "debito" | "credito" | "dinheiro"
+- source: "pix" | "dinheiro" | "transferencia"
+- periodicity: "monthly" | "weekly" | "yearly"
+- day_of_month: number (1-31)
+- label: string (nome do evento/viagem)
+- start_date: "DD/MM"
+- end_date: "DD/MM"
+- card: string (nome do banco)
+- value: number (valor do limite)
+
+## RESPOSTA
+Responda APENAS JSON válido, sem texto adicional:
+{
+  "actionType": "recurring|set_context|income|expense|card_event|cancel|query|unknown",
+  "confidence": 0.0-1.0,
+  "slots": { ... },
+  "shouldExecute": true|false,
+  "reasoning": "explicação curta"
+}`;
+
+// ============================================================================
+// 🔧 NORMALIZAÇÃO DE SLOTS DA IA
+// ============================================================================
+function normalizeAISlots(slots: Record<string, any>): ExtractedSlots {
+  const normalized: ExtractedSlots = {};
+  
+  // Copiar slots válidos
+  if (slots.amount !== undefined) normalized.amount = Number(slots.amount);
+  if (slots.description) normalized.description = String(slots.description);
+  if (slots.payment_method) normalized.payment_method = String(slots.payment_method).toLowerCase();
+  if (slots.source) normalized.source = String(slots.source).toLowerCase();
+  if (slots.card) normalized.card = String(slots.card);
+  if (slots.value !== undefined) normalized.value = Number(slots.value);
+  if (slots.label) normalized.label = String(slots.label);
+  if (slots.start_date) normalized.start_date = String(slots.start_date);
+  if (slots.end_date) normalized.end_date = String(slots.end_date);
+  if (slots.day_of_month !== undefined) normalized.day_of_month = Number(slots.day_of_month);
+  if (slots.date_range) normalized.date_range = slots.date_range;
+  
+  // Normalizar periodicity (corrigir se IA retornar em português)
+  if (slots.periodicity) {
+    const periodicityMap: Record<string, string> = {
+      "mensal": "monthly",
+      "semanal": "weekly", 
+      "anual": "yearly",
+      "monthly": "monthly",
+      "weekly": "weekly",
+      "yearly": "yearly"
+    };
+    normalized.periodicity = periodicityMap[String(slots.periodicity).toLowerCase()] || "monthly";
+  }
+  
+  // Normalizar frequency → periodicity (caso IA use nome errado)
+  if (slots.frequency && !normalized.periodicity) {
+    const freqMap: Record<string, string> = {
+      "mensal": "monthly",
+      "semanal": "weekly",
+      "anual": "yearly"
+    };
+    normalized.periodicity = freqMap[String(slots.frequency).toLowerCase()] || "monthly";
+  }
+  
+  // Normalizar valor → amount
+  if (slots.valor && !normalized.amount) {
+    normalized.amount = Number(slots.valor);
+  }
+  
+  // Normalizar descricao → description
+  if (slots.descricao && !normalized.description) {
+    normalized.description = String(slots.descricao);
+  }
+  
+  return normalized;
+}
+
 async function callAIForDecision(
   message: string, 
   context: { hasActiveAction: boolean; activeActionType?: string; activeActionSlots?: Record<string, any>; pendingSlot?: string | null },
@@ -639,9 +766,9 @@ async function callAIForDecision(
     let contextInfo = "";
     if (context.hasActiveAction) {
       contextInfo = `
-CONTEXTO ATIVO:
+CONTEXTO ATIVO (usuário está no meio de uma ação):
 - Tipo: ${context.activeActionType}
-- Slots: ${JSON.stringify(context.activeActionSlots)}
+- Slots já preenchidos: ${JSON.stringify(context.activeActionSlots)}
 - Slot pendente: ${context.pendingSlot || "nenhum"}
 `;
     }
@@ -655,66 +782,7 @@ CONTEXTO ATIVO:
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          {
-            role: "system",
-            content: `Você é o Decision Engine do Finax, um assistente financeiro. Classifique a intenção e extraia TODOS os dados.
-
-${contextInfo}
-
-🎯 TIPOS DE AÇÃO (em ordem de prioridade):
-
-1️⃣ recurring - Gasto RECORRENTE (todo mês, mensal, assinatura)
-   Exemplos: "Netflix todo mês 40", "Aluguel 1500 todo dia 10", "Academia 99 reais mensal"
-   Slots: amount, description (nome do serviço), periodicity (monthly/weekly/yearly), day_of_month
-
-2️⃣ set_context - Criar PERÍODO especial (viagem, obra, evento)
-   Exemplos: "Vou viajar pra SP de 15/01 até 20/01", "Entre o dia 09 e 10 vou fazer uma viagem", "Começando obra semana que vem"
-   Slots: label (nome do evento), start_date (DD/MM), end_date (DD/MM)
-
-3️⃣ income - Dinheiro ENTRANDO
-   Exemplos: "Recebi 200 de pix", "Caiu 1500 do salário", "Me mandaram 77 do tigrinho"
-   Slots: amount, source, description
-
-4️⃣ expense - Gasto PONTUAL (único, não recorrente)
-   Exemplos: "Gastei 50 no mercado no pix", "Paguei 30 de uber"
-   Slots: amount, description, payment_method
-
-5️⃣ card_event - Atualização de CARTÃO
-   Exemplos: "Limite Nubank 6400", "Aumentou limite do Itaú"
-   Slots: card, value
-
-6️⃣ cancel - Cancelar ação
-7️⃣ query - Consultar resumo/saldo
-8️⃣ unknown - Não identificado
-
-🔒 REGRAS ABSOLUTAS:
-- Se menciona "todo mês", "mensal", "assinatura" → É recurring (NÃO expense!)
-- Se menciona período/datas + viagem/obra/evento → É set_context
-- "Recebi/Caiu/Entrou/Me mandaram" → É income
-- "Gastei/Comprei/Paguei" SEM recorrência → É expense
-- Sempre extraia description como o nome do serviço/produto (Netflix, Aluguel, Mercado, etc)
-
-Responda APENAS JSON:
-{
-  "actionType": "recurring|set_context|income|expense|card_event|cancel|query|unknown",
-  "confidence": 0.0-1.0,
-  "slots": {
-    "amount": number,
-    "description": "string (nome do serviço/produto)",
-    "payment_method": "pix|debito|credito|dinheiro",
-    "source": "pix|dinheiro|transferencia",
-    "periodicity": "monthly|weekly|yearly",
-    "day_of_month": number,
-    "label": "string (nome do evento/viagem)",
-    "start_date": "DD/MM",
-    "end_date": "DD/MM",
-    "card": "string",
-    "value": number
-  },
-  "shouldExecute": true,
-  "reasoning": "explicação curta"
-}`
-          },
+          { role: "system", content: PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo },
           { role: "user", content: message }
         ],
       }),
@@ -723,16 +791,36 @@ Responda APENAS JSON:
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '{"actionType": "unknown", "confidence": 0.3}';
     const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
-    const parsed = JSON.parse(cleanJson);
     
-    console.log(`🤖 [AI] ${parsed.actionType} | Conf: ${parsed.confidence} | Exec: ${parsed.shouldExecute}`);
+    let parsed;
+    try {
+      parsed = JSON.parse(cleanJson);
+    } catch (e) {
+      console.error("❌ [AI] JSON inválido:", cleanJson.slice(0, 200));
+      return {
+        actionType: "unknown",
+        confidence: 0.3,
+        slots: {},
+        reason: "JSON inválido da IA",
+        canExecuteDirectly: false
+      };
+    }
+    
+    // Normalizar slots
+    const normalizedSlots = normalizeAISlots(parsed.slots || {});
+    
+    // Determinar se pode executar diretamente
+    const actionType = parsed.actionType || "unknown";
+    const canExecute = hasAllRequiredSlots(actionType, normalizedSlots);
+    
+    console.log(`🤖 [AI] ${actionType} | Conf: ${parsed.confidence} | Slots: ${JSON.stringify(normalizedSlots)} | Exec: ${canExecute}`);
     
     return {
-      actionType: parsed.actionType || "unknown",
+      actionType,
       confidence: parsed.confidence || 0.5,
-      slots: parsed.slots || {},
+      slots: normalizedSlots,
       reason: parsed.reasoning || "",
-      canExecuteDirectly: parsed.shouldExecute || false
+      canExecuteDirectly: canExecute
     };
   } catch (error) {
     console.error("❌ [AI] Erro:", error);
@@ -793,7 +881,12 @@ function assertDomainIsolation(
 }
 
 // ============================================================================
-// 🎯 DECISION ENGINE PRINCIPAL
+// 🎯 DECISION ENGINE PRINCIPAL - IA PRIMEIRO, HEURÍSTICA FALLBACK
+// ============================================================================
+// NOVA ARQUITETURA:
+// 1. IA SEMPRE é chamada primeiro para classificar e extrair
+// 2. Heurística só é usada como fallback quando IA falha
+// 3. Slots são mesclados: IA tem prioridade
 // ============================================================================
 
 async function decisionEngine(
@@ -802,69 +895,12 @@ async function decisionEngine(
   history?: string
 ): Promise<{ result: SemanticResult; shouldBlockLegacyFlow: boolean }> {
   
-  console.log(`\n🧠 [DECISION ENGINE] ━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`\n🧠 [DECISION ENGINE v2.0 - IA PRIMEIRO] ━━━━━━━━━━━━━━━━`);
   console.log(`📩 Mensagem: "${message.slice(0, 60)}..."`);
   
-  // PASSO 1: Heurística rápida (NÃO DECIDE, apenas estima)
-  const heuristic = classifySemanticHeuristic(message);
-  console.log(`🏷️ Heurística: ${heuristic.actionType} | Conf: ${(heuristic.confidence * 100).toFixed(0)}% | Exec: ${heuristic.canExecuteDirectly}`);
-  
-  // PASSO 2: Para recurring e set_context, forçar IA se slots incompletos
-  // Isso garante extração semântica mais inteligente que heurística
-  if ((heuristic.actionType === "recurring" || heuristic.actionType === "set_context") && !heuristic.canExecuteDirectly) {
-    console.log(`🤖 Forçando IA para ${heuristic.actionType} (slots incompletos)`);
-    
-    const aiResult = await callAIForDecision(
-      message,
-      {
-        hasActiveAction: !!activeAction,
-        activeActionType: activeAction?.intent,
-        activeActionSlots: activeAction?.slots,
-        pendingSlot: activeAction?.pending_slot
-      },
-      history
-    );
-    
-    // Mesclar slots: IA completa o que heurística não pegou
-    const mergedSlots = { ...heuristic.slots, ...aiResult.slots };
-    const mergedMissing = getMissingSlots(heuristic.actionType, mergedSlots);
-    
-    console.log(`🔀 Slots mesclados: ${JSON.stringify(mergedSlots)} | Faltam: ${mergedMissing.join(", ") || "nenhum"}`);
-    
-    return {
-      result: {
-        actionType: heuristic.actionType, // Manter tipo da heurística (mais confiável para recurring/set_context)
-        confidence: Math.max(heuristic.confidence, aiResult.confidence),
-        slots: mergedSlots,
-        reason: `${heuristic.reason} + IA`,
-        canExecuteDirectly: mergedMissing.length === 0
-      },
-      shouldBlockLegacyFlow: true
-    };
-  }
-  
-  // PASSO 3: Se confiança ALTA e pode executar → BLOQUEAR fluxos legados
-  if (heuristic.confidence >= 0.90 && heuristic.actionType !== "unknown") {
-    // Verificar se tem tudo necessário
-    const missing = getMissingSlots(heuristic.actionType, heuristic.slots);
-    
-    if (missing.length === 0 || heuristic.canExecuteDirectly) {
-      console.log(`⚡ EXECUÇÃO DIRETA: ${heuristic.actionType} (bloqueando fluxos legados)`);
-      return {
-        result: { ...heuristic, canExecuteDirectly: true },
-        shouldBlockLegacyFlow: true // 🔒 BLOQUEIA PERGUNTAS GENÉRICAS
-      };
-    }
-    
-    // Tem alta confiança mas falta slot → perguntar APENAS o que falta
-    console.log(`📝 Alta confiança, mas falta: ${missing.join(", ")}`);
-    return {
-      result: heuristic,
-      shouldBlockLegacyFlow: true // Ainda bloqueia perguntas genéricas!
-    };
-  }
-  
-  // PASSO 3: Se há contexto ativo e mensagem parece resposta a slot pendente
+  // ========================================================================
+  // PRIORIDADE 1: Se há slot pendente, tentar extrair valor simples
+  // ========================================================================
   if (activeAction && activeAction.pending_slot) {
     const slotValue = extractSlotValue(message, activeAction.pending_slot);
     
@@ -873,6 +909,7 @@ async function decisionEngine(
       
       const actionType = activeAction.intent.includes("income") ? "income" 
         : activeAction.intent.includes("expense") ? "expense"
+        : activeAction.intent.includes("recurring") ? "recurring"
         : activeAction.intent as ActionType;
       
       const mergedSlots = { ...activeAction.slots, [activeAction.pending_slot]: slotValue };
@@ -890,39 +927,67 @@ async function decisionEngine(
     }
   }
   
-  // PASSO 4: Confiança baixa → chamar IA
-  if (heuristic.confidence < 0.85 || heuristic.actionType === "unknown") {
-    console.log(`🤖 Chamando IA (confiança baixa ou unknown)`);
+  // ========================================================================
+  // PRIORIDADE 2: IA EXTRAI E CLASSIFICA (Sempre!)
+  // ========================================================================
+  console.log(`🤖 [IA PRIMEIRO] Chamando IA para classificar...`);
+  
+  const aiResult = await callAIForDecision(
+    message,
+    {
+      hasActiveAction: !!activeAction,
+      activeActionType: activeAction?.intent,
+      activeActionSlots: activeAction?.slots,
+      pendingSlot: activeAction?.pending_slot
+    },
+    history
+  );
+  
+  console.log(`🤖 [IA] Resultado: ${aiResult.actionType} | Conf: ${(aiResult.confidence * 100).toFixed(0)}% | Slots: ${JSON.stringify(aiResult.slots)}`);
+  
+  // ========================================================================
+  // Se IA tem boa confiança (>= 0.75), USAR resultado da IA
+  // ========================================================================
+  if (aiResult.confidence >= 0.75 && aiResult.actionType !== "unknown") {
+    const missing = getMissingSlots(aiResult.actionType, aiResult.slots);
     
-    const aiResult = await callAIForDecision(
-      message,
-      {
-        hasActiveAction: !!activeAction,
-        activeActionType: activeAction?.intent,
-        activeActionSlots: activeAction?.slots,
-        pendingSlot: activeAction?.pending_slot
-      },
-      history
-    );
-    
-    // Se IA retorna alta confiança → bloquear fluxos legados
-    if (aiResult.confidence >= 0.85 && aiResult.canExecuteDirectly) {
-      return {
-        result: aiResult,
-        shouldBlockLegacyFlow: true
-      };
-    }
+    console.log(`✅ [IA] Confiança alta (${(aiResult.confidence * 100).toFixed(0)}%) | Faltam: ${missing.join(", ") || "nenhum"}`);
     
     return {
-      result: aiResult,
-      shouldBlockLegacyFlow: aiResult.confidence >= 0.75 // Bloqueia se razoavelmente confiante
+      result: {
+        ...aiResult,
+        canExecuteDirectly: missing.length === 0
+      },
+      shouldBlockLegacyFlow: true
     };
   }
   
-  // Caso padrão: usar heurística
+  // ========================================================================
+  // FALLBACK: IA incerta → usar heurística para ajudar
+  // ========================================================================
+  console.log(`⚠️ [IA] Confiança baixa, usando heurística como fallback...`);
+  
+  const heuristic = classifySemanticHeuristic(message);
+  console.log(`🏷️ [HEURÍSTICA] ${heuristic.actionType} | Conf: ${(heuristic.confidence * 100).toFixed(0)}%`);
+  
+  // Escolher o melhor resultado entre IA e heurística
+  const bestResult = heuristic.confidence > aiResult.confidence ? heuristic : aiResult;
+  
+  // Mesclar slots: IA tem prioridade sobre heurística
+  const mergedSlots = { ...heuristic.slots, ...aiResult.slots };
+  const mergedMissing = getMissingSlots(bestResult.actionType, mergedSlots);
+  
+  console.log(`🔀 [MERGE] Tipo: ${bestResult.actionType} | Slots: ${JSON.stringify(mergedSlots)} | Faltam: ${mergedMissing.join(", ") || "nenhum"}`);
+  
   return {
-    result: heuristic,
-    shouldBlockLegacyFlow: heuristic.confidence >= 0.80
+    result: {
+      actionType: bestResult.actionType,
+      confidence: Math.max(aiResult.confidence, heuristic.confidence),
+      slots: mergedSlots,
+      reason: `IA + Heurística: ${bestResult.reason}`,
+      canExecuteDirectly: mergedMissing.length === 0
+    },
+    shouldBlockLegacyFlow: bestResult.confidence >= 0.70
   };
 }
 
