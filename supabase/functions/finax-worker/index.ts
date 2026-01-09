@@ -229,20 +229,42 @@ interface SemanticResult {
 }
 
 const SEMANTIC_PATTERNS = {
-  // RECORRENTE - Prioridade MÁXIMA (antes de expense)
+  // 🔄 RECORRENTE - Prioridade MÁXIMA (antes de expense)
   recurring: {
     verbs: [],
-    contexts: ["todo mes", "todo mês", "mensal", "mensalmente", "todo dia", "semanal", "semanalmente", "anual", "anualmente", "assinatura", "todo começo de mes", "todo fim de mes"],
+    contexts: [
+      "todo mes", "todo mês", "mensal", "mensalmente", 
+      "todo dia", "semanal", "semanalmente", 
+      "anual", "anualmente", "assinatura",
+      "todo começo de mes", "todo começo de mês",
+      "todo fim de mes", "todo fim de mês",
+      "por mes", "por mês", "ao mes", "ao mês",
+      "cada mes", "cada mês", "cobrado mensal",
+      "pago todo", "desconta todo"
+    ],
     weight: 0.95
   },
-  // CONTEXTO TEMPORÁRIO (viagem, evento, obra)
+  // 📍 CONTEXTO TEMPORÁRIO (viagem, evento, obra)
   set_context: {
-    verbs: ["vou viajar", "viagem para", "vou fazer uma obra", "comecando obra", "começando obra", "evento de", "vou para"],
-    contexts: ["viagem", "férias", "ferias", "obra", "reforma", "casamento", "evento"],
+    verbs: [
+      "vou viajar", "viagem para", "fazer uma viagem",
+      "vou fazer uma obra", "comecando obra", "começando obra", 
+      "evento de", "vou para",
+      "entre o dia", "entre dia", "entre os dias",
+      "de hoje ate", "de hoje até", "a partir de",
+      "comecando dia", "começando dia",
+      "do dia", "partir do dia"
+    ],
+    contexts: [
+      "viagem", "férias", "ferias", 
+      "obra", "reforma", "casamento", "evento",
+      "lua de mel", "excursao", "excursão",
+      "congresso", "conferencia", "conferência"
+    ],
     weight: 0.92
   },
   income: {
-    verbs: ["recebi", "recebido", "ganhei", "caiu", "entrou", "entrada de"],
+    verbs: ["recebi", "recebido", "ganhei", "caiu", "entrou", "entrada de", "me mandaram", "mandaram pra mim", "depositaram", "transferiram"],
     contexts: ["salario", "salário", "pagamento recebido", "pix recebido"],
     weight: 0.95
   },
@@ -309,14 +331,7 @@ function classifySemanticHeuristic(message: string): SemanticResult {
     slots.payment_method = "credito";
   }
   
-  // 3. EXTRAIR DESCRIÇÃO (texto restante)
-  let desc = original
-    .replace(/recebi|gastei|paguei|comprei|caiu|r\$|reais|real|no|na|em|de|pix|debito|credito|dinheiro|cartao|cartão/gi, "")
-    .replace(/[\d.,]+/g, "")
-    .trim();
-  if (desc.length > 2) slots.description = desc;
-  
-  // 4. EXTRAIR CARTÃO (para card_event)
+  // 3. EXTRAIR CARTÃO (para card_event)
   const banks = ["nubank", "itau", "itaú", "bradesco", "santander", "c6", "inter", "picpay", "next"];
   for (const bank of banks) {
     if (normalized.includes(bank)) {
@@ -328,12 +343,12 @@ function classifySemanticHeuristic(message: string): SemanticResult {
     slots.value = slots.amount;
   }
   
-  // 5. EXTRAIR PERIODICIDADE E DIA (para recorrente)
-  if (normalized.includes("todo mes") || normalized.includes("mensal")) {
+  // 4. EXTRAIR PERIODICIDADE E DIA (para recorrente)
+  if (normalized.includes("todo mes") || normalized.includes("mensal") || normalized.includes("por mes") || normalized.includes("ao mes") || normalized.includes("cada mes")) {
     slots.periodicity = "monthly";
-  } else if (normalized.includes("semanal")) {
+  } else if (normalized.includes("semanal") || normalized.includes("por semana")) {
     slots.periodicity = "weekly";
-  } else if (normalized.includes("anual")) {
+  } else if (normalized.includes("anual") || normalized.includes("por ano")) {
     slots.periodicity = "yearly";
   }
   
@@ -343,16 +358,74 @@ function classifySemanticHeuristic(message: string): SemanticResult {
     slots.day_of_month = parseInt(dayMatch[1]);
   }
   
-  // 6. EXTRAIR DATAS (para set_context)
+  // 5. EXTRAIR DATAS (para set_context) - MELHORADO
   const datePatterns = [
+    // "de 09/01 até 10/01" ou "de 9/1 a 10/1"
     /de\s*(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*(?:a|até|ate)\s*(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/i,
+    // "entre o dia 09/01 e 10/01" ou "entre dia 9 e 10"
+    /entre\s*(?:o\s*)?(?:dia\s*)?(\d{1,2}(?:[\/\-]\d{1,2})?(?:[\/\-]\d{2,4})?)\s*(?:e|a|até|ate)\s*(?:dia\s*)?(\d{1,2}(?:[\/\-]\d{1,2})?(?:[\/\-]\d{2,4})?)/i,
+    // "do dia 09 ao 10" 
+    /do\s*dia\s*(\d{1,2}(?:[\/\-]\d{1,2})?)\s*(?:ao?|até|ate)\s*(?:dia\s*)?(\d{1,2}(?:[\/\-]\d{1,2})?)/i,
+    // "de hoje até dia X"
     /(?:de\s*)?hoje\s*(?:a|até|ate)\s*(?:dia\s*)?(\d{1,2})/i,
   ];
   for (const pattern of datePatterns) {
     const match = original.match(pattern);
     if (match) {
-      slots.date_range = { start: match[1], end: match[2] || match[1] };
+      // Normalizar datas (adicionar mês atual se não especificado)
+      const currentMonth = new Date().getMonth() + 1;
+      const currentYear = new Date().getFullYear();
+      
+      let startStr = match[1] || "";
+      let endStr = match[2] || match[1] || "";
+      
+      // Se é só um número (dia), adicionar mês atual
+      if (/^\d{1,2}$/.test(startStr)) {
+        startStr = `${startStr}/${currentMonth}`;
+      }
+      if (/^\d{1,2}$/.test(endStr)) {
+        endStr = `${endStr}/${currentMonth}`;
+      }
+      
+      slots.date_range = { start: startStr, end: endStr };
       break;
+    }
+  }
+  
+  // 6. EXTRAIR LABEL DO CONTEXTO
+  const contextLabelPatterns = [
+    /viagem\s+(?:para|pra|a)\s+([A-Za-zÀ-ú\s]+?)(?:\s+de|\s+entre|\s+do|\s*$)/i,
+    /vou\s+(?:para|pra|a)\s+([A-Za-zÀ-ú\s]+?)(?:\s+de|\s+entre|\s+do|\s*$)/i,
+    /(?:viagem|evento|obra|reforma)\s+(?:em|no|na)\s+([A-Za-zÀ-ú\s]+)/i,
+  ];
+  for (const pattern of contextLabelPatterns) {
+    const match = original.match(pattern);
+    if (match && match[1]) {
+      slots.label = match[1].trim();
+      break;
+    }
+  }
+  
+  // 7. EXTRAIR DESCRIÇÃO GENÉRICA (para expenses/income não recorrentes)
+  // Exemplo: "gastei 50 no mercado" → description = "mercado"
+  // Exemplo: "recebi 200 do freelance" → description = "freelance"
+  if (!slots.description) {
+    const descPatterns = [
+      /(?:gastei|paguei|comprei)\s+[\d.,]+\s*(?:reais?)?\s*(?:no?|na?|em|de|com)\s+(.+?)(?:\s+(?:no\s+)?(?:pix|debito|credito|dinheiro|cartao)|\s*$)/i,
+      /(?:recebi|caiu|entrou|ganhei)\s+[\d.,]+\s*(?:reais?)?\s*(?:do?|da?|de|com)\s+(.+?)(?:\s*$)/i,
+      /(.+?)\s+[\d.,]+\s*(?:reais?)?(?:\s+(?:pix|debito|credito|dinheiro))?\s*$/i,
+    ];
+    for (const pattern of descPatterns) {
+      const match = original.match(pattern);
+      if (match && match[1]) {
+        const desc = match[1]
+          .replace(/\b(pix|debito|débito|credito|crédito|dinheiro|cartao|cartão|todo|mes|mês)\b/gi, "")
+          .trim();
+        if (desc.length > 1) {
+          slots.description = desc;
+          break;
+        }
+      }
     }
   }
   
@@ -363,7 +436,48 @@ function classifySemanticHeuristic(message: string): SemanticResult {
   // 🔄 RECURRING - Prioridade MÁXIMA (antes de expense)
   for (const ctx of SEMANTIC_PATTERNS.recurring.contexts) {
     if (normalized.includes(ctx)) {
+      // EXTRAÇÃO ESPECIAL DE DESCRIÇÃO PARA RECORRENTE
+      // Exemplo: "Netflix todo mês 40 reais" → description = "Netflix"
+      // Exemplo: "Aluguel 1500 todo dia 10" → description = "Aluguel"
+      if (!slots.description) {
+        // Tentar extrair nome do serviço/gasto ANTES do termo de recorrência
+        const recurringTerms = ["todo mes", "todo mês", "mensal", "mensalmente", "todo dia", "semanal", "anual", "assinatura", "por mes", "por mês", "ao mes", "ao mês", "cada mes", "cada mês"];
+        let descMatch: string | null = null;
+        
+        for (const term of recurringTerms) {
+          const termIndex = normalized.indexOf(term);
+          if (termIndex > 0) {
+            // Pegar texto antes do termo
+            const beforeTerm = original.substring(0, termIndex).trim();
+            // Remover valor numérico e palavras de pagamento
+            const cleanDesc = beforeTerm
+              .replace(/r\$\s*[\d.,]+|[\d.,]+\s*reais?/gi, "")
+              .replace(/\b(pix|debito|débito|credito|crédito|dinheiro|cartao|cartão)\b/gi, "")
+              .replace(/[\d.,]+/g, "")
+              .trim();
+            if (cleanDesc.length > 1) {
+              descMatch = cleanDesc;
+              break;
+            }
+          }
+        }
+        
+        // Se não achou antes, tentar achar depois (ex: "todo mês pago Netflix 40")
+        if (!descMatch) {
+          const afterMatch = original.match(/(?:todo\s*m[êe]s|mensal|semanal|anual)\s+(?:pago\s+)?([A-Za-zÀ-ú\s]+?)(?:\s+\d|$)/i);
+          if (afterMatch && afterMatch[1]) {
+            descMatch = afterMatch[1].trim();
+          }
+        }
+        
+        if (descMatch) {
+          slots.description = descMatch;
+        }
+      }
+      
       const canExecute = !!(slots.amount && slots.description);
+      console.log(`🔄 [HEURISTIC] Recurring detectado: amount=${slots.amount}, description="${slots.description}", canExecute=${canExecute}`);
+      
       return {
         actionType: "recurring",
         confidence: SEMANTIC_PATTERNS.recurring.weight,
@@ -375,6 +489,31 @@ function classifySemanticHeuristic(message: string): SemanticResult {
   }
   
   // 📍 SET_CONTEXT - Viagem/Evento
+  // Detectar menção a datas/períodos junto com palavras de contexto
+  const hasDateRange = !!slots.date_range;
+  const hasContextWord = SEMANTIC_PATTERNS.set_context.contexts.some(ctx => normalized.includes(ctx));
+  
+  // Se tem intervalo de datas E palavra de contexto → é set_context
+  if (hasDateRange && hasContextWord) {
+    if (!slots.label) {
+      // Tentar extrair label das palavras de contexto
+      for (const ctx of SEMANTIC_PATTERNS.set_context.contexts) {
+        if (normalized.includes(ctx)) {
+          slots.label = ctx.charAt(0).toUpperCase() + ctx.slice(1);
+          break;
+        }
+      }
+    }
+    console.log(`📍 [HEURISTIC] set_context detectado com datas: ${JSON.stringify(slots.date_range)}, label="${slots.label}"`);
+    return {
+      actionType: "set_context",
+      confidence: SEMANTIC_PATTERNS.set_context.weight,
+      slots,
+      reason: `Contexto com período: ${slots.label}`,
+      canExecuteDirectly: true // Tem datas = pode criar
+    };
+  }
+  
   for (const verb of SEMANTIC_PATTERNS.set_context.verbs) {
     if (normalized.includes(verb)) {
       return {
@@ -382,20 +521,22 @@ function classifySemanticHeuristic(message: string): SemanticResult {
         confidence: SEMANTIC_PATTERNS.set_context.weight,
         slots,
         reason: `Criação de contexto: "${verb}"`,
-        canExecuteDirectly: false // Sempre confirmar contextos
+        canExecuteDirectly: hasDateRange // Pode executar se tem datas
       };
     }
   }
+  
   for (const ctx of SEMANTIC_PATTERNS.set_context.contexts) {
     if (normalized.includes(ctx)) {
-      // Verificar se é criação de contexto ou gasto normal em contexto
-      if (normalized.includes("vou") || normalized.includes("comec") || normalized.includes("inicio") || normalized.includes("início")) {
+      // Verificar se é criação de contexto (vou fazer, vou para, começando, etc)
+      if (normalized.includes("vou") || normalized.includes("comec") || normalized.includes("inicio") || normalized.includes("início") || normalized.includes("fazer") || normalized.includes("entre")) {
+        if (!slots.label) slots.label = ctx.charAt(0).toUpperCase() + ctx.slice(1);
         return {
           actionType: "set_context",
           confidence: SEMANTIC_PATTERNS.set_context.weight * 0.9,
-          slots: { ...slots, label: ctx },
+          slots,
           reason: `Contexto detectado: "${ctx}"`,
-          canExecuteDirectly: false
+          canExecuteDirectly: hasDateRange
         };
       }
     }
@@ -516,24 +657,62 @@ CONTEXTO ATIVO:
         messages: [
           {
             role: "system",
-            content: `Você é o Decision Engine do Finax. Classifique e extraia TUDO da mensagem.
+            content: `Você é o Decision Engine do Finax, um assistente financeiro. Classifique a intenção e extraia TODOS os dados.
 
 ${contextInfo}
 
+🎯 TIPOS DE AÇÃO (em ordem de prioridade):
+
+1️⃣ recurring - Gasto RECORRENTE (todo mês, mensal, assinatura)
+   Exemplos: "Netflix todo mês 40", "Aluguel 1500 todo dia 10", "Academia 99 reais mensal"
+   Slots: amount, description (nome do serviço), periodicity (monthly/weekly/yearly), day_of_month
+
+2️⃣ set_context - Criar PERÍODO especial (viagem, obra, evento)
+   Exemplos: "Vou viajar pra SP de 15/01 até 20/01", "Entre o dia 09 e 10 vou fazer uma viagem", "Começando obra semana que vem"
+   Slots: label (nome do evento), start_date (DD/MM), end_date (DD/MM)
+
+3️⃣ income - Dinheiro ENTRANDO
+   Exemplos: "Recebi 200 de pix", "Caiu 1500 do salário", "Me mandaram 77 do tigrinho"
+   Slots: amount, source, description
+
+4️⃣ expense - Gasto PONTUAL (único, não recorrente)
+   Exemplos: "Gastei 50 no mercado no pix", "Paguei 30 de uber"
+   Slots: amount, description, payment_method
+
+5️⃣ card_event - Atualização de CARTÃO
+   Exemplos: "Limite Nubank 6400", "Aumentou limite do Itaú"
+   Slots: card, value
+
+6️⃣ cancel - Cancelar ação
+7️⃣ query - Consultar resumo/saldo
+8️⃣ unknown - Não identificado
+
 🔒 REGRAS ABSOLUTAS:
-1. "Recebi X" / "Caiu X" / "Entrada de X" = SEMPRE income
-2. "Limite do cartão" = SEMPRE card_event  
-3. "Gastei/Comprei/Paguei X" = expense
-4. Se há valor + verbo + meio (pix/dinheiro) → EXTRAIA TUDO, shouldExecute=true
-5. NUNCA retorne shouldAsk=true se todos os dados estão na mensagem
+- Se menciona "todo mês", "mensal", "assinatura" → É recurring (NÃO expense!)
+- Se menciona período/datas + viagem/obra/evento → É set_context
+- "Recebi/Caiu/Entrou/Me mandaram" → É income
+- "Gastei/Comprei/Paguei" SEM recorrência → É expense
+- Sempre extraia description como o nome do serviço/produto (Netflix, Aluguel, Mercado, etc)
 
 Responda APENAS JSON:
 {
-  "actionType": "expense|income|card_event|cancel|query|unknown",
+  "actionType": "recurring|set_context|income|expense|card_event|cancel|query|unknown",
   "confidence": 0.0-1.0,
-  "slots": {"amount": num, "description": "str", "payment_method": "str", "source": "str", "card": "str", "value": num},
-  "shouldExecute": true se tem tudo necessário,
-  "reasoning": "explicação"
+  "slots": {
+    "amount": number,
+    "description": "string (nome do serviço/produto)",
+    "payment_method": "pix|debito|credito|dinheiro",
+    "source": "pix|dinheiro|transferencia",
+    "periodicity": "monthly|weekly|yearly",
+    "day_of_month": number,
+    "label": "string (nome do evento/viagem)",
+    "start_date": "DD/MM",
+    "end_date": "DD/MM",
+    "card": "string",
+    "value": number
+  },
+  "shouldExecute": true,
+  "reasoning": "explicação curta"
 }`
           },
           { role: "user", content: message }
@@ -630,7 +809,41 @@ async function decisionEngine(
   const heuristic = classifySemanticHeuristic(message);
   console.log(`🏷️ Heurística: ${heuristic.actionType} | Conf: ${(heuristic.confidence * 100).toFixed(0)}% | Exec: ${heuristic.canExecuteDirectly}`);
   
-  // PASSO 2: Se confiança ALTA e pode executar → BLOQUEAR fluxos legados
+  // PASSO 2: Para recurring e set_context, forçar IA se slots incompletos
+  // Isso garante extração semântica mais inteligente que heurística
+  if ((heuristic.actionType === "recurring" || heuristic.actionType === "set_context") && !heuristic.canExecuteDirectly) {
+    console.log(`🤖 Forçando IA para ${heuristic.actionType} (slots incompletos)`);
+    
+    const aiResult = await callAIForDecision(
+      message,
+      {
+        hasActiveAction: !!activeAction,
+        activeActionType: activeAction?.intent,
+        activeActionSlots: activeAction?.slots,
+        pendingSlot: activeAction?.pending_slot
+      },
+      history
+    );
+    
+    // Mesclar slots: IA completa o que heurística não pegou
+    const mergedSlots = { ...heuristic.slots, ...aiResult.slots };
+    const mergedMissing = getMissingSlots(heuristic.actionType, mergedSlots);
+    
+    console.log(`🔀 Slots mesclados: ${JSON.stringify(mergedSlots)} | Faltam: ${mergedMissing.join(", ") || "nenhum"}`);
+    
+    return {
+      result: {
+        actionType: heuristic.actionType, // Manter tipo da heurística (mais confiável para recurring/set_context)
+        confidence: Math.max(heuristic.confidence, aiResult.confidence),
+        slots: mergedSlots,
+        reason: `${heuristic.reason} + IA`,
+        canExecuteDirectly: mergedMissing.length === 0
+      },
+      shouldBlockLegacyFlow: true
+    };
+  }
+  
+  // PASSO 3: Se confiança ALTA e pode executar → BLOQUEAR fluxos legados
   if (heuristic.confidence >= 0.90 && heuristic.actionType !== "unknown") {
     // Verificar se tem tudo necessário
     const missing = getMissingSlots(heuristic.actionType, heuristic.slots);
