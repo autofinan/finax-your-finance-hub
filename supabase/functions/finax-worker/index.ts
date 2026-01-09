@@ -1228,65 +1228,10 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
-    // 🔢 NÚMERO ISOLADO - REGRA ABSOLUTA
+    // 🧠 DECISION ENGINE PRIMEIRO - CLASSIFICAÇÃO UNIFICADA
     // ========================================================================
-    // Mensagem contendo APENAS número (ex: "100"):
-    // - intent = unknown
-    // - DEVE perguntar: "Esse valor é um gasto ou uma entrada?"
-    // - NUNCA assumir gasto ou entrada automaticamente
-    // ========================================================================
-    if (isNumericOnly(conteudoProcessado)) {
-      const numValue = parseNumericValue(conteudoProcessado);
-      
-      logDecision({ messageId: payload.messageId, decision: "numeric_routing", details: { value: numValue, hasContext: !!activeAction } });
-      
-      // CASO 1: Há contexto ativo esperando amount → preencher slot
-      if (activeAction && activeAction.pending_slot === "amount" && numValue) {
-        const updatedSlots: ExtractedSlots = { ...activeAction.slots, amount: numValue };
-        const actionType = activeAction.intent === "income" ? "income" : activeAction.intent === "expense" ? "expense" : null;
-        
-        if (actionType) {
-          const missing = getMissingSlots(actionType as ActionType, updatedSlots);
-          
-          // Todos slots preenchidos → executar
-          if (hasAllRequiredSlots(actionType as ActionType, updatedSlots)) {
-            const result = actionType === "income" 
-              ? await registerIncome(userId, updatedSlots, activeAction.id)
-              : await registerExpense(userId, updatedSlots, activeAction.id);
-            await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-            return;
-          }
-          
-          // Falta slot → perguntar APENAS o próximo obrigatório
-          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
-          const prompt = SLOT_PROMPTS[missing[0]];
-          if (prompt?.useButtons && prompt.buttons) {
-            await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
-          } else {
-            await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
-          }
-          return;
-        }
-      }
-      
-      // CASO 2: Número SEM contexto ou contexto NÃO é expense/income
-      // → PERGUNTAR EXPLICITAMENTE (regra absoluta - não assumir!)
-      await sendButtons(payload.phoneNumber, `💰 R$ ${numValue?.toFixed(2)}\n\nEsse valor foi um gasto ou uma entrada?`, [
-        { id: "num_gasto", title: "💸 Gasto" },
-        { id: "num_entrada", title: "💰 Entrada" }
-      ], payload.messageSource);
-      
-      // Se tinha contexto de outro tipo, descartar
-      if (activeAction) {
-        await cancelAction(userId);
-      }
-      
-      await createAction(userId, "unknown", "numero_isolado", { amount: numValue }, "type_choice", payload.messageId);
-      return;
-    }
-    
-    // ========================================================================
-    // 🧠 DECISION ENGINE - CLASSIFICAÇÃO UNIFICADA
+    // REGRA ABSOLUTA: A IA analisa a mensagem PRIMEIRO, antes de qualquer
+    // verificação de número. Se a IA identificar intenção, números NÃO invalidam.
     // ========================================================================
     
     // Buscar histórico para contexto da IA
@@ -1486,7 +1431,61 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
-    // ❓ UNKNOWN / FALLBACK
+    // ========================================================================
+    // 🔢 FALLBACK: NÚMERO ISOLADO (só chega aqui se Decision Engine disse "unknown")
+    // ========================================================================
+    // Este é o "fundo do poço" da lógica. SÓ pergunta "gasto ou entrada?"
+    // quando a IA NÃO conseguiu classificar a intenção.
+    // ========================================================================
+    if (decision.actionType === "unknown" && isNumericOnly(conteudoProcessado)) {
+      const numValue = parseNumericValue(conteudoProcessado);
+      
+      logDecision({ messageId: payload.messageId, decision: "numeric_fallback", details: { value: numValue } });
+      
+      // CASO 1: Há contexto ativo esperando amount → preencher slot
+      if (activeAction && activeAction.pending_slot === "amount" && numValue) {
+        const updatedSlots: ExtractedSlots = { ...activeAction.slots, amount: numValue };
+        const actionType = activeAction.intent === "income" ? "income" : activeAction.intent === "expense" ? "expense" : null;
+        
+        if (actionType) {
+          const missing = getMissingSlots(actionType as ActionType, updatedSlots);
+          
+          // Todos slots preenchidos → executar
+          if (hasAllRequiredSlots(actionType as ActionType, updatedSlots)) {
+            const result = actionType === "income" 
+              ? await registerIncome(userId, updatedSlots, activeAction.id)
+              : await registerExpense(userId, updatedSlots, activeAction.id);
+            await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+            return;
+          }
+          
+          // Falta slot → perguntar APENAS o próximo obrigatório
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
+          const prompt = SLOT_PROMPTS[missing[0]];
+          if (prompt?.useButtons && prompt.buttons) {
+            await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+          } else {
+            await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
+          }
+          return;
+        }
+      }
+      
+      // CASO 2: Número SEM contexto → PERGUNTAR
+      await sendButtons(payload.phoneNumber, `💰 R$ ${numValue?.toFixed(2)}\n\nEsse valor foi um gasto ou uma entrada?`, [
+        { id: "num_gasto", title: "💸 Gasto" },
+        { id: "num_entrada", title: "💰 Entrada" }
+      ], payload.messageSource);
+      
+      if (activeAction) {
+        await cancelAction(userId);
+      }
+      
+      await createAction(userId, "unknown", "numero_isolado", { amount: numValue }, "type_choice", payload.messageId);
+      return;
+    }
+    
+    // ❓ UNKNOWN / FALLBACK GENÉRICO
     if (activeAction && activeAction.pending_slot) {
       // Re-perguntar o slot pendente
       const prompt = SLOT_PROMPTS[activeAction.pending_slot];
