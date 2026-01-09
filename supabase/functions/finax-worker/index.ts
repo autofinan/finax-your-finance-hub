@@ -1463,21 +1463,108 @@ async function cancelTransaction(userId: string, txId: string): Promise<{ succes
 }
 
 // ============================================================================
-// 🔄 RECURRING HANDLER - Gastos Recorrentes
+// 🔄 RECURRING HANDLER - Gastos Recorrentes (ARQUITETURA DEFENSIVA)
 // ============================================================================
 
+// Interface do contrato de recorrência
+interface RecurringContract {
+  user_id: string;
+  transaction_id: string;
+  amount: number;
+  description: string;
+  periodicity: "monthly" | "weekly" | "yearly";
+  day_of_month?: number;
+  categoria?: string;
+}
+
+// Validador do contrato - retorna null se válido, ou string com motivo se inválido
+function validateRecurringContract(contract: Partial<RecurringContract>): string | null {
+  if (!contract.user_id) return "user_id ausente";
+  if (!contract.transaction_id) return "transaction_id ausente";
+  if (typeof contract.amount !== "number" || isNaN(contract.amount) || contract.amount <= 0) return `amount inválido: ${contract.amount}`;
+  if (!contract.description || contract.description.trim() === "") return "description ausente ou vazia";
+  if (!["monthly", "weekly", "yearly"].includes(contract.periodicity || "")) return `periodicity inválido: ${contract.periodicity}`;
+  return null; // Contrato válido
+}
+
+// Normalizador de periodicity para o formato do banco (capitalizado conforme constraint)
+function normalizePeriodicityForDB(periodicity: string): string {
+  const map: Record<string, string> = {
+    "monthly": "Mensal",
+    "weekly": "Semanal",
+    "yearly": "Mensal", // Banco não tem "Anual", usar Mensal como fallback
+    "mensal": "Mensal",
+    "semanal": "Semanal",
+    "anual": "Mensal"
+  };
+  return map[periodicity.toLowerCase()] || "Mensal";
+}
+
+// 🛡️ FUNÇÃO DEFENSIVA - NUNCA lança exceção, NUNCA interrompe fluxo principal
+async function tryRegisterRecurring(contract: Partial<RecurringContract>): Promise<{ success: boolean; reason?: string; recurrenceId?: string }> {
+  // GUARD 1: Validar contrato
+  const validationError = validateRecurringContract(contract);
+  if (validationError) {
+    console.log(`🔄 [RECURRING][SKIP] Contrato inválido: ${validationError}`, JSON.stringify(contract));
+    return { success: false, reason: validationError };
+  }
+  
+  // GUARD 2: Contrato válido, prosseguir com insert
+  const tipoRecorrencia = normalizePeriodicityForDB(contract.periodicity!);
+  const dayOfMonth = contract.day_of_month || new Date().getDate();
+  
+  console.log(`🔄 [RECURRING][ATTEMPT] Criando recorrência: ${contract.description} - R$ ${contract.amount} (${tipoRecorrencia}, dia ${dayOfMonth})`);
+  
+  try {
+    const { data: recorrencia, error: recError } = await supabase.from("gastos_recorrentes").insert({
+      usuario_id: contract.user_id,
+      valor_parcela: contract.amount,
+      categoria: contract.categoria || "outros",
+      descricao: contract.description,
+      tipo_recorrencia: tipoRecorrencia,
+      dia_mes: dayOfMonth,
+      ativo: true,
+      origem: "whatsapp"
+    }).select("id").single();
+    
+    if (recError) {
+      console.error(`🔄 [RECURRING][DB_ERROR] Falha no insert:`, recError.message, recError.details, recError.hint);
+      return { success: false, reason: `DB: ${recError.message}` };
+    }
+    
+    // Vincular transação à recorrência
+    await supabase.from("transacoes").update({ id_recorrente: recorrencia.id }).eq("id", contract.transaction_id);
+    
+    console.log(`🔄 [RECURRING][SUCCESS] Recorrência criada: ${recorrencia.id}`);
+    return { success: true, recurrenceId: recorrencia.id };
+    
+  } catch (err) {
+    // FALLBACK: Captura qualquer exceção inesperada
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error(`🔄 [RECURRING][EXCEPTION] Erro inesperado:`, errorMsg);
+    return { success: false, reason: `Exception: ${errorMsg}` };
+  }
+}
+
+// Função principal de registro de recorrência (usa a defensiva internamente)
 async function registerRecurring(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
-  const valor = slots.amount!;
+  const valor = slots.amount;
   const descricao = slots.description || "";
   const categoria = inferCategory(descricao);
-  const periodicity = slots.periodicity || "monthly";
+  const periodicity = (slots.periodicity || "monthly") as "monthly" | "weekly" | "yearly";
   const dayOfMonth = slots.day_of_month || new Date().getDate();
   
-  console.log(`🔄 [RECURRING] Registrando: R$ ${valor} - ${descricao} (${periodicity})`);
+  // GUARD: Validar valor antes de qualquer operação
+  if (!valor || typeof valor !== "number" || valor <= 0) {
+    console.error(`🔄 [RECURRING][GUARD] Valor inválido: ${valor}`);
+    return { success: false, message: "Falta informar o valor 💰" };
+  }
+  
+  console.log(`🔄 [RECURRING] Iniciando: R$ ${valor} - ${descricao} (${periodicity})`);
   
   const agora = new Date();
   
-  // 1. Registrar o gasto de HOJE como transação normal
+  // PASSO 1: Registrar a transação de HOJE (SEMPRE executa)
   const { data: tx, error: txError } = await supabase.from("transacoes").insert({
     usuario_id: userId,
     valor,
@@ -1495,40 +1582,38 @@ async function registerRecurring(userId: string, slots: ExtractedSlots, actionId
     return { success: false, message: "Algo deu errado ao registrar 😕" };
   }
   
-  // 2. Criar registro na tabela de recorrências
-  const tipoRecorrencia = periodicity === "weekly" ? "semanal" : periodicity === "yearly" ? "anual" : "mensal";
+  console.log(`🔄 [RECURRING] Transação criada: ${tx.id}`);
   
-  const { data: recorrencia, error: recError } = await supabase.from("gastos_recorrentes").insert({
-    usuario_id: userId,
-    valor_parcela: valor,
-    categoria,
-    descricao,
-    tipo_recorrencia: tipoRecorrencia,
-    dia_mes: dayOfMonth,
-    ativo: true,
-    origem: "whatsapp"
-  }).select("id").single();
+  // PASSO 2: Tentar criar recorrência (ISOLADO - nunca afeta o passo 1)
+  const recurringResult = await tryRegisterRecurring({
+    user_id: userId,
+    transaction_id: tx.id,
+    amount: valor,
+    description: descricao,
+    periodicity: periodicity,
+    day_of_month: dayOfMonth,
+    categoria: categoria
+  });
   
-  if (recError) {
-    console.error("❌ [RECURRING] Erro ao criar recorrência:", recError);
-    // Ainda retorna sucesso para a transação
-    return { 
-      success: true, 
-      message: `✅ *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n📝 ${descricao}\n\n⚠️ _Não consegui agendar os próximos meses_`
-    };
-  }
-  
-  // Vincular transação à recorrência
-  await supabase.from("transacoes").update({ id_recorrente: recorrencia.id }).eq("id", tx.id);
-  
+  // PASSO 3: Fechar action se existir
   if (actionId) await closeAction(actionId, tx.id);
   
+  // PASSO 4: Retornar mensagem apropriada
   const diaLabel = dayOfMonth === 1 ? "início" : dayOfMonth >= 25 ? "fim" : `dia ${dayOfMonth}`;
   
-  return {
-    success: true,
-    message: `🔄 *Gasto recorrente salvo!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n📝 ${descricao}\n📅 Todo ${diaLabel} do mês\n\n✅ _Registrei o gasto de hoje e agendei os próximos!_`
-  };
+  if (recurringResult.success) {
+    return {
+      success: true,
+      message: `🔄 *Gasto recorrente salvo!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n📝 ${descricao}\n📅 Todo ${diaLabel} do mês\n\n✅ _Registrei o gasto de hoje e agendei os próximos!_`
+    };
+  } else {
+    // Transação foi salva, mas recorrência falhou
+    console.log(`🔄 [RECURRING][PARTIAL] Transação OK, recorrência falhou: ${recurringResult.reason}`);
+    return { 
+      success: true, 
+      message: `✅ *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n📝 ${descricao}\n\n⚠️ _Não consegui agendar os próximos meses (${recurringResult.reason})_`
+    };
+  }
 }
 
 // ============================================================================
