@@ -42,7 +42,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "control" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "control" | "recurring" | "set_context" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -119,6 +119,8 @@ const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[]
   cancel: { required: [], optional: ["transaction_id"] },
   query: { required: [], optional: [] },
   control: { required: [], optional: [] },
+  recurring: { required: ["amount", "description"], optional: ["day_of_month", "category", "periodicity"] },
+  set_context: { required: ["label", "start_date", "end_date"], optional: ["description"] },
   unknown: { required: [], optional: [] },
 };
 
@@ -227,6 +229,18 @@ interface SemanticResult {
 }
 
 const SEMANTIC_PATTERNS = {
+  // RECORRENTE - Prioridade MÁXIMA (antes de expense)
+  recurring: {
+    verbs: [],
+    contexts: ["todo mes", "todo mês", "mensal", "mensalmente", "todo dia", "semanal", "semanalmente", "anual", "anualmente", "assinatura", "todo começo de mes", "todo fim de mes"],
+    weight: 0.95
+  },
+  // CONTEXTO TEMPORÁRIO (viagem, evento, obra)
+  set_context: {
+    verbs: ["vou viajar", "viagem para", "vou fazer uma obra", "comecando obra", "começando obra", "evento de", "vou para"],
+    contexts: ["viagem", "férias", "ferias", "obra", "reforma", "casamento", "evento"],
+    weight: 0.92
+  },
   income: {
     verbs: ["recebi", "recebido", "ganhei", "caiu", "entrou", "entrada de"],
     contexts: ["salario", "salário", "pagamento recebido", "pix recebido"],
@@ -314,11 +328,80 @@ function classifySemanticHeuristic(message: string): SemanticResult {
     slots.value = slots.amount;
   }
   
+  // 5. EXTRAIR PERIODICIDADE E DIA (para recorrente)
+  if (normalized.includes("todo mes") || normalized.includes("mensal")) {
+    slots.periodicity = "monthly";
+  } else if (normalized.includes("semanal")) {
+    slots.periodicity = "weekly";
+  } else if (normalized.includes("anual")) {
+    slots.periodicity = "yearly";
+  }
+  
+  // Extrair dia do mês (ex: "todo dia 10", "dia 5")
+  const dayMatch = original.match(/(?:todo\s*)?dia\s*(\d{1,2})/i);
+  if (dayMatch) {
+    slots.day_of_month = parseInt(dayMatch[1]);
+  }
+  
+  // 6. EXTRAIR DATAS (para set_context)
+  const datePatterns = [
+    /de\s*(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*(?:a|até|ate)\s*(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/i,
+    /(?:de\s*)?hoje\s*(?:a|até|ate)\s*(?:dia\s*)?(\d{1,2})/i,
+  ];
+  for (const pattern of datePatterns) {
+    const match = original.match(pattern);
+    if (match) {
+      slots.date_range = { start: match[1], end: match[2] || match[1] };
+      break;
+    }
+  }
+  
   // ========================================================================
   // CLASSIFICAÇÃO POR PADRÕES (HEURÍSTICA - NÃO DECISÃO!)
   // ========================================================================
   
-  // 🟢 INCOME - Prioridade MÁXIMA
+  // 🔄 RECURRING - Prioridade MÁXIMA (antes de expense)
+  for (const ctx of SEMANTIC_PATTERNS.recurring.contexts) {
+    if (normalized.includes(ctx)) {
+      const canExecute = !!(slots.amount && slots.description);
+      return {
+        actionType: "recurring",
+        confidence: SEMANTIC_PATTERNS.recurring.weight,
+        slots,
+        reason: `Termo de recorrência: "${ctx}"`,
+        canExecuteDirectly: canExecute
+      };
+    }
+  }
+  
+  // 📍 SET_CONTEXT - Viagem/Evento
+  for (const verb of SEMANTIC_PATTERNS.set_context.verbs) {
+    if (normalized.includes(verb)) {
+      return {
+        actionType: "set_context",
+        confidence: SEMANTIC_PATTERNS.set_context.weight,
+        slots,
+        reason: `Criação de contexto: "${verb}"`,
+        canExecuteDirectly: false // Sempre confirmar contextos
+      };
+    }
+  }
+  for (const ctx of SEMANTIC_PATTERNS.set_context.contexts) {
+    if (normalized.includes(ctx)) {
+      // Verificar se é criação de contexto ou gasto normal em contexto
+      if (normalized.includes("vou") || normalized.includes("comec") || normalized.includes("inicio") || normalized.includes("início")) {
+        return {
+          actionType: "set_context",
+          confidence: SEMANTIC_PATTERNS.set_context.weight * 0.9,
+          slots: { ...slots, label: ctx },
+          reason: `Contexto detectado: "${ctx}"`,
+          canExecuteDirectly: false
+        };
+      }
+    }
+  }
+  
+  // 🟢 INCOME - Prioridade ALTA
   for (const verb of SEMANTIC_PATTERNS.income.verbs) {
     if (normalized.includes(verb)) {
       // Verificar se pode executar diretamente (tem amount)
@@ -981,6 +1064,16 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
     return { success: false, message: "Algo deu errado 😕\nTenta de novo?" };
   }
   
+  // 📍 INTERCEPTADOR: Vincular a contexto ativo (viagem/evento)
+  await linkTransactionToContext(userId, tx.id);
+  
+  // Verificar se há contexto ativo para informar o usuário
+  const activeContext = await getActiveContext(userId);
+  let contextInfo = "";
+  if (activeContext) {
+    contextInfo = `\n📍 _Vinculado a: ${activeContext.label}_`;
+  }
+  
   if (actionId) await closeAction(actionId, tx.id);
   
   const dataFormatada = agora.toLocaleDateString("pt-BR");
@@ -990,7 +1083,7 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   
   return {
     success: true,
-    message: `${emoji} *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${formaPagamento}\n📅 ${dataFormatada} às ${horaFormatada}`
+    message: `${emoji} *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${formaPagamento}\n📅 ${dataFormatada} às ${horaFormatada}${contextInfo}`
   };
 }
 
@@ -1089,6 +1182,181 @@ async function cancelTransaction(userId: string, txId: string): Promise<{ succes
   
   await supabase.from("transacoes").update({ status: "cancelada" }).eq("id", txId);
   return { success: true, message: `✅ *Transação cancelada!*\n\n🗑️ R$ ${tx.valor?.toFixed(2)} - ${tx.descricao || tx.categoria}` };
+}
+
+// ============================================================================
+// 🔄 RECURRING HANDLER - Gastos Recorrentes
+// ============================================================================
+
+async function registerRecurring(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
+  const valor = slots.amount!;
+  const descricao = slots.description || "";
+  const categoria = inferCategory(descricao);
+  const periodicity = slots.periodicity || "monthly";
+  const dayOfMonth = slots.day_of_month || new Date().getDate();
+  
+  console.log(`🔄 [RECURRING] Registrando: R$ ${valor} - ${descricao} (${periodicity})`);
+  
+  const agora = new Date();
+  
+  // 1. Registrar o gasto de HOJE como transação normal
+  const { data: tx, error: txError } = await supabase.from("transacoes").insert({
+    usuario_id: userId,
+    valor,
+    categoria,
+    tipo: "saida",
+    descricao,
+    data: agora.toISOString(),
+    origem: "whatsapp",
+    recorrente: true,
+    status: "confirmada"
+  }).select("id").single();
+  
+  if (txError) {
+    console.error("❌ [RECURRING] Erro ao criar transação:", txError);
+    return { success: false, message: "Algo deu errado ao registrar 😕" };
+  }
+  
+  // 2. Criar registro na tabela de recorrências
+  const tipoRecorrencia = periodicity === "weekly" ? "semanal" : periodicity === "yearly" ? "anual" : "mensal";
+  
+  const { data: recorrencia, error: recError } = await supabase.from("gastos_recorrentes").insert({
+    usuario_id: userId,
+    valor_parcela: valor,
+    categoria,
+    descricao,
+    tipo_recorrencia: tipoRecorrencia,
+    dia_mes: dayOfMonth,
+    ativo: true,
+    origem: "whatsapp"
+  }).select("id").single();
+  
+  if (recError) {
+    console.error("❌ [RECURRING] Erro ao criar recorrência:", recError);
+    // Ainda retorna sucesso para a transação
+    return { 
+      success: true, 
+      message: `✅ *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n📝 ${descricao}\n\n⚠️ _Não consegui agendar os próximos meses_`
+    };
+  }
+  
+  // Vincular transação à recorrência
+  await supabase.from("transacoes").update({ id_recorrente: recorrencia.id }).eq("id", tx.id);
+  
+  if (actionId) await closeAction(actionId, tx.id);
+  
+  const diaLabel = dayOfMonth === 1 ? "início" : dayOfMonth >= 25 ? "fim" : `dia ${dayOfMonth}`;
+  
+  return {
+    success: true,
+    message: `🔄 *Gasto recorrente salvo!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n📝 ${descricao}\n📅 Todo ${diaLabel} do mês\n\n✅ _Registrei o gasto de hoje e agendei os próximos!_`
+  };
+}
+
+// ============================================================================
+// 📍 CONTEXT HANDLER - Viagens/Eventos
+// ============================================================================
+
+async function getActiveContext(userId: string): Promise<any | null> {
+  const now = new Date().toISOString();
+  
+  const { data } = await supabase
+    .from("user_contexts")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .lte("start_date", now)
+    .gte("end_date", now)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+  
+  return data || null;
+}
+
+async function createUserContext(userId: string, slots: ExtractedSlots): Promise<{ success: boolean; message: string; contextId?: string }> {
+  const label = slots.label || "Evento";
+  const description = slots.description || null;
+  
+  // Parsear datas
+  let startDate = new Date();
+  let endDate = new Date();
+  endDate.setDate(endDate.getDate() + 7); // Default: 7 dias
+  
+  if (slots.date_range) {
+    // Tentar parsear datas do formato brasileiro
+    const parseDate = (str: string): Date => {
+      const parts = str.split(/[\/\-]/);
+      if (parts.length >= 2) {
+        const day = parseInt(parts[0]);
+        const month = parseInt(parts[1]) - 1;
+        const year = parts[2] ? parseInt(parts[2]) : new Date().getFullYear();
+        return new Date(year < 100 ? 2000 + year : year, month, day);
+      }
+      return new Date();
+    };
+    
+    startDate = parseDate(slots.date_range.start);
+    endDate = parseDate(slots.date_range.end);
+  } else if (slots.start_date && slots.end_date) {
+    startDate = new Date(slots.start_date);
+    endDate = new Date(slots.end_date);
+  }
+  
+  console.log(`📍 [CONTEXT] Criando: ${label} de ${startDate.toISOString()} até ${endDate.toISOString()}`);
+  
+  const { data: context, error } = await supabase.from("user_contexts").insert({
+    user_id: userId,
+    label,
+    description,
+    start_date: startDate.toISOString(),
+    end_date: endDate.toISOString(),
+    status: "active",
+    auto_tag: true
+  }).select("id").single();
+  
+  if (error) {
+    console.error("❌ [CONTEXT] Erro:", error);
+    return { success: false, message: "Não consegui criar o contexto 😕" };
+  }
+  
+  const startFormatted = startDate.toLocaleDateString("pt-BR");
+  const endFormatted = endDate.toLocaleDateString("pt-BR");
+  const diasRestantes = Math.ceil((endDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+  
+  return {
+    success: true,
+    contextId: context.id,
+    message: `📍 *Modo Contexto Ativado!*\n\n🏷️ *${label}*\n📅 ${startFormatted} até ${endFormatted}\n⏰ ${diasRestantes} dias\n\n✅ _Todos os seus gastos serão marcados como parte de "${label}" automaticamente!_\n\n_Quando terminar, mande "terminei a viagem" ou "fim do evento"_`
+  };
+}
+
+async function closeUserContext(userId: string): Promise<{ success: boolean; message: string }> {
+  const activeContext = await getActiveContext(userId);
+  
+  if (!activeContext) {
+    return { success: false, message: "Você não tem nenhum evento ativo no momento 🤔" };
+  }
+  
+  await supabase.from("user_contexts").update({ 
+    status: "completed",
+    end_date: new Date().toISOString()
+  }).eq("id", activeContext.id);
+  
+  return {
+    success: true,
+    message: `✅ *Evento "${activeContext.label}" encerrado!*\n\n📊 Total gasto: R$ ${(activeContext.total_spent || 0).toFixed(2)}\n🧾 ${activeContext.transaction_count || 0} transações\n\n_Voltando ao modo normal!_`
+  };
+}
+
+// Função para vincular transação a contexto ativo (interceptador)
+async function linkTransactionToContext(userId: string, transactionId: string): Promise<void> {
+  const activeContext = await getActiveContext(userId);
+  
+  if (activeContext && activeContext.auto_tag) {
+    await supabase.from("transacoes").update({ context_id: activeContext.id }).eq("id", transactionId);
+    console.log(`📍 [CONTEXT] Transação ${transactionId.slice(-8)} vinculada ao contexto ${activeContext.label}`);
+  }
 }
 
 // ============================================================================
@@ -1386,6 +1654,62 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      return;
+    }
+    
+    // ========================================================================
+    // 🔄 RECURRING - Gastos Recorrentes
+    // ========================================================================
+    if (decision.actionType === "recurring") {
+      const slots = decision.slots;
+      const missing = getMissingSlots("recurring", slots);
+      
+      // ✅ EXECUÇÃO DIRETA: tem amount e description
+      if (hasAllRequiredSlots("recurring", slots)) {
+        console.log(`🔄 [RECURRING] Execução direta: R$ ${slots.amount} - ${slots.description}`);
+        const actionId = activeAction?.intent === "recurring" ? activeAction.id : undefined;
+        const result = await registerRecurring(userId, slots, actionId);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      // ❌ FALTA SLOT OBRIGATÓRIO
+      const nextMissing = missing[0];
+      
+      if (activeAction?.intent === "recurring") {
+        await updateAction(activeAction.id, { slots, pending_slot: nextMissing });
+      } else {
+        await createAction(userId, "recurring", "recurring", slots, nextMissing, payload.messageId);
+      }
+      
+      // Perguntas específicas para recorrente
+      if (nextMissing === "amount") {
+        await sendMessage(payload.phoneNumber, "Qual o valor mensal? 💸", payload.messageSource);
+      } else if (nextMissing === "description") {
+        await sendMessage(payload.phoneNumber, "Qual gasto é esse? (ex: Netflix, Aluguel, Academia...)", payload.messageSource);
+      } else {
+        await sendMessage(payload.phoneNumber, `Qual o ${nextMissing}?`, payload.messageSource);
+      }
+      return;
+    }
+    
+    // ========================================================================
+    // 📍 SET_CONTEXT - Viagens/Eventos
+    // ========================================================================
+    if (decision.actionType === "set_context") {
+      const slots = decision.slots;
+      
+      // Verificar se é encerramento de contexto
+      const normalized = normalizeText(conteudoProcessado);
+      if (normalized.includes("terminei") || normalized.includes("fim do") || normalized.includes("acabou") || normalized.includes("encerr")) {
+        const result = await closeUserContext(userId);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      // Criar novo contexto
+      const result = await createUserContext(userId, slots);
+      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
       return;
     }
     
