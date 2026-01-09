@@ -1059,6 +1059,7 @@ export type Database = {
           atualizado_em: string | null
           cartao_id: string | null
           categoria: string
+          context_id: string | null
           created_at: string | null
           data: string
           data_transacao: string | null
@@ -1090,6 +1091,7 @@ export type Database = {
           atualizado_em?: string | null
           cartao_id?: string | null
           categoria: string
+          context_id?: string | null
           created_at?: string | null
           data?: string
           data_transacao?: string | null
@@ -1121,6 +1123,7 @@ export type Database = {
           atualizado_em?: string | null
           cartao_id?: string | null
           categoria?: string
+          context_id?: string | null
           created_at?: string | null
           data?: string
           data_transacao?: string | null
@@ -1157,6 +1160,20 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "transacoes_context_id_fkey"
+            columns: ["context_id"]
+            isOneToOne: false
+            referencedRelation: "user_contexts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transacoes_context_id_fkey"
+            columns: ["context_id"]
+            isOneToOne: false
+            referencedRelation: "vw_active_contexts"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "transacoes_id_cartao_fkey"
             columns: ["id_cartao"]
             isOneToOne: false
@@ -1187,6 +1204,66 @@ export type Database = {
           {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
+      user_contexts: {
+        Row: {
+          auto_tag: boolean
+          created_at: string
+          description: string | null
+          end_date: string
+          id: string
+          label: string
+          start_date: string
+          status: string
+          total_spent: number | null
+          transaction_count: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          auto_tag?: boolean
+          created_at?: string
+          description?: string | null
+          end_date: string
+          id?: string
+          label: string
+          start_date: string
+          status?: string
+          total_spent?: number | null
+          transaction_count?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          auto_tag?: boolean
+          created_at?: string
+          description?: string | null
+          end_date?: string
+          id?: string
+          label?: string
+          start_date?: string
+          status?: string
+          total_spent?: number | null
+          transaction_count?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
@@ -1294,6 +1371,69 @@ export type Database = {
       }
     }
     Views: {
+      vw_active_contexts: {
+        Row: {
+          auto_tag: boolean | null
+          created_at: string | null
+          description: string | null
+          end_date: string | null
+          id: string | null
+          label: string | null
+          start_date: string | null
+          status: string | null
+          time_remaining: unknown
+          total_spent: number | null
+          transaction_count: number | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          auto_tag?: boolean | null
+          created_at?: string | null
+          description?: string | null
+          end_date?: string | null
+          id?: string | null
+          label?: string | null
+          start_date?: string | null
+          status?: string | null
+          time_remaining?: never
+          total_spent?: number | null
+          transaction_count?: number | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          auto_tag?: boolean | null
+          created_at?: string | null
+          description?: string | null
+          end_date?: string | null
+          id?: string | null
+          label?: string | null
+          start_date?: string | null
+          status?: string | null
+          time_remaining?: never
+          total_spent?: number | null
+          transaction_count?: number | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       vw_dashboard_usuario: {
         Row: {
           parcelas_ativas: number | null
@@ -1721,6 +1861,7 @@ export type Database = {
       fn_analise_consultiva: { Args: { p_usuario_id: string }; Returns: Json }
       fn_cleanup_expired_selections: { Args: never; Returns: undefined }
       fn_close_card_faturas: { Args: never; Returns: undefined }
+      fn_close_expired_contexts: { Args: never; Returns: undefined }
       fn_daily_jobs: { Args: never; Returns: undefined }
       fn_generate_parcelas: {
         Args: { p_parcelamento_id: string }
