@@ -42,7 +42,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "control" | "recurring" | "set_context" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "control" | "recurring" | "set_context" | "chat" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -121,6 +121,7 @@ const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[]
   control: { required: [], optional: [] },
   recurring: { required: ["amount", "description"], optional: ["day_of_month", "category", "periodicity"] },
   set_context: { required: ["label", "start_date", "end_date"], optional: ["description"] },
+  chat: { required: [], optional: [] }, // Chat não precisa de slots
   unknown: { required: [], optional: [] },
 };
 
@@ -631,53 +632,74 @@ function classifySemanticHeuristic(message: string): SemanticResult {
 }
 
 // ============================================================================
-// 🧠 PROMPT UNIVERSAL FINAX - IA COMO EXTRATORA SEMÂNTICA PRINCIPAL
+// 🧠 PROMPT UNIVERSAL FINAX - NÚCLEO COGNITIVO (CONSULTOR FINANCEIRO)
 // ============================================================================
-const PROMPT_FINAX_UNIVERSAL = `# FINAX - EXTRATOR SEMÂNTICO FINANCEIRO
+const PROMPT_FINAX_UNIVERSAL = `# FINAX - NÚCLEO COGNITIVO FINANCEIRO
 
-Você é o cérebro do Finax. Sua função é INTERPRETAR a intenção do usuário e extrair dados estruturados.
+Você é Finax, um Consultor Financeiro Conversacional Inteligente.
+Não é um robô de formulários. Você é um analista financeiro pessoal capaz de:
+- Interpretar linguagem natural, gírias e contexto
+- Registrar eventos financeiros
+- Conversar, orientar e analisar situação financeira
+- Manter diálogo fluido MESMO quando dados estão faltando
 
-## REGRA ABSOLUTA
-- NÃO seja literal. Interprete o SENTIDO, não as palavras.
-- Entenda variações naturais da língua portuguesa.
+## PRINCÍPIO FUNDAMENTAL (LEI ZERO)
+INTENÇÃO HUMANA VEM ANTES DE QUALQUER EXTRAÇÃO DE DADOS.
+Nunca tente extrair valores antes de entender: "O que o usuário realmente quer fazer agora?"
 
-## TIPOS DE AÇÃO (em ordem de prioridade)
+## DOMÍNIOS COGNITIVOS (escolha EXATAMENTE UM)
 
-| Tipo | Quando usar | Evidências | Slots obrigatórios |
-|------|-------------|------------|-------------------|
-| recurring | Gasto que se REPETE | "todo mês", "mensal", "assinatura", "por mês", "mensalmente" | amount, description |
-| set_context | Período ESPECIAL temporário | "viagem", "obra", "entre dia X e Y", "vou viajar" | label, start_date, end_date |
-| income | Dinheiro ENTRANDO | "recebi", "caiu", "entrou", "me mandaram", "ganhei" | amount |
-| expense | Gasto ÚNICO (sem recorrência) | "gastei", "paguei", "comprei", "custou" | amount, payment_method |
-| card_event | Atualização de CARTÃO | "limite", "fatura" | card, value |
-| cancel | Cancelar/desfazer | "cancela", "desfaz", "apaga" | - |
-| query | Consultar resumo/saldo | "resumo", "quanto gastei", "saldo" | - |
-| unknown | Não identificado | - | - |
+### 1. TRANSACTIONAL (expense, income, recurring)
+Registro financeiro. Extrair dados + registrar.
+- "Gastei 50 no uber" → expense
+- "Netflix todo mês 40" → recurring
+- "Recebi 200" → income
+
+### 2. QUERY
+Consulta de dados: resumo, saldo, gastos por período.
+- "Quanto gastei?" → query
+- "Me mostra meus recorrentes" → query
+- "Qual meu saldo?" → query
+
+### 3. CHAT (PRIORIDADE QUANDO NÃO FOR OPERACIONAL)
+Conversa financeira, dúvidas, análises, conselhos, reflexões sobre dinheiro.
+- "Tô gastando demais?" → chat
+- "Como economizar?" → chat  
+- "Vale a pena parcelar?" → chat
+- "O que acha das minhas finanças?" → chat
+- "Tenho dinheiro pra fazer X?" → chat
+- Qualquer pergunta reflexiva sobre dinheiro → chat
+- Comentários sobre situação financeira → chat
+
+### 4. CONTROL
+Edição/cancelamento: "cancela", "apaga", "muda", "deixa pra lá"
+
+### 5. CARD_EVENT
+Atualização de cartão: limite, fatura.
+
+### 6. SET_CONTEXT
+Período especial: viagem, obra, evento temporário com datas.
 
 ## REGRAS DE CLASSIFICAÇÃO
 
-### RECURRING (Prioridade Máxima)
+### RECURRING (Prioridade Máxima para gastos)
 SE a mensagem menciona periodicidade → É RECURRING, nunca expense!
 - "Netflix todo mês 40" → recurring (amount=40, description="Netflix", periodicity="monthly")
-- "Aluguel 1500 todo dia 5" → recurring (amount=1500, description="Aluguel", periodicity="monthly", day_of_month=5)
 - "Academia 99 mensal" → recurring (amount=99, description="Academia", periodicity="monthly")
-- "Assinatura Spotify 20" → recurring (amount=20, description="Spotify", periodicity="monthly")
 
-### SET_CONTEXT (Segundo Prioridade)
-SE menciona período/datas + viagem/obra/evento → set_context
-- "Vou viajar pra SP de 15/01 até 20/01" → set_context (label="Viagem SP", start_date="15/01", end_date="20/01")
-- "Entre o dia 09 e 10 vou fazer uma viagem" → set_context (label="Viagem", start_date="09/01", end_date="10/01")
-- "Começando obra semana que vem" → set_context (label="Obra", start_date=<próximo dia>, end_date=<+7 dias>)
+### CHAT (Prioridade para perguntas reflexivas)
+SE a mensagem é uma PERGUNTA sobre finanças SEM dados concretos → chat
+SE a mensagem pede OPINIÃO, ANÁLISE ou CONSELHO → chat
+SE não é registro, consulta de dados nem cancelamento → chat
+
+NUNCA retorne "unknown" para perguntas sobre dinheiro. Use "chat".
 
 ### INCOME
 SE dinheiro está ENTRANDO → income
-- "Recebi 200 do pix" → income (amount=200, source="pix")
-- "Caiu 1500 do salário" → income (amount=1500, description="salário")
-- "Me mandaram 77 do tigrinho" → income (amount=77, description="tigrinho")
+- "Recebi 200" → income
 
 ### EXPENSE (Somente quando NÃO é recurring)
-- "Gastei 50 no uber" → expense (amount=50, description="uber")
-- "Paguei 30 de estacionamento" → expense (amount=30, description="estacionamento")
+- "Gastei 50 no uber" → expense
 
 ## NOMES DOS SLOTS (USE EXATAMENTE ESTES)
 - amount: number (valor em reais)
@@ -693,9 +715,9 @@ SE dinheiro está ENTRANDO → income
 - value: number (valor do limite)
 
 ## RESPOSTA
-Responda APENAS JSON válido, sem texto adicional:
+Responda APENAS JSON válido:
 {
-  "actionType": "recurring|set_context|income|expense|card_event|cancel|query|unknown",
+  "actionType": "recurring|set_context|income|expense|card_event|cancel|query|chat|control|unknown",
   "confidence": 0.0-1.0,
   "slots": { ... },
   "shouldExecute": true|false,
@@ -1723,6 +1745,81 @@ async function linkTransactionToContext(userId: string, transactionId: string): 
 }
 
 // ============================================================================
+// 💬 CHAT HANDLER - Consultor Financeiro Conversacional
+// ============================================================================
+
+async function generateChatResponse(
+  userMessage: string,
+  financialSummary: string,
+  activeContext: string | null,
+  userName: string
+): Promise<string> {
+  const contextInfo = activeContext 
+    ? `O usuário está no meio de: ${activeContext}` 
+    : "";
+  
+  const systemPrompt = `Você é o Finax, consultor financeiro pessoal do ${userName}.
+
+Seu tom é: amigável, direto, empático, brasileiro. Nada de "fiscal" ou "robô burocrático".
+Você é um CONSULTOR FINANCEIRO AMIGO, não um registrador de dados.
+
+CONTEXTO FINANCEIRO DO USUÁRIO:
+${financialSummary}
+${contextInfo}
+
+REGRAS:
+- Seja empático e útil
+- Dê dicas PRÁTICAS quando fizer sentido
+- Use emojis com moderação (máximo 3-4 por resposta)
+- Resposta em no máximo 3 parágrafos curtos
+- Se não souber algo específico, dê conselho genérico útil
+- NUNCA diga "não entendi" - sempre agregue valor
+- Fale como um amigo que entende de finanças
+- Se o usuário perguntar algo que exige dados que você não tem, sugira que ele registre gastos
+
+VOCÊ PODE:
+- Analisar a situação financeira com base no resumo
+- Dar dicas de economia
+- Sugerir estratégias de orçamento
+- Responder perguntas sobre finanças pessoais
+- Oferecer apoio e motivação`;
+
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage }
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(`💬 [CHAT] API Error: ${response.status}`);
+      return "Puxa, tive um problema aqui 😅 Mas me conta: o que você quer saber sobre suas finanças?";
+    }
+
+    const data = await response.json();
+    const chatResponse = data.choices?.[0]?.message?.content;
+    
+    if (!chatResponse) {
+      return "Vou analisar isso pra você! 📊 Me conta mais detalhes?";
+    }
+    
+    return chatResponse;
+  } catch (err) {
+    console.error(`💬 [CHAT] Exception:`, err);
+    return "Ops, algo deu errado por aqui 😕 Mas pode me perguntar de novo!";
+  }
+}
+
+// ============================================================================
 // 🔄 PROCESSAMENTO PRINCIPAL
 // ============================================================================
 
@@ -2097,6 +2194,37 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
+    // ========================================================================
+    // 💬 CHAT - Consultor Financeiro Conversacional
+    // ========================================================================
+    if (decision.actionType === "chat") {
+      console.log(`💬 [CHAT] Ativando modo consultor para: "${conteudoProcessado.slice(0, 50)}..."`);
+      
+      // Buscar contexto financeiro do usuário
+      const summary = await getMonthlySummary(userId);
+      const activeCtx = await getActiveContext(userId);
+      
+      // Chamar IA com contexto para resposta conversacional
+      const chatResponse = await generateChatResponse(
+        conteudoProcessado, 
+        summary,
+        activeCtx?.label || null,
+        nomeUsuario
+      );
+      
+      await sendMessage(payload.phoneNumber, chatResponse, payload.messageSource);
+      
+      // Salvar no histórico
+      await supabase.from("historico_conversas").insert({
+        phone_number: payload.phoneNumber,
+        user_id: userId,
+        user_message: conteudoProcessado,
+        ai_response: chatResponse,
+        tipo: "chat"
+      });
+      return;
+    }
+    
     // 🎮 CONTROL (saudação, ajuda, negação)
     if (decision.actionType === "control") {
       const normalized = normalizeText(conteudoProcessado);
@@ -2172,19 +2300,51 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
-    // ❓ UNKNOWN / FALLBACK GENÉRICO
+    // ❓ UNKNOWN / FALLBACK → TENTAR CHAT (nunca travar!)
     if (activeAction && activeAction.pending_slot) {
       // Re-perguntar o slot pendente
       const prompt = SLOT_PROMPTS[activeAction.pending_slot];
       if (prompt?.useButtons && prompt.buttons) {
-        await sendButtons(payload.phoneNumber, `Não entendi 🤔\n\n${prompt.text}`, prompt.buttons, payload.messageSource);
+        await sendButtons(payload.phoneNumber, `Hmm, não entendi bem 🤔\n\n${prompt.text}`, prompt.buttons, payload.messageSource);
       } else {
-        await sendMessage(payload.phoneNumber, `Não entendi 🤔\n\n${prompt?.text || "Continue..."}`, payload.messageSource);
+        await sendMessage(payload.phoneNumber, `Hmm, não entendi bem 🤔\n\n${prompt?.text || "Continue..."}`, payload.messageSource);
       }
       return;
     }
     
-    await sendMessage(payload.phoneNumber, `Não entendi 🤔\n\nPode me dizer:\n• Um gasto (ex: "café 8 reais pix")\n• Uma entrada (ex: "recebi 200")\n• "Resumo" pra ver seus gastos`, payload.messageSource);
+    // ========================================================================
+    // 💡 FALLBACK INTELIGENTE: Se parece pergunta → responder como chat
+    // ========================================================================
+    const normalizedFallback = normalizeText(conteudoProcessado);
+    const parecePerguntar = conteudoProcessado.includes("?") || 
+                            normalizedFallback.match(/^(como|quando|quanto|qual|por que|o que|sera|devo|posso|tenho|to |tou |estou |consigo)/);
+    
+    if (parecePerguntar) {
+      console.log(`💬 [FALLBACK→CHAT] Redirecionando para chat: "${conteudoProcessado.slice(0, 50)}..."`);
+      
+      const summary = await getMonthlySummary(userId);
+      const chatResponse = await generateChatResponse(
+        conteudoProcessado,
+        summary,
+        null,
+        nomeUsuario
+      );
+      await sendMessage(payload.phoneNumber, chatResponse, payload.messageSource);
+      
+      // Salvar no histórico
+      await supabase.from("historico_conversas").insert({
+        phone_number: payload.phoneNumber,
+        user_id: userId,
+        user_message: conteudoProcessado,
+        ai_response: chatResponse,
+        tipo: "chat_fallback"
+      });
+      return;
+    }
+    
+    // Fallback gentil para mensagens que realmente não fazem sentido
+    const primeiroNome = nomeUsuario.split(" ")[0];
+    await sendMessage(payload.phoneNumber, `Oi ${primeiroNome}! 👋\n\nNão entendi bem essa. Você pode:\n\n💸 *Registrar gasto:* "café 8 pix"\n💰 *Registrar entrada:* "recebi 200"\n📊 *Ver resumo:* "resumo"\n💬 *Conversar:* "tô gastando demais?"`, payload.messageSource);
     
   } catch (error) {
     console.error("❌ [WORKER] Erro:", error);
