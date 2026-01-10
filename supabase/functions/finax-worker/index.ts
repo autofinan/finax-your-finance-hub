@@ -113,13 +113,13 @@ interface ActiveAction {
 // ============================================================================
 
 const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[] }> = {
-  expense: { required: ["amount", "payment_method"], optional: ["description", "category", "card"] },
+  expense: { required: ["amount", "payment_method"], optional: ["description", "category", "card", "card_id"] },
   income: { required: ["amount"], optional: ["description", "source"] },
   card_event: { required: ["card", "value"], optional: ["field"] },
   cancel: { required: [], optional: ["transaction_id"] },
   query: { required: [], optional: [] },
   control: { required: [], optional: [] },
-  recurring: { required: ["amount", "description"], optional: ["day_of_month", "category", "periodicity"] },
+  recurring: { required: ["amount", "description", "payment_method"], optional: ["day_of_month", "category", "periodicity", "card", "card_id"] },
   set_context: { required: ["label", "start_date", "end_date"], optional: ["description"] },
   chat: { required: [], optional: [] }, // Chat não precisa de slots
   unknown: { required: [], optional: [] },
@@ -558,8 +558,22 @@ function classifySemanticHeuristic(message: string): SemanticResult {
     }
   }
   
-  // 🟡 CARD_EVENT
-  if (normalized.includes("limite")) {
+  // 🔴 EXPENSE - PRIORIDADE ANTES DE CARD_EVENT (se tem "gastei" é sempre expense)
+  for (const verb of SEMANTIC_PATTERNS.expense.verbs) {
+    if (normalized.includes(verb)) {
+      const canExecute = !!(slots.amount && slots.payment_method);
+      return {
+        actionType: "expense",
+        confidence: SEMANTIC_PATTERNS.expense.weight,
+        slots,
+        reason: `Verbo de gasto: "${verb}" (prioridade sobre limite)`,
+        canExecuteDirectly: canExecute
+      };
+    }
+  }
+  
+  // 🟡 CARD_EVENT - SÓ se NÃO tem verbo de gasto
+  if (normalized.includes("limite") && !normalized.includes("gastei") && !normalized.includes("paguei") && !normalized.includes("comprei")) {
     const canExecute = !!(slots.card && slots.value);
     return {
       actionType: "card_event",
@@ -568,20 +582,6 @@ function classifySemanticHeuristic(message: string): SemanticResult {
       reason: `Atualização de limite detectada`,
       canExecuteDirectly: canExecute
     };
-  }
-  
-  // 🔴 EXPENSE
-  for (const verb of SEMANTIC_PATTERNS.expense.verbs) {
-    if (normalized.includes(verb)) {
-      const canExecute = !!(slots.amount && slots.payment_method);
-      return {
-        actionType: "expense",
-        confidence: SEMANTIC_PATTERNS.expense.weight,
-        slots,
-        reason: `Verbo de gasto: "${verb}"`,
-        canExecuteDirectly: canExecute
-      };
-    }
   }
   
   // 🗑️ CANCEL
@@ -919,6 +919,47 @@ async function decisionEngine(
   
   console.log(`\n🧠 [DECISION ENGINE v2.0 - IA PRIMEIRO] ━━━━━━━━━━━━━━━━`);
   console.log(`📩 Mensagem: "${message.slice(0, 60)}..."`);
+  
+  // ========================================================================
+  // PRIORIDADE ABSOLUTA: NÚMERO ISOLADO → NUNCA chamar IA, perguntar direto
+  // ========================================================================
+  if (isNumericOnly(message)) {
+    const numValue = parseNumericValue(message);
+    console.log(`🔢 [NÚMERO ISOLADO] Detectado: ${numValue} → Verificando contexto`);
+    
+    // Se tem contexto esperando amount, preencher
+    if (activeAction && activeAction.pending_slot === "amount" && numValue) {
+      const actionType = activeAction.intent as ActionType;
+      const mergedSlots = { ...activeAction.slots, amount: numValue };
+      const missing = getMissingSlots(actionType, mergedSlots);
+      
+      console.log(`📥 [NÚMERO] Preenchendo slot amount no contexto ${actionType}: ${numValue}`);
+      
+      return {
+        result: {
+          actionType,
+          confidence: 0.95,
+          slots: mergedSlots,
+          reason: "Número preencheu slot pendente",
+          canExecuteDirectly: missing.length === 0
+        },
+        shouldBlockLegacyFlow: true
+      };
+    }
+    
+    // SEM contexto → forçar pergunta "gasto ou entrada?" (retorna unknown)
+    console.log(`🔢 [NÚMERO] Sem contexto → forçar pergunta gasto/entrada`);
+    return {
+      result: {
+        actionType: "unknown",
+        confidence: 0.1, // Baixa confiança força fallback de número
+        slots: { amount: numValue || undefined },
+        reason: "Número isolado sem contexto",
+        canExecuteDirectly: false
+      },
+      shouldBlockLegacyFlow: false // Permite fallback de número
+    };
+  }
   
   // ========================================================================
   // PRIORIDADE 1: Se há slot pendente, tentar extrair valor simples
@@ -1345,6 +1386,7 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   const descricao = slots.description || "";
   const categoria = inferCategory(descricao);
   const formaPagamento = slots.payment_method || "outro";
+  const cardId = slots.card_id || null;
   
   const agora = new Date();
   const { data: tx, error } = await supabase.from("transacoes").insert({
@@ -1356,12 +1398,37 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
     data: agora.toISOString(),
     origem: "whatsapp",
     forma_pagamento: formaPagamento,
+    cartao_id: cardId,
     status: "confirmada"
   }).select("id").single();
   
   if (error) {
     console.error("❌ [EXPENSE] Erro:", error);
     return { success: false, message: "Algo deu errado 😕\nTenta de novo?" };
+  }
+  
+  // 💳 ATUALIZAR LIMITE DO CARTÃO SE FOR CRÉDITO
+  let cardInfo = "";
+  if (formaPagamento === "credito" && cardId) {
+    const { data: card } = await supabase
+      .from("cartoes_credito")
+      .select("limite_disponivel, nome")
+      .eq("id", cardId)
+      .single();
+    
+    if (card && card.limite_disponivel !== null) {
+      const novoLimite = Math.max(0, card.limite_disponivel - valor);
+      
+      await supabase
+        .from("cartoes_credito")
+        .update({ limite_disponivel: novoLimite })
+        .eq("id", cardId);
+      
+      console.log(`💳 [CARD] Limite atualizado: ${card.limite_disponivel} → ${novoLimite}`);
+      cardInfo = `\n💳 ${card.nome || slots.card} (disponível: R$ ${novoLimite.toFixed(2)})`;
+    }
+  } else if (slots.card) {
+    cardInfo = `\n💳 ${slots.card}`;
   }
   
   // 📍 INTERCEPTADOR: Vincular a contexto ativo (viagem/evento)
@@ -1383,7 +1450,7 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   
   return {
     success: true,
-    message: `${emoji} *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${formaPagamento}\n📅 ${dataFormatada} às ${horaFormatada}${contextInfo}`
+    message: `${emoji} *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${formaPagamento}${cardInfo}\n📅 ${dataFormatada} às ${horaFormatada}${contextInfo}`
   };
 }
 
@@ -1486,6 +1553,136 @@ async function cancelTransaction(userId: string, txId: string): Promise<{ succes
 
 // ============================================================================
 // 🔄 RECURRING HANDLER - Gastos Recorrentes (ARQUITETURA DEFENSIVA)
+// ============================================================================
+// 🔍 BUSCA INTELIGENTE DE RECORRENTES
+// ============================================================================
+
+async function findRecurringByName(userId: string, searchTerm: string): Promise<any[]> {
+  // Busca case-insensitive usando ilike
+  const { data: recorrentes } = await supabase
+    .from("gastos_recorrentes")
+    .select("*")
+    .eq("usuario_id", userId)
+    .eq("ativo", true)
+    .ilike("descricao", `%${searchTerm}%`);
+  
+  return recorrentes || [];
+}
+
+async function listActiveRecurrings(userId: string): Promise<any[]> {
+  const { data: recorrentes } = await supabase
+    .from("gastos_recorrentes")
+    .select("*")
+    .eq("usuario_id", userId)
+    .eq("ativo", true)
+    .order("created_at", { ascending: false })
+    .limit(10);
+  
+  return recorrentes || [];
+}
+
+async function cancelRecurring(userId: string, recurringId: string): Promise<{ success: boolean; message: string }> {
+  const { data: recorrente } = await supabase
+    .from("gastos_recorrentes")
+    .select("*")
+    .eq("id", recurringId)
+    .eq("usuario_id", userId)
+    .single();
+  
+  if (!recorrente) {
+    return { success: false, message: "Recorrente não encontrado 🤔" };
+  }
+  
+  await supabase
+    .from("gastos_recorrentes")
+    .update({ ativo: false, updated_at: new Date().toISOString() })
+    .eq("id", recurringId);
+  
+  return {
+    success: true,
+    message: `✅ *Recorrente cancelado!*\n\n🗑️ ${recorrente.descricao} - R$ ${recorrente.valor_parcela?.toFixed(2)}/mês\n\n_Não será mais cobrado automaticamente._`
+  };
+}
+
+// ============================================================================
+// 💳 QUERIES ANALÍTICAS DE CARTÕES
+// ============================================================================
+
+async function queryCardLimits(userId: string): Promise<string> {
+  const { data: cards } = await supabase
+    .from("cartoes_credito")
+    .select("*")
+    .eq("usuario_id", userId)
+    .eq("ativo", true);
+  
+  if (!cards || cards.length === 0) {
+    return "Você não tem cartões cadastrados 💳";
+  }
+  
+  const lista = cards.map(c => {
+    const total = c.limite_total || 0;
+    const disponivel = c.limite_disponivel || 0;
+    const usado = total - disponivel;
+    return `💳 *${c.nome}*\n   Total: R$ ${total.toFixed(2)}\n   Disponível: R$ ${disponivel.toFixed(2)}\n   Usado: R$ ${usado.toFixed(2)}`;
+  }).join("\n\n");
+  
+  return `💳 *Seus Cartões*\n\n${lista}`;
+}
+
+async function queryExpensesByCard(userId: string): Promise<string> {
+  const inicioMes = new Date();
+  inicioMes.setDate(1);
+  inicioMes.setHours(0, 0, 0, 0);
+  
+  const { data: gastos } = await supabase
+    .from("transacoes")
+    .select("valor, cartao_id")
+    .eq("usuario_id", userId)
+    .eq("tipo", "saida")
+    .eq("forma_pagamento", "credito")
+    .gte("data", inicioMes.toISOString())
+    .eq("status", "confirmada");
+  
+  if (!gastos || gastos.length === 0) {
+    return "Nenhum gasto no crédito este mês 💳";
+  }
+  
+  // Buscar nomes dos cartões
+  const cardIds = [...new Set(gastos.map(g => g.cartao_id).filter(Boolean))];
+  const { data: cards } = await supabase
+    .from("cartoes_credito")
+    .select("id, nome")
+    .in("id", cardIds.length > 0 ? cardIds : ["none"]);
+  
+  const cardMap = new Map(cards?.map(c => [c.id, c.nome]) || []);
+  
+  // Agrupar por cartão
+  const byCard: Record<string, { nome: string; total: number; count: number }> = {};
+  gastos.forEach(g => {
+    const cardName = g.cartao_id ? (cardMap.get(g.cartao_id) || "Outro") : "Sem cartão";
+    if (!byCard[cardName]) byCard[cardName] = { nome: cardName, total: 0, count: 0 };
+    byCard[cardName].total += Number(g.valor);
+    byCard[cardName].count += 1;
+  });
+  
+  const lista = Object.values(byCard)
+    .map(c => `💳 ${c.nome}: R$ ${c.total.toFixed(2)} (${c.count} gastos)`)
+    .join("\n");
+  
+  return `💳 *Gastos por Cartão (este mês)*\n\n${lista}`;
+}
+
+async function queryContextExpenses(userId: string, contextId: string): Promise<{ total: number; count: number }> {
+  const { data: gastos } = await supabase
+    .from("transacoes")
+    .select("valor")
+    .eq("context_id", contextId)
+    .eq("status", "confirmada");
+  
+  const total = gastos?.reduce((sum, g) => sum + Number(g.valor), 0) || 0;
+  return { total, count: gastos?.length || 0 };
+}
+
 // ============================================================================
 
 // Interface do contrato de recorrência
@@ -1662,6 +1859,7 @@ async function getActiveContext(userId: string): Promise<any | null> {
 async function createUserContext(userId: string, slots: ExtractedSlots): Promise<{ success: boolean; message: string; contextId?: string }> {
   const label = slots.label || "Evento";
   const description = slots.description || null;
+  const CURRENT_YEAR = 2026; // ANO ATUAL EXPLÍCITO
   
   // Parsear datas
   let startDate = new Date();
@@ -1675,14 +1873,34 @@ async function createUserContext(userId: string, slots: ExtractedSlots): Promise
       if (parts.length >= 2) {
         const day = parseInt(parts[0]);
         const month = parseInt(parts[1]) - 1;
-        const year = parts[2] ? parseInt(parts[2]) : new Date().getFullYear();
-        return new Date(year < 100 ? 2000 + year : year, month, day);
+        // USAR ANO ATUAL (2026) SE NÃO ESPECIFICADO
+        let year = parts[2] ? parseInt(parts[2]) : CURRENT_YEAR;
+        if (year < 100) year = 2000 + year;
+        
+        const date = new Date(year, month, day);
+        
+        // VALIDAÇÃO: Se data é no passado distante (mais de 30 dias), ajustar
+        const now = new Date();
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        if (date < thirtyDaysAgo) {
+          // Data muito antiga, provavelmente ano errado - usar ano atual
+          date.setFullYear(CURRENT_YEAR);
+          console.log(`📍 [CONTEXT] Data ajustada para ano ${CURRENT_YEAR}: ${date.toISOString()}`);
+        }
+        
+        return date;
       }
       return new Date();
     };
     
     startDate = parseDate(slots.date_range.start);
     endDate = parseDate(slots.date_range.end);
+    
+    // Garantir que endDate é depois de startDate
+    if (endDate <= startDate) {
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 1);
+    }
   } else if (slots.start_date && slots.end_date) {
     startDate = new Date(slots.start_date);
     endDate = new Date(slots.end_date);
@@ -1921,6 +2139,93 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      // SELEÇÃO DE CARTÃO PARA EXPENSE
+      if (payload.buttonReplyId.startsWith("card_") && activeAction) {
+        const cardId = payload.buttonReplyId.replace("card_", "");
+        
+        const { data: card } = await supabase
+          .from("cartoes_credito")
+          .select("*")
+          .eq("id", cardId)
+          .single();
+        
+        if (card && activeAction.intent === "expense") {
+          const updatedSlots = { 
+            ...activeAction.slots, 
+            card: card.nome,
+            card_id: card.id
+          };
+          
+          const result = await registerExpense(userId, updatedSlots, activeAction.id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+      }
+      
+      // SELEÇÃO DE CARTÃO PARA RECURRING
+      if (payload.buttonReplyId.startsWith("rec_card_") && activeAction) {
+        const cardId = payload.buttonReplyId.replace("rec_card_", "");
+        
+        const { data: card } = await supabase
+          .from("cartoes_credito")
+          .select("*")
+          .eq("id", cardId)
+          .single();
+        
+        if (card && activeAction.intent === "recurring") {
+          const updatedSlots = { 
+            ...activeAction.slots, 
+            card: card.nome,
+            card_id: card.id
+          };
+          
+          const result = await registerRecurring(userId, updatedSlots, activeAction.id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+      }
+      
+      // PAGAMENTO DE RECORRENTE
+      if (payload.buttonReplyId.startsWith("rec_pay_") && activeAction?.intent === "recurring") {
+        const paymentAliases: Record<string, string> = {
+          "rec_pay_pix": "pix",
+          "rec_pay_debito": "debito",
+          "rec_pay_credito": "credito"
+        };
+        const paymentMethod = paymentAliases[payload.buttonReplyId];
+        
+        if (paymentMethod) {
+          const updatedSlots: ExtractedSlots = { ...activeAction.slots, payment_method: paymentMethod };
+          
+          // Se é crédito e tem múltiplos cartões, perguntar qual
+          if (paymentMethod === "credito") {
+            const cards = await listCardsForUser(userId);
+            if (cards.length > 1) {
+              const cardButtons = cards.slice(0, 3).map((c) => ({
+                id: `rec_card_${c.id}`,
+                title: (c.nome || "Cartão").slice(0, 20)
+              }));
+              
+              await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: "card" });
+              await sendButtons(
+                payload.phoneNumber,
+                `🔄 ${updatedSlots.description || "Recorrente"} - R$ ${updatedSlots.amount?.toFixed(2)}/mês\n\nQual cartão?`,
+                cardButtons,
+                payload.messageSource
+              );
+              return;
+            } else if (cards.length === 1) {
+              updatedSlots.card = cards[0].nome;
+              updatedSlots.card_id = cards[0].id;
+            }
+          }
+          
+          const result = await registerRecurring(userId, updatedSlots, activeAction.id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+      }
+      
       // CONFIRMAR CANCELAMENTO
       if (payload.buttonReplyId === "cancel_confirm_yes" && activeAction?.slots?.transaction_id) {
         const result = await cancelTransaction(userId, activeAction.slots.transaction_id);
@@ -2147,6 +2452,16 @@ async function processarJob(job: any): Promise<void> {
         await sendMessage(payload.phoneNumber, "Qual o valor mensal? 💸", payload.messageSource);
       } else if (nextMissing === "description") {
         await sendMessage(payload.phoneNumber, "Qual gasto é esse? (ex: Netflix, Aluguel, Academia...)", payload.messageSource);
+      } else if (nextMissing === "payment_method") {
+        await sendButtons(payload.phoneNumber, 
+          `🔄 ${slots.description || "Recorrente"} - R$ ${slots.amount?.toFixed(2)}/mês\n\nComo você paga?`, 
+          [
+            { id: "rec_pay_pix", title: "📱 Pix" },
+            { id: "rec_pay_debito", title: "💳 Débito" },
+            { id: "rec_pay_credito", title: "💳 Crédito" }
+          ], 
+          payload.messageSource
+        );
       } else {
         await sendMessage(payload.phoneNumber, `Qual o ${nextMissing}?`, payload.messageSource);
       }
@@ -2173,8 +2488,81 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
-    // 🗑️ CANCEL
+    // 🗑️ CANCEL - BUSCA INTELIGENTE DE RECORRENTES
     if (decision.actionType === "cancel") {
+      const normalized = normalizeText(conteudoProcessado);
+      
+      // Detectar se é cancelamento de recorrente
+      const isRecurringCancel = normalized.includes("cancela") && 
+        (normalized.includes("assinatura") || normalized.includes("recorrente") ||
+         normalized.includes("netflix") || normalized.includes("spotify") ||
+         normalized.includes("aluguel") || normalized.includes("academia") ||
+         normalized.includes("mensal") || normalized.includes("todo mes") ||
+         normalized.includes("para de cobrar") || normalized.includes("parar"));
+      
+      // Extrair termo de busca
+      const cancelPatterns = [
+        /cancela(?:r)?\s+(?:a|o|meu|minha)?\s*(.+)/i,
+        /para(?:r)?\s+(?:de\s+)?(?:cobrar|pagar)\s+(?:a|o)?\s*(.+)/i,
+      ];
+      
+      let searchTerm = "";
+      for (const pattern of cancelPatterns) {
+        const match = conteudoProcessado.match(pattern);
+        if (match && match[1]) {
+          searchTerm = match[1].trim().split(" ")[0]; // Primeira palavra
+          break;
+        }
+      }
+      
+      // Se parece cancelamento de recorrente OU tem termo de busca
+      if (isRecurringCancel || searchTerm) {
+        let recorrentes: any[] = [];
+        
+        if (searchTerm) {
+          recorrentes = await findRecurringByName(userId, searchTerm);
+        }
+        
+        if (recorrentes.length === 0) {
+          recorrentes = await listActiveRecurrings(userId);
+        }
+        
+        if (recorrentes.length === 0) {
+          // Fallback: tentar transações
+          const txs = await listTransactionsForCancel(userId);
+          if (txs.length === 0) {
+            await sendMessage(payload.phoneNumber, "Você não tem gastos recorrentes nem transações recentes para cancelar 🤔", payload.messageSource);
+            return;
+          }
+          const lista = txs.map((t, i) => `${i + 1}. R$ ${t.valor?.toFixed(2)} - ${t.descricao || t.categoria}`).join("\n");
+          await sendMessage(payload.phoneNumber, `Qual transação cancelar?\n\n${lista}\n\n_Responde com o número_`, payload.messageSource);
+          return;
+        }
+        
+        if (recorrentes.length === 1) {
+          // Match único → cancelar direto
+          const result = await cancelRecurring(userId, recorrentes[0].id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+        
+        // Múltiplos matches → pedir confirmação
+        const lista = recorrentes.map((r, i) => 
+          `${i + 1}. ${r.descricao} - R$ ${r.valor_parcela?.toFixed(2)}/mês`
+        ).join("\n");
+        
+        await sendMessage(payload.phoneNumber, 
+          `Encontrei ${recorrentes.length} recorrentes:\n\n${lista}\n\n_Qual você quer cancelar? Responde com o número._`, 
+          payload.messageSource
+        );
+        
+        // Salvar seleção pendente
+        await createAction(userId, "cancel_recurring", "cancel_recurring", 
+          { options: recorrentes.map(r => r.id) }, "selection", payload.messageId);
+        return;
+      }
+      
+      // Fallback: listar transações para cancelar
       const txs = await listTransactionsForCancel(userId);
       
       if (txs.length === 0) {
@@ -2187,8 +2575,43 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
-    // 📊 QUERY
+    // 📊 QUERY - COM QUERIES ANALÍTICAS
     if (decision.actionType === "query") {
+      const normalized = normalizeText(conteudoProcessado);
+      
+      // Perguntas sobre cartão/limite
+      if ((normalized.includes("limite") && (normalized.includes("disponivel") || normalized.includes("cartao") || normalized.includes("cartoes"))) ||
+          (normalized.includes("quanto") && normalized.includes("limite"))) {
+        const result = await queryCardLimits(userId);
+        await sendMessage(payload.phoneNumber, result, payload.messageSource);
+        return;
+      }
+      
+      // Perguntas sobre gastos por cartão
+      if ((normalized.includes("gastei") || normalized.includes("gasto")) && 
+          (normalized.includes("cartao") || normalized.includes("credito") || normalized.includes("cada cartao"))) {
+        const result = await queryExpensesByCard(userId);
+        await sendMessage(payload.phoneNumber, result, payload.messageSource);
+        return;
+      }
+      
+      // Query de viagem/contexto
+      if (normalized.includes("viagem") && (normalized.includes("quanto") || normalized.includes("gastei"))) {
+        const activeContext = await getActiveContext(userId);
+        if (activeContext) {
+          const { total, count } = await queryContextExpenses(userId, activeContext.id);
+          await sendMessage(payload.phoneNumber, 
+            `📍 *Gastos na ${activeContext.label}*\n\n💸 Total: R$ ${total.toFixed(2)}\n🧾 ${count} transações`,
+            payload.messageSource
+          );
+          return;
+        } else {
+          await sendMessage(payload.phoneNumber, "Você não tem nenhuma viagem ativa no momento 🤔\n\nPra começar uma viagem, manda: \"Viagem pra SP de 09/01 a 15/01\"", payload.messageSource);
+          return;
+        }
+      }
+      
+      // Fallback: resumo mensal
       const summary = await getMonthlySummary(userId);
       await sendMessage(payload.phoneNumber, summary, payload.messageSource);
       return;
