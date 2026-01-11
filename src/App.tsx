@@ -13,6 +13,8 @@ import Cartoes from "./pages/Cartoes";
 import Faturas from "./pages/Faturas";
 import Parcelamentos from "./pages/Parcelamentos";
 import NotFound from "./pages/NotFound";
+import Auth from "./pages/Auth";
+import ProtectedRoute from "./components/ProtectedRoute";
 
 const queryClient = new QueryClient();
 
@@ -23,15 +25,16 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Index />} />
-          <Route path="/transacoes" element={<Transacoes />} />
-          <Route path="/recorrentes" element={<Recorrentes />} />
-          <Route path="/cartoes" element={<Cartoes />} />
-          <Route path="/faturas" element={<Faturas />} />
-          <Route path="/parcelamentos" element={<Parcelamentos />} />
-          <Route path="/relatorios" element={<Relatorios />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/configuracoes" element={<Configuracoes />} />
+          <Route path="/auth" element={<Auth />} />
+          <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+          <Route path="/transacoes" element={<ProtectedRoute><Transacoes /></ProtectedRoute>} />
+          <Route path="/recorrentes" element={<ProtectedRoute><Recorrentes /></ProtectedRoute>} />
+          <Route path="/cartoes" element={<ProtectedRoute><Cartoes /></ProtectedRoute>} />
+          <Route path="/faturas" element={<ProtectedRoute><Faturas /></ProtectedRoute>} />
+          <Route path="/parcelamentos" element={<ProtectedRoute><Parcelamentos /></ProtectedRoute>} />
+          <Route path="/relatorios" element={<ProtectedRoute><Relatorios /></ProtectedRoute>} />
+          <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+          <Route path="/configuracoes" element={<ProtectedRoute><Configuracoes /></ProtectedRoute>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
