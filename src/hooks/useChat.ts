@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { ChatMessage } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 const CHAT_URL = `https://hhvaqirjrssldsxoezxs.supabase.co/functions/v1/chat`;
 
@@ -17,14 +18,37 @@ export function useChat() {
     let assistantContent = '';
 
     try {
+      // Get the current session for authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        toast({
+          title: 'Não autenticado',
+          description: 'Faça login para usar o chat.',
+          variant: 'destructive',
+        });
+        setIsLoading(false);
+        return;
+      }
+
       const response = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhodmFxaXJqcnNzbGRzeG9lenhzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY2MDA1NDAsImV4cCI6MjA3MjE3NjU0MH0.5ZRkbowM34yCzzOYOyE8_ZwjXgasQKaLpHubAoFuH5A`,
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({ messages: [...messages, userMsg] }),
       });
+
+      if (response.status === 401) {
+        toast({
+          title: 'Sessão expirada',
+          description: 'Por favor, faça login novamente.',
+          variant: 'destructive',
+        });
+        setIsLoading(false);
+        return;
+      }
 
       if (response.status === 429) {
         toast({
