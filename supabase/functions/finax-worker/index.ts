@@ -42,7 +42,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "control" | "recurring" | "set_context" | "chat" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "control" | "recurring" | "set_context" | "chat" | "edit" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -121,7 +121,8 @@ const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[]
   control: { required: [], optional: [] },
   recurring: { required: ["amount", "description", "payment_method"], optional: ["day_of_month", "category", "periodicity", "card", "card_id"] },
   set_context: { required: ["label", "start_date", "end_date"], optional: ["description"] },
-  chat: { required: [], optional: [] }, // Chat não precisa de slots
+  chat: { required: [], optional: [] },
+  edit: { required: [], optional: ["transaction_id", "field", "new_value"] }, // Edição/correção rápida
   unknown: { required: [], optional: [] },
 };
 
@@ -237,7 +238,13 @@ interface SemanticResult {
 }
 
 const SEMANTIC_PATTERNS = {
-  // 🔄 RECORRENTE - Prioridade MÁXIMA (antes de expense)
+  // ✏️ EDIT/CORREÇÃO - Prioridade MÁXIMA (antes de tudo)
+  edit: {
+    verbs: ["errado", "errei", "corrigir", "corrige", "corrigi", "era pra ser", "devia ser", "na verdade"],
+    contexts: ["nao foi", "não foi", "foi na verdade", "queria dizer", "me enganei", "errado era", "era debito", "era pix", "era credito", "era dinheiro"],
+    weight: 0.98
+  },
+  // 🔄 RECORRENTE - Prioridade ALTA (antes de expense)
   recurring: {
     verbs: [],
     contexts: [
@@ -441,7 +448,44 @@ function classifySemanticHeuristic(message: string): SemanticResult {
   // CLASSIFICAÇÃO POR PADRÕES (HEURÍSTICA - NÃO DECISÃO!)
   // ========================================================================
   
-  // 🔄 RECURRING - Prioridade MÁXIMA (antes de expense)
+  // ✏️ EDIT/CORREÇÃO - Prioridade MÁXIMA (antes de qualquer coisa)
+  for (const verb of SEMANTIC_PATTERNS.edit.verbs) {
+    if (normalized.includes(verb)) {
+      // Detectar nova forma de pagamento mencionada
+      let newPaymentMethod: string | undefined;
+      if (normalized.includes("pix")) newPaymentMethod = "pix";
+      else if (normalized.includes("debito") || normalized.includes("débito")) newPaymentMethod = "debito";
+      else if (normalized.includes("credito") || normalized.includes("crédito")) newPaymentMethod = "credito";
+      else if (normalized.includes("dinheiro")) newPaymentMethod = "dinheiro";
+      
+      return {
+        actionType: "edit",
+        confidence: SEMANTIC_PATTERNS.edit.weight,
+        slots: { new_payment_method: newPaymentMethod },
+        reason: `Correção detectada: "${verb}"`,
+        canExecuteDirectly: !!newPaymentMethod // Pode executar direto se mencionou o método correto
+      };
+    }
+  }
+  for (const ctx of SEMANTIC_PATTERNS.edit.contexts) {
+    if (normalized.includes(ctx)) {
+      let newPaymentMethod: string | undefined;
+      if (normalized.includes("pix")) newPaymentMethod = "pix";
+      else if (normalized.includes("debito") || normalized.includes("débito")) newPaymentMethod = "debito";
+      else if (normalized.includes("credito") || normalized.includes("crédito")) newPaymentMethod = "credito";
+      else if (normalized.includes("dinheiro")) newPaymentMethod = "dinheiro";
+      
+      return {
+        actionType: "edit",
+        confidence: SEMANTIC_PATTERNS.edit.weight * 0.95,
+        slots: { new_payment_method: newPaymentMethod },
+        reason: `Contexto de correção: "${ctx}"`,
+        canExecuteDirectly: !!newPaymentMethod
+      };
+    }
+  }
+  
+  // 🔄 RECURRING - Prioridade ALTA (antes de expense)
   for (const ctx of SEMANTIC_PATTERNS.recurring.contexts) {
     if (normalized.includes(ctx)) {
       // EXTRAÇÃO ESPECIAL DE DESCRIÇÃO PARA RECORRENTE
@@ -1561,6 +1605,47 @@ async function cancelTransaction(userId: string, txId: string): Promise<{ succes
 }
 
 // ============================================================================
+// ✏️ EDIT/CORREÇÃO RÁPIDA - Buscar última transação e permitir correção
+// ============================================================================
+
+async function getLastTransaction(userId: string, withinMinutes: number = 2): Promise<any | null> {
+  const cutoff = new Date(Date.now() - withinMinutes * 60 * 1000).toISOString();
+  
+  const { data } = await supabase
+    .from("transacoes")
+    .select("*")
+    .eq("usuario_id", userId)
+    .eq("status", "confirmada")
+    .gte("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+  
+  return data || null;
+}
+
+async function updateTransactionPaymentMethod(txId: string, newMethod: string): Promise<{ success: boolean; message: string }> {
+  const { data: tx, error } = await supabase
+    .from("transacoes")
+    .update({ forma_pagamento: newMethod })
+    .eq("id", txId)
+    .select("valor, descricao, categoria")
+    .single();
+  
+  if (error || !tx) {
+    console.error("❌ [EDIT] Erro ao atualizar:", error);
+    return { success: false, message: "Não consegui corrigir 😕" };
+  }
+  
+  const paymentEmoji = newMethod === "pix" ? "📱" : newMethod === "debito" ? "💳" : newMethod === "credito" ? "💳" : "💵";
+  
+  return {
+    success: true,
+    message: `✅ *Corrigido!*\n\n💸 R$ ${tx.valor?.toFixed(2)} agora é *${paymentEmoji} ${newMethod}*`
+  };
+}
+
+// ============================================================================
 // 🔄 RECURRING HANDLER - Gastos Recorrentes (ARQUITETURA DEFENSIVA)
 // ============================================================================
 // 🔍 BUSCA INTELIGENTE DE RECORRENTES
@@ -2090,6 +2175,24 @@ async function processarJob(job: any): Promise<void> {
     if (payload.buttonReplyId) {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
       
+      // ✏️ EDIT - Correção de forma de pagamento
+      if (payload.buttonReplyId.startsWith("edit_") && activeAction?.intent === "edit") {
+        const editAliases: Record<string, string> = {
+          "edit_pix": "pix",
+          "edit_debito": "debito",
+          "edit_credito": "credito",
+          "edit_dinheiro": "dinheiro"
+        };
+        const newMethod = editAliases[payload.buttonReplyId];
+        
+        if (newMethod && activeAction.slots.transaction_id) {
+          const result = await updateTransactionPaymentMethod(activeAction.slots.transaction_id, newMethod);
+          await closeAction(activeAction.id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+      }
+      
       // FORMA DE PAGAMENTO
       if (payload.buttonReplyId.startsWith("pay_")) {
         const paymentMethod = PAYMENT_ALIASES[payload.buttonReplyId];
@@ -2098,9 +2201,16 @@ async function processarJob(job: any): Promise<void> {
           const missing = getMissingSlots("expense", updatedSlots);
           
           if (missing.length === 0) {
+            // 🔒 CRÍTICO: Registrar E fechar action imediatamente
             const result = await registerExpense(userId, updatedSlots, activeAction.id);
+            // Limpar TODAS as actions pendentes do usuário (fim do loop)
+            await supabase.from("actions")
+              .update({ status: "done" })
+              .eq("user_id", userId)
+              .in("status", ["collecting", "awaiting_input"]);
             await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-            return;
+            console.log(`✅ [BUTTON] Expense registrado, todas actions fechadas`);
+            return; // FIM - sem mais processamento
           }
           
           await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
@@ -2126,8 +2236,14 @@ async function processarJob(job: any): Promise<void> {
             return;
           }
           
+          // 🔒 CRÍTICO: Registrar E fechar todas as actions
           const result = await registerIncome(userId, updatedSlots, activeAction.id);
+          await supabase.from("actions")
+            .update({ status: "done" })
+            .eq("user_id", userId)
+            .in("status", ["collecting", "awaiting_input"]);
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          console.log(`✅ [BUTTON] Income registrado, todas actions fechadas`);
           return;
         }
       }
@@ -2319,6 +2435,42 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     
     // ========================================================================
+    // ✏️ EDIT - Correção rápida (dentro de 2 minutos)
+    // ========================================================================
+    if (decision.actionType === "edit") {
+      console.log(`✏️ [EDIT] Correção detectada: ${JSON.stringify(decision.slots)}`);
+      
+      const lastTx = await getLastTransaction(userId, 2);
+      
+      if (!lastTx) {
+        await sendMessage(payload.phoneNumber, "Não encontrei registro recente para corrigir 🤔\n\n_A correção funciona até 2 min após o registro_", payload.messageSource);
+        return;
+      }
+      
+      // Se o usuário já mencionou a forma de pagamento correta → corrigir direto
+      if (decision.slots.new_payment_method) {
+        const result = await updateTransactionPaymentMethod(lastTx.id, decision.slots.new_payment_method);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      // Se não mencionou → oferecer opções
+      await sendButtons(
+        payload.phoneNumber,
+        `📝 *Corrigir:* R$ ${lastTx.valor?.toFixed(2)} - ${lastTx.descricao || lastTx.categoria}\n\nQual a forma correta?`,
+        [
+          { id: "edit_pix", title: "📱 Pix" },
+          { id: "edit_debito", title: "💳 Débito" },
+          { id: "edit_credito", title: "💳 Crédito" }
+        ],
+        payload.messageSource
+      );
+      
+      await createAction(userId, "edit", "edit", { transaction_id: lastTx.id }, "payment_method", payload.messageId);
+      return;
+    }
+    
+    // ========================================================================
     // 💰 INCOME - Contrato: required = ["amount"]
     // ========================================================================
     if (decision.actionType === "income") {
@@ -2330,6 +2482,11 @@ async function processarJob(job: any): Promise<void> {
         console.log(`⚡ [INCOME] Execução direta: R$ ${slots.amount}`);
         const actionId = activeAction?.intent === "income" ? activeAction.id : undefined;
         const result = await registerIncome(userId, slots, actionId);
+        // 🔒 Limpar todas as actions pendentes
+        await supabase.from("actions")
+          .update({ status: "done" })
+          .eq("user_id", userId)
+          .in("status", ["collecting", "awaiting_input"]);
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         return;
       }
@@ -2367,6 +2524,11 @@ async function processarJob(job: any): Promise<void> {
         console.log(`⚡ [EXPENSE] Execução direta: R$ ${slots.amount} via ${slots.payment_method}`);
         const actionId = activeAction?.intent === "expense" ? activeAction.id : undefined;
         const result = await registerExpense(userId, slots, actionId);
+        // 🔒 Limpar todas as actions pendentes
+        await supabase.from("actions")
+          .update({ status: "done" })
+          .eq("user_id", userId)
+          .in("status", ["collecting", "awaiting_input"]);
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         return;
       }
