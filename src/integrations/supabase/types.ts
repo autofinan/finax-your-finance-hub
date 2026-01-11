@@ -1894,6 +1894,7 @@ export type Database = {
         Args: { p_ano: number; p_mes: number; p_user_id: string }
         Returns: undefined
       }
+      is_service_role: { Args: never; Returns: boolean }
       limpar_conversas_expiradas: { Args: never; Returns: undefined }
       rpc_criar_parcelamento: {
         Args: {
