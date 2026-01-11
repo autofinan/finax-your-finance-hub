@@ -197,8 +197,15 @@ function normalizeText(text: string): string {
 }
 
 function isNumericOnly(text: string): boolean {
-  const cleaned = text.replace(/[^\d.,]/g, "").replace(",", ".");
-  return /^\d+([.,]\d+)?$/.test(cleaned) && parseFloat(cleaned) > 0;
+  // REGEX ESTRITA: A string ORIGINAL deve conter APENAS números/vírgula/ponto
+  // "50" → true | "50,00" → true | "50.00" → true
+  // "Gastei 50" → false | "50 reais" → false
+  const trimmed = text.trim();
+  if (!/^[\d\.,]+$/.test(trimmed)) return false;
+  
+  const normalized = trimmed.replace(",", ".");
+  const value = parseFloat(normalized);
+  return !isNaN(value) && value > 0;
 }
 
 function parseNumericValue(text: string): number | null {
@@ -914,16 +921,18 @@ function assertDomainIsolation(
 async function decisionEngine(
   message: string,
   activeAction: ActiveAction | null,
-  history?: string
+  history?: string,
+  payloadType?: string  // NOVO: tipo do payload (text, interactive, audio, image)
 ): Promise<{ result: SemanticResult; shouldBlockLegacyFlow: boolean }> {
   
   console.log(`\n🧠 [DECISION ENGINE v2.0 - IA PRIMEIRO] ━━━━━━━━━━━━━━━━`);
-  console.log(`📩 Mensagem: "${message.slice(0, 60)}..."`);
+  console.log(`📩 Mensagem: "${message.slice(0, 60)}..." | Tipo: ${payloadType || 'unknown'}`);
   
   // ========================================================================
   // PRIORIDADE ABSOLUTA: NÚMERO ISOLADO → NUNCA chamar IA, perguntar direto
+  // BLINDAGEM: SÓ verifica se for mensagem de TEXTO (não botão/interativo)
   // ========================================================================
-  if (isNumericOnly(message)) {
+  if (payloadType === 'text' && isNumericOnly(message)) {
     const numValue = parseNumericValue(message);
     console.log(`🔢 [NÚMERO ISOLADO] Detectado: ${numValue} → Verificando contexto`);
     
@@ -2281,7 +2290,8 @@ async function processarJob(job: any): Promise<void> {
     const { result: decision, shouldBlockLegacyFlow } = await decisionEngine(
       conteudoProcessado,
       activeAction,
-      historicoFormatado
+      historicoFormatado,
+      payload.messageType  // Passa o tipo: 'text', 'interactive', 'audio', etc.
     );
     
     logDecision({ 
@@ -2675,7 +2685,7 @@ async function processarJob(job: any): Promise<void> {
     // Este é o "fundo do poço" da lógica. SÓ pergunta "gasto ou entrada?"
     // quando a IA NÃO conseguiu classificar a intenção.
     // ========================================================================
-    if (decision.actionType === "unknown" && isNumericOnly(conteudoProcessado)) {
+    if (decision.actionType === "unknown" && payload.messageType === 'text' && isNumericOnly(conteudoProcessado)) {
       const numValue = parseNumericValue(conteudoProcessado);
       
       logDecision({ messageId: payload.messageId, decision: "numeric_fallback", details: { value: numValue } });
