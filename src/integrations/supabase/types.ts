@@ -2098,6 +2098,39 @@ export type Database = {
           },
         ]
       }
+      vw_semantic_learning: {
+        Row: {
+          categoria: string | null
+          confidence: number | null
+          created_at: string | null
+          last_used_at: string | null
+          source: string | null
+          source_label: string | null
+          termo: string | null
+          usage_count: number | null
+        }
+        Insert: {
+          categoria?: string | null
+          confidence?: number | null
+          created_at?: string | null
+          last_used_at?: string | null
+          source?: string | null
+          source_label?: never
+          termo?: string | null
+          usage_count?: number | null
+        }
+        Update: {
+          categoria?: string | null
+          confidence?: number | null
+          created_at?: string | null
+          last_used_at?: string | null
+          source?: string | null
+          source_label?: never
+          termo?: string | null
+          usage_count?: number | null
+        }
+        Relationships: []
+      }
       vw_transacoes_agrupadas_categoria: {
         Row: {
           categoria: string | null

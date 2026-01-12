@@ -11,45 +11,14 @@ import {
   createAction,
   updateAction
 } from "../context/manager.ts";
-import { normalizeText } from "../decision/engine.ts";
 import { learnMerchantPattern } from "../memory/patterns.ts";
 import { checkImmediateAlerts } from "../intents/alerts.ts";
 import { getDecisionConfig, recordMetric } from "../governance/config.ts";
+import { categorizeDescription, type CategorizationResult } from "../ai/categorizer.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-// ============================================================================
-// 🏷️ INFERIR CATEGORIA
-// ============================================================================
-
-export function inferCategory(description: string, originalCategory?: string): string {
-  if (originalCategory && originalCategory !== "outros") {
-    return originalCategory;
-  }
-  
-  const desc = normalizeText(description);
-  
-  const categoryMap: Record<string, string[]> = {
-    alimentacao: ["cafe", "pao", "lanche", "agua", "refrigerante", "almoco", "jantar", "ifood", "rappi", "comida", "restaurante", "padaria", "pizza", "acai", "sorvete", "coca", "refri"],
-    mercado: ["mercado", "supermercado", "feira", "hortifruti", "atacadao"],
-    transporte: ["uber", "99", "taxi", "onibus", "gasolina", "combustivel", "estacionamento", "pedagio"],
-    saude: ["farmacia", "remedio", "medico", "hospital", "consulta", "exame", "dentista"],
-    lazer: ["cinema", "netflix", "spotify", "show", "festa", "bar", "jogo", "game"],
-    moradia: ["aluguel", "condominio", "luz", "energia", "gas", "internet", "telefone"],
-    compras: ["roupa", "sapato", "loja", "shopping", "presente", "celular"],
-    servicos: ["salao", "barbearia", "manicure", "lavanderia", "faxina"]
-  };
-  
-  for (const [category, keywords] of Object.entries(categoryMap)) {
-    if (keywords.some(kw => desc.includes(kw))) {
-      return category;
-    }
-  }
-  
-  return originalCategory || "outros";
-}
 
 // ============================================================================
 // 📝 REGISTRAR TRANSAÇÃO
@@ -106,8 +75,20 @@ export async function registerExpense(
     };
   }
   
-  // Inferir categoria
-  const category = inferCategory(slots.description || "", slots.category);
+  // ========================================================================
+  // 🧠 CATEGORIZAÇÃO IA-FIRST COM AUTOAPRENDIZADO
+  // ========================================================================
+  const categoryResult = await categorizeDescription(
+    slots.description || "",
+    slots.category
+  );
+  const category = categoryResult.category;
+  
+  console.log(`📂 [EXPENSE] Categorização: "${slots.description}" → ${category}`);
+  console.log(`   └─ Fonte: ${categoryResult.source}, Confiança: ${categoryResult.confidence}`);
+  if (categoryResult.learned) {
+    console.log(`   └─ 🧠 Termo "${categoryResult.keyTerm}" aprendido para futuras transações!`);
+  }
   
   // Registrar transação
   const now = new Date();
