@@ -53,6 +53,60 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_corrections: {
+        Row: {
+          applied_count: number | null
+          corrected_classification: Json | null
+          correction_type: string | null
+          created_at: string | null
+          id: string
+          original_classification: Json | null
+          original_message: string
+          pattern_hash: string | null
+          user_correction: string | null
+          user_id: string | null
+        }
+        Insert: {
+          applied_count?: number | null
+          corrected_classification?: Json | null
+          correction_type?: string | null
+          created_at?: string | null
+          id?: string
+          original_classification?: Json | null
+          original_message: string
+          pattern_hash?: string | null
+          user_correction?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          applied_count?: number | null
+          corrected_classification?: Json | null
+          correction_type?: string | null
+          created_at?: string | null
+          id?: string
+          original_classification?: Json | null
+          original_message?: string
+          pattern_hash?: string | null
+          user_correction?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_corrections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_corrections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       cartoes_credito: {
         Row: {
           ativo: boolean | null
@@ -1054,6 +1108,60 @@ export type Database = {
           },
         ]
       }
+      spending_alerts: {
+        Row: {
+          alert_type: string
+          category: string | null
+          created_at: string | null
+          dismissed_at: string | null
+          id: string
+          message: string | null
+          sent_at: string | null
+          severity: string | null
+          trigger_data: Json | null
+          user_id: string
+        }
+        Insert: {
+          alert_type: string
+          category?: string | null
+          created_at?: string | null
+          dismissed_at?: string | null
+          id?: string
+          message?: string | null
+          sent_at?: string | null
+          severity?: string | null
+          trigger_data?: Json | null
+          user_id: string
+        }
+        Update: {
+          alert_type?: string
+          category?: string | null
+          created_at?: string | null
+          dismissed_at?: string | null
+          id?: string
+          message?: string | null
+          sent_at?: string | null
+          severity?: string | null
+          trigger_data?: Json | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "spending_alerts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "spending_alerts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       transacoes: {
         Row: {
           atualizado_em: string | null
@@ -1263,6 +1371,63 @@ export type Database = {
           },
           {
             foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
+      user_patterns: {
+        Row: {
+          confidence: number | null
+          created_at: string | null
+          id: string
+          inferred_card_id: string | null
+          inferred_category: string | null
+          inferred_payment_method: string | null
+          last_used_at: string | null
+          merchant: string
+          merchant_normalized: string
+          usage_count: number | null
+          user_id: string
+        }
+        Insert: {
+          confidence?: number | null
+          created_at?: string | null
+          id?: string
+          inferred_card_id?: string | null
+          inferred_category?: string | null
+          inferred_payment_method?: string | null
+          last_used_at?: string | null
+          merchant: string
+          merchant_normalized: string
+          usage_count?: number | null
+          user_id: string
+        }
+        Update: {
+          confidence?: number | null
+          created_at?: string | null
+          id?: string
+          inferred_card_id?: string | null
+          inferred_category?: string | null
+          inferred_payment_method?: string | null
+          last_used_at?: string | null
+          merchant?: string
+          merchant_normalized?: string
+          usage_count?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_patterns_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_patterns_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
