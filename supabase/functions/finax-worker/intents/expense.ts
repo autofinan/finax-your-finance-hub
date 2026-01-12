@@ -12,6 +12,9 @@ import {
   updateAction
 } from "../context/manager.ts";
 import { normalizeText } from "../decision/engine.ts";
+import { learnMerchantPattern } from "../memory/patterns.ts";
+import { checkImmediateAlerts } from "../intents/alerts.ts";
+import { getDecisionConfig, recordMetric } from "../governance/config.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -145,6 +148,47 @@ export async function registerExpense(
     entity_type: "transacao",
     entity_id: transaction.id,
     new_data: { ...slots, category }
+  });
+  
+  // ========================================================================
+  // 🧠 ELITE INTEGRATIONS (pós-registro)
+  // ========================================================================
+  
+  const config = await getDecisionConfig();
+  
+  // 1. MEMORY LAYER: Aprender padrão do merchant (se habilitado)
+  if (config.auto_apply_patterns && slots.description) {
+    try {
+      await learnMerchantPattern({
+        userId,
+        description: slots.description,
+        category,
+        paymentMethod: slots.payment_method || "pix",
+        cardId: slots.card_id || slots.card || undefined,
+        transactionId: transaction.id,
+        wasUserCorrected: !!slots._corrected_by
+      });
+      console.log(`🧠 [MEMORY] Padrão aprendido: ${slots.description} → ${category}`);
+    } catch (err) {
+      console.error(`🧠 [MEMORY] Erro ao aprender padrão:`, err);
+    }
+  }
+  
+  // 2. PROACTIVE AI: Verificar alertas imediatos (silencioso)
+  try {
+    await checkImmediateAlerts(userId, {
+      valor: slots.amount!,
+      categoria: category,
+      descricao: slots.description || category
+    });
+  } catch (err) {
+    console.error(`🚨 [ALERTS] Erro ao verificar alertas:`, err);
+  }
+  
+  // 3. Registrar métrica
+  await recordMetric("expense_registered", slots.amount || 0, {
+    category,
+    payment_method: slots.payment_method || "unknown"
   });
   
   // Formatar resposta amigável
