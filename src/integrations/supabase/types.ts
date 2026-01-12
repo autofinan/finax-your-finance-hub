@@ -2168,12 +2168,17 @@ export type Database = {
         Args: { p_usuario: string }
         Returns: undefined
       }
+      fn_adjust_alert_utility: { Args: never; Returns: undefined }
       fn_analise_consultiva: { Args: { p_usuario_id: string }; Returns: Json }
       fn_cleanup_expired_patterns: { Args: never; Returns: undefined }
       fn_cleanup_expired_selections: { Args: never; Returns: undefined }
       fn_close_card_faturas: { Args: never; Returns: undefined }
       fn_close_expired_contexts: { Args: never; Returns: undefined }
       fn_daily_jobs: { Args: never; Returns: undefined }
+      fn_disable_decision_version: {
+        Args: { p_version: string }
+        Returns: undefined
+      }
       fn_generate_parcelas: {
         Args: { p_parcelamento_id: string }
         Returns: undefined
