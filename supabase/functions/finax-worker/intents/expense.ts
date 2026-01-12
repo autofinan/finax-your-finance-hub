@@ -90,6 +90,20 @@ export async function registerExpense(
     console.log(`   └─ 🧠 Termo "${categoryResult.keyTerm}" aprendido para futuras transações!`);
   }
   
+  // ========================================================================
+  // 📍 BUSCAR CONTEXTO ATIVO (viagem, evento, etc.)
+  // ========================================================================
+  const { data: activeContext } = await supabase
+    .from("user_contexts")
+    .select("id, label")
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .single();
+  
+  if (activeContext) {
+    console.log(`📍 [EXPENSE] Contexto ativo: ${activeContext.label} (${activeContext.id})`);
+  }
+  
   // Registrar transação
   const now = new Date();
   
@@ -106,7 +120,8 @@ export async function registerExpense(
     forma_pagamento: slots.payment_method,
     status: "confirmada",
     idempotency_key: dedupeHash,
-    id_cartao: slots.card || null
+    id_cartao: slots.card || null,
+    context_id: activeContext?.id || null
   }).select("id").single();
   
   if (error) {

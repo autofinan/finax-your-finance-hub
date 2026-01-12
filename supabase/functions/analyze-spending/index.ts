@@ -276,6 +276,23 @@ async function analyzeUserSpending(userId: string): Promise<{ generated: number;
   let generated = 0;
   let discarded = 0;
   
+  // ========================================================================
+  // 🔕 GUARD: VERIFICAR OPERATION_MODE (RESPEITAR MODO SILENCIOSO)
+  // ========================================================================
+  const { data: perfil } = await supabase
+    .from("perfil_cliente")
+    .select("operation_mode")
+    .eq("usuario_id", userId)
+    .single();
+  
+  const operationMode = perfil?.operation_mode || "normal";
+  
+  // Se usuário está em modo silencioso, NÃO gerar alertas proativos
+  if (operationMode === "silent") {
+    console.log(`🔕 [ANALYZE] Usuário ${userId.slice(0, 8)} em modo silencioso - pulando análise`);
+    return { generated: 0, discarded: 0 };
+  }
+  
   // 1. Spike de categoria
   const categorySpike = await detectCategorySpike(userId);
   if (categorySpike) {
