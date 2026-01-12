@@ -15,25 +15,45 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const DECISION_VERSION = "v5.1";
 
 // ============================================================================
-// 🔑 GERAR PATTERN HASH (NORMALIZAÇÃO INTELIGENTE)
+// 🔑 GERAR PATTERN HASH (NORMALIZAÇÃO INTELIGENTE) - PRODUÇÃO
 // ============================================================================
-// Remove valores monetários, números e datas para agrupar padrões similares.
+// Remove valores monetários, números, datas e horários para agrupar padrões similares.
 // Exemplo: "Gastei 150 no cartão" e "Gastei 300 no cartão" → mesmo hash
+// 
+// REGRAS DE PRODUÇÃO:
+// - Remove TODOS os números (valores, quantidades, datas)
+// - Remove R$, horários (10:30), datas (09/01/2026)
+// - Normaliza acentos e espaços
+// - Limita a 60 caracteres para evitar hashes longos demais
 // ============================================================================
 
 export function generatePatternHash(message: string): string {
-  // Normalizar texto
+  // Normalizar texto agressivamente
   const normalized = message
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")  // remover acentos
-    .replace(/r\$\s*/gi, "")            // remover R$
-    .replace(/\d+([.,]\d+)?/g, "{NUM}") // substituir números por placeholder
-    .replace(/\b\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\b/g, "{DATE}") // datas
-    .replace(/[^\w\s{}]/g, "")          // remover pontuação
-    .replace(/\s+/g, " ")               // normalizar espaços
+    
+    // 1. Remover valores monetários (R$ 150,00, 150 reais, etc)
+    .replace(/r\$\s*[\d.,]+/gi, "")
+    .replace(/[\d.,]+\s*reais?/gi, "")
+    
+    // 2. Remover datas em diversos formatos
+    .replace(/\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?/g, "")  // 09/01, 09/01/2026
+    .replace(/\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}/g, "")         // 2026-01-09
+    
+    // 3. Remover horários
+    .replace(/\d{1,2}:\d{2}(?::\d{2})?/g, "")                // 10:30, 10:30:00
+    .replace(/\d{1,2}h\d{0,2}/gi, "")                        // 10h, 10h30
+    
+    // 4. Remover números isolados (valores, quantidades)
+    .replace(/\b\d+([.,]\d+)?\b/g, "")
+    
+    // 5. Limpar caracteres especiais e espaços extras
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 60);                      // limitar tamanho
+    .slice(0, 60);
   
   // Gerar hash simples (não precisa ser criptográfico)
   let hash = 0;
@@ -139,6 +159,16 @@ export interface CorrectionSuggestion {
 // Campos críticos que NUNCA devem ser auto-aplicados
 const CRITICAL_FIELDS = ["amount", "value", "card", "card_id", "installments"];
 
+// ============================================================================
+// 🔍 VERIFICAR CORREÇÕES ANTERIORES (PRODUÇÃO)
+// ============================================================================
+// REGRAS DE PRODUÇÃO PARA CORREÇÕES GLOBAIS:
+// 1. confidence >= 0.9 (não mais 0.85)
+// 2. confirmed_by_user = true
+// 3. decision_version = DECISION_VERSION atual
+// 4. Nunca auto-aplicar campos críticos
+// ============================================================================
+
 export async function checkPreviousCorrections(
   userId: string,
   message: string
@@ -148,40 +178,53 @@ export async function checkPreviousCorrections(
   console.log(`🔍 [CORRECTIONS] Buscando correções para hash: ${patternHash}`);
   
   try {
-    // Buscar correções:
-    // 1. Do próprio usuário para esse padrão
-    // 2. Ou globais (de qualquer usuário) com alto uso (>= 10) e confirmadas
-    const { data: corrections, error } = await supabase
+    // Buscar correções do próprio usuário para esse padrão
+    const { data: userCorrections } = await supabase
       .from("ai_corrections")
       .select("*")
       .eq("pattern_hash", patternHash)
-      .or(`user_id.eq.${userId},and(applied_count.gte.10,confirmed_by_user.eq.true)`)
+      .eq("user_id", userId)
       .order("correction_confidence", { ascending: false })
       .limit(1);
     
-    if (error) {
-      console.error("❌ [CORRECTIONS] Erro na busca:", error);
+    // Buscar correções globais com critérios RIGOROSOS
+    const { data: globalCorrections } = await supabase
+      .from("ai_corrections")
+      .select("*")
+      .eq("pattern_hash", patternHash)
+      .neq("user_id", userId)
+      .gte("correction_confidence", 0.9)           // PRODUÇÃO: >= 0.9
+      .eq("confirmed_by_user", true)               // PRODUÇÃO: deve ser confirmado
+      .eq("decision_version", DECISION_VERSION)    // PRODUÇÃO: versão atual
+      .gte("applied_count", 10)
+      .order("correction_confidence", { ascending: false })
+      .limit(1);
+    
+    // Priorizar correção do próprio usuário
+    const correction = userCorrections?.[0] || globalCorrections?.[0];
+    
+    if (!correction) {
       return { hasSuggestion: false, shouldAutoApply: false };
     }
     
-    if (!corrections?.length) {
-      return { hasSuggestion: false, shouldAutoApply: false };
-    }
-    
-    const correction = corrections[0];
     const correctedField = correction.correction_type;
     const correctedValue = correction.corrected_classification?.[correctedField];
     
     console.log(`✅ [CORRECTIONS] Correção encontrada: ${correctedField} = ${correctedValue}`);
-    console.log(`   confidence: ${correction.correction_confidence}, applied: ${correction.applied_count}, confirmed: ${correction.confirmed_by_user}`);
+    console.log(`   confidence: ${correction.correction_confidence}, applied: ${correction.applied_count}, confirmed: ${correction.confirmed_by_user}, version: ${correction.decision_version}`);
     
-    // Determinar se deve auto-aplicar
+    // Determinar se deve auto-aplicar (critérios mais rigorosos para produção)
     const isCriticalField = CRITICAL_FIELDS.includes(correctedField);
+    const isUserOwn = correction.user_id === userId;
+    
+    // Auto-aplicar SOMENTE se:
+    // 1. É do próprio usuário E confirmado E high confidence
+    // 2. OU é global com TODOS os critérios atendidos
     const shouldAutoApply = 
-      correction.applied_count >= 5 &&
-      correction.correction_confidence >= 0.85 &&
-      correction.confirmed_by_user === true &&
-      !isCriticalField;
+      !isCriticalField && (
+        (isUserOwn && correction.applied_count >= 3 && correction.correction_confidence >= 0.8 && correction.confirmed_by_user) ||
+        (!isUserOwn && correction.applied_count >= 10 && correction.correction_confidence >= 0.9 && correction.confirmed_by_user && correction.decision_version === DECISION_VERSION)
+      );
     
     return {
       hasSuggestion: true,

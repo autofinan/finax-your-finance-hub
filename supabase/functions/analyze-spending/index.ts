@@ -179,27 +179,73 @@ async function detectGoalRisk(userId: string): Promise<Alert | null> {
 }
 
 // ============================================================================
-// 💾 SALVAR ALERTAS
+// 💾 SALVAR ALERTAS (COM COOLDOWN E FILTRO) - PRODUÇÃO
 // ============================================================================
 
-async function saveAlert(userId: string, alert: Alert): Promise<void> {
+const ALERT_COOLDOWN_DAYS: Record<string, number> = {
+  goal_risk: 7,
+  category_spike: 5,
+  recurring_missed: 3,
+  unusual_spending: 2,
+  budget_exceeded: 7,
+};
+
+const MIN_UTILITY_SCORE = 0.4;
+
+async function saveAlert(userId: string, alert: Alert): Promise<boolean> {
   try {
-    // Verificar se já existe alerta similar recente (24h)
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const { data: existing } = await supabase
+    // REGRA 1: Verificar utilityScore mínimo
+    if (alert.utilityScore < MIN_UTILITY_SCORE) {
+      console.log(`⏭️ Descartado por utilityScore baixo: ${alert.type} (${alert.utilityScore})`);
+      
+      await supabase.from("finax_logs").insert({
+        action_type: "alert_discarded",
+        user_id: userId,
+        entity_type: "spending_alert",
+        new_data: {
+          alert_type: alert.type,
+          utility_score: alert.utilityScore,
+          reason: "low_utility_score",
+          discarded_at: new Date().toISOString()
+        }
+      });
+      
+      return false;
+    }
+    
+    // REGRA 2: Verificar cooldown por tipo
+    const cooldownDays = ALERT_COOLDOWN_DAYS[alert.type] || 3;
+    const cooldownDate = new Date(Date.now() - cooldownDays * 24 * 60 * 60 * 1000);
+    
+    const { data: recentAlert } = await supabase
       .from("spending_alerts")
       .select("id")
       .eq("user_id", userId)
       .eq("alert_type", alert.type)
       .eq("category", alert.category || null)
-      .gte("created_at", oneDayAgo.toISOString())
+      .gte("created_at", cooldownDate.toISOString())
       .limit(1);
     
-    if (existing?.length) {
-      console.log(`⏭️ Alerta ${alert.type} já existe para ${userId}`);
-      return;
+    if (recentAlert?.length) {
+      console.log(`⏭️ Descartado por cooldown: ${alert.type} (${cooldownDays} dias)`);
+      
+      await supabase.from("finax_logs").insert({
+        action_type: "alert_discarded",
+        user_id: userId,
+        entity_type: "spending_alert",
+        new_data: {
+          alert_type: alert.type,
+          utility_score: alert.utilityScore,
+          reason: "cooldown_active",
+          cooldown_days: cooldownDays,
+          discarded_at: new Date().toISOString()
+        }
+      });
+      
+      return false;
     }
     
+    // REGRA 3: Salvar alerta
     await supabase.from("spending_alerts").insert({
       user_id: userId,
       alert_type: alert.type,
@@ -213,9 +259,11 @@ async function saveAlert(userId: string, alert: Alert): Promise<void> {
       decision_version: DECISION_VERSION
     });
     
-    console.log(`✅ Alerta ${alert.type} salvo para ${userId}`);
+    console.log(`✅ Alerta ${alert.type} salvo para ${userId} (score: ${alert.utilityScore})`);
+    return true;
   } catch (error) {
     console.error("Erro ao salvar alerta:", error);
+    return false;
   }
 }
 
@@ -223,46 +271,48 @@ async function saveAlert(userId: string, alert: Alert): Promise<void> {
 // 📊 ANALISAR USUÁRIO
 // ============================================================================
 
-async function analyzeUserSpending(userId: string): Promise<number> {
+async function analyzeUserSpending(userId: string): Promise<{ generated: number; discarded: number }> {
   console.log(`📊 Analisando usuário: ${userId}`);
-  let alertCount = 0;
+  let generated = 0;
+  let discarded = 0;
   
   // 1. Spike de categoria
   const categorySpike = await detectCategorySpike(userId);
   if (categorySpike) {
-    await saveAlert(userId, categorySpike);
-    alertCount++;
+    if (await saveAlert(userId, categorySpike)) generated++;
+    else discarded++;
   }
   
   // 2. Recorrentes não pagos
   const missedRecurring = await detectMissedRecurring(userId);
   for (const alert of missedRecurring) {
-    await saveAlert(userId, alert);
-    alertCount++;
+    if (await saveAlert(userId, alert)) generated++;
+    else discarded++;
   }
   
   // 3. Risco de meta
   const goalRisk = await detectGoalRisk(userId);
   if (goalRisk) {
-    await saveAlert(userId, goalRisk);
-    alertCount++;
+    if (await saveAlert(userId, goalRisk)) generated++;
+    else discarded++;
   }
   
-  return alertCount;
+  return { generated, discarded };
 }
 
 // ============================================================================
 // 📊 REGISTRAR MÉTRICAS
 // ============================================================================
 
-async function trackAlertMetrics(totalUsers: number, totalAlerts: number): Promise<void> {
+async function trackAlertMetrics(totalUsers: number, totalGenerated: number, totalDiscarded: number): Promise<void> {
   try {
     await supabase.from("finax_logs").insert({
       action_type: "alert_metrics",
       entity_type: "system",
       new_data: {
         total_users_analyzed: totalUsers,
-        total_alerts_generated: totalAlerts,
+        total_alerts_generated: totalGenerated,
+        total_alerts_discarded: totalDiscarded,
         run_at: new Date().toISOString()
       }
     });
@@ -295,7 +345,7 @@ serve(async (req) => {
   }
   
   console.log("═══════════════════════════════════════════════════════════════");
-  console.log("📊 ANALYZE-SPENDING - CRON DIÁRIO");
+  console.log("📊 ANALYZE-SPENDING - CRON DIÁRIO (PRODUÇÃO)");
   console.log("═══════════════════════════════════════════════════════════════");
   
   try {
@@ -311,25 +361,28 @@ serve(async (req) => {
     
     console.log(`👥 ${users?.length || 0} usuários ativos encontrados`);
     
-    let totalAlerts = 0;
+    let totalGenerated = 0;
+    let totalDiscarded = 0;
     
     for (const user of users || []) {
-      const alertCount = await analyzeUserSpending(user.id);
-      totalAlerts += alertCount;
+      const result = await analyzeUserSpending(user.id);
+      totalGenerated += result.generated;
+      totalDiscarded += result.discarded;
     }
     
     // Registrar métricas
-    await trackAlertMetrics(users?.length || 0, totalAlerts);
+    await trackAlertMetrics(users?.length || 0, totalGenerated, totalDiscarded);
     
     console.log("═══════════════════════════════════════════════════════════════");
-    console.log(`✅ CONCLUÍDO: ${users?.length || 0} usuários, ${totalAlerts} alertas`);
+    console.log(`✅ CONCLUÍDO: ${users?.length || 0} usuários, ${totalGenerated} gerados, ${totalDiscarded} descartados`);
     console.log("═══════════════════════════════════════════════════════════════");
     
     return new Response(
       JSON.stringify({
         success: true,
         usersProcessed: users?.length || 0,
-        alertsGenerated: totalAlerts,
+        alertsGenerated: totalGenerated,
+        alertsDiscarded: totalDiscarded,
         timestamp: new Date().toISOString()
       }),
       {
