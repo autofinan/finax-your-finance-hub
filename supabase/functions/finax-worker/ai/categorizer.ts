@@ -9,6 +9,7 @@
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { recordMetric } from "../governance/config.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -123,6 +124,9 @@ async function searchSemanticCache(
       
       console.log(`✅ [CACHE] HIT! "${keyword}" → ${data.categoria} (conf: ${data.confidence})`);
       
+      // 📊 MÉTRICA: Cache hit
+      recordMetric("categorization_cache_hit", 1, { keyword, categoria: data.categoria }).catch(() => {});
+      
       return {
         category: data.categoria as ValidCategory,
         confidence: data.confidence,
@@ -227,6 +231,9 @@ EXEMPLOS:
       
       console.log(`🤖 [AI] Resultado: "${description}" → ${categoria} (conf: ${confianca}, termo: ${termoChave})`);
       
+      // 📊 MÉTRICA: AI usado
+      recordMetric("categorization_ai_used", 1, { categoria, confianca: confianca.toString() }).catch(() => {});
+      
       // ================================================================
       // 🧠 AUTOAPRENDIZADO: Se confiança alta, salvar no cache
       // ================================================================
@@ -258,6 +265,9 @@ EXEMPLOS:
           if (!insertError) {
             console.log(`🧠 [LEARN] Novo termo aprendido: "${termoChave}" → ${categoria} (conf: ${confianca})`);
             learned = true;
+            
+            // 📊 MÉTRICA: Termo aprendido
+            recordMetric("categorization_learned", 1, { termo: termoChave, categoria }).catch(() => {});
           } else {
             console.error(`⚠️ [LEARN] Erro ao salvar termo:`, insertError);
           }
@@ -295,6 +305,9 @@ EXEMPLOS:
  */
 function fallbackCategorize(description: string): CategorizationResult {
   console.log(`⚠️ [FALLBACK] Usando heurística mínima para: "${description}"`);
+  
+  // 📊 MÉTRICA: Fallback usado
+  recordMetric("categorization_fallback", 1, { description: description.slice(0, 50) }).catch(() => {});
   
   const desc = normalizeTerm(description);
   
