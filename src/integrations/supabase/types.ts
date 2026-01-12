@@ -56,10 +56,14 @@ export type Database = {
       ai_corrections: {
         Row: {
           applied_count: number | null
+          confirmed_by_user: boolean | null
           corrected_classification: Json | null
+          correction_confidence: number | null
           correction_type: string | null
           created_at: string | null
+          decision_version: string | null
           id: string
+          last_confirmed_at: string | null
           original_classification: Json | null
           original_message: string
           pattern_hash: string | null
@@ -68,10 +72,14 @@ export type Database = {
         }
         Insert: {
           applied_count?: number | null
+          confirmed_by_user?: boolean | null
           corrected_classification?: Json | null
+          correction_confidence?: number | null
           correction_type?: string | null
           created_at?: string | null
+          decision_version?: string | null
           id?: string
+          last_confirmed_at?: string | null
           original_classification?: Json | null
           original_message: string
           pattern_hash?: string | null
@@ -80,10 +88,14 @@ export type Database = {
         }
         Update: {
           applied_count?: number | null
+          confirmed_by_user?: boolean | null
           corrected_classification?: Json | null
+          correction_confidence?: number | null
           correction_type?: string | null
           created_at?: string | null
+          decision_version?: string | null
           id?: string
+          last_confirmed_at?: string | null
           original_classification?: Json | null
           original_message?: string
           pattern_hash?: string | null
@@ -100,6 +112,88 @@ export type Database = {
           },
           {
             foreignKeyName: "ai_corrections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
+      ai_decision_versions: {
+        Row: {
+          active: boolean | null
+          auto_apply_corrections: boolean | null
+          auto_apply_patterns: boolean | null
+          created_at: string | null
+          description: string | null
+          global_corrections_enabled: boolean | null
+          proactive_alerts_enabled: boolean | null
+          version: string
+        }
+        Insert: {
+          active?: boolean | null
+          auto_apply_corrections?: boolean | null
+          auto_apply_patterns?: boolean | null
+          created_at?: string | null
+          description?: string | null
+          global_corrections_enabled?: boolean | null
+          proactive_alerts_enabled?: boolean | null
+          version: string
+        }
+        Update: {
+          active?: boolean | null
+          auto_apply_corrections?: boolean | null
+          auto_apply_patterns?: boolean | null
+          created_at?: string | null
+          description?: string | null
+          global_corrections_enabled?: boolean | null
+          proactive_alerts_enabled?: boolean | null
+          version?: string
+        }
+        Relationships: []
+      }
+      alert_feedback: {
+        Row: {
+          alert_id: string | null
+          comment: string | null
+          created_at: string | null
+          feedback: string
+          id: string
+          user_id: string | null
+        }
+        Insert: {
+          alert_id?: string | null
+          comment?: string | null
+          created_at?: string | null
+          feedback: string
+          id?: string
+          user_id?: string | null
+        }
+        Update: {
+          alert_id?: string | null
+          comment?: string | null
+          created_at?: string | null
+          feedback?: string
+          id?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alert_feedback_alert_id_fkey"
+            columns: ["alert_id"]
+            isOneToOne: false
+            referencedRelation: "spending_alerts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "alert_feedback_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "alert_feedback_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
@@ -603,6 +697,30 @@ export type Database = {
         }
         Relationships: []
       }
+      finax_metrics: {
+        Row: {
+          created_at: string | null
+          id: string
+          metric_name: string
+          tags: Json | null
+          value: number
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          metric_name: string
+          tags?: Json | null
+          value: number
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          metric_name?: string
+          tags?: Json | null
+          value?: number
+        }
+        Relationships: []
+      }
       gastos_recorrentes: {
         Row: {
           ativo: boolean | null
@@ -966,6 +1084,7 @@ export type Database = {
           insights: string | null
           limites: Json | null
           metas_financeiras: string | null
+          operation_mode: string | null
           preferencia_estilo: string | null
           preferencias: Json | null
           score_economia: number | null
@@ -978,6 +1097,7 @@ export type Database = {
           insights?: string | null
           limites?: Json | null
           metas_financeiras?: string | null
+          operation_mode?: string | null
           preferencia_estilo?: string | null
           preferencias?: Json | null
           score_economia?: number | null
@@ -990,6 +1110,7 @@ export type Database = {
           insights?: string | null
           limites?: Json | null
           metas_financeiras?: string | null
+          operation_mode?: string | null
           preferencia_estilo?: string | null
           preferencias?: Json | null
           score_economia?: number | null
@@ -1113,37 +1234,49 @@ export type Database = {
           alert_type: string
           category: string | null
           created_at: string | null
+          decision_version: string | null
+          delivery_mode: string | null
           dismissed_at: string | null
           id: string
           message: string | null
           sent_at: string | null
           severity: string | null
+          status: string | null
           trigger_data: Json | null
           user_id: string
+          utility_score: number | null
         }
         Insert: {
           alert_type: string
           category?: string | null
           created_at?: string | null
+          decision_version?: string | null
+          delivery_mode?: string | null
           dismissed_at?: string | null
           id?: string
           message?: string | null
           sent_at?: string | null
           severity?: string | null
+          status?: string | null
           trigger_data?: Json | null
           user_id: string
+          utility_score?: number | null
         }
         Update: {
           alert_type?: string
           category?: string | null
           created_at?: string | null
+          decision_version?: string | null
+          delivery_mode?: string | null
           dismissed_at?: string | null
           id?: string
           message?: string | null
           sent_at?: string | null
           severity?: string | null
+          status?: string | null
           trigger_data?: Json | null
           user_id?: string
+          utility_score?: number | null
         }
         Relationships: [
           {
@@ -1382,39 +1515,51 @@ export type Database = {
         Row: {
           confidence: number | null
           created_at: string | null
+          decision_version: string | null
+          expires_at: string | null
           id: string
           inferred_card_id: string | null
           inferred_category: string | null
           inferred_payment_method: string | null
+          last_confirmed_by_user: boolean | null
           last_used_at: string | null
           merchant: string
           merchant_normalized: string
+          source_transaction_id: string | null
           usage_count: number | null
           user_id: string
         }
         Insert: {
           confidence?: number | null
           created_at?: string | null
+          decision_version?: string | null
+          expires_at?: string | null
           id?: string
           inferred_card_id?: string | null
           inferred_category?: string | null
           inferred_payment_method?: string | null
+          last_confirmed_by_user?: boolean | null
           last_used_at?: string | null
           merchant: string
           merchant_normalized: string
+          source_transaction_id?: string | null
           usage_count?: number | null
           user_id: string
         }
         Update: {
           confidence?: number | null
           created_at?: string | null
+          decision_version?: string | null
+          expires_at?: string | null
           id?: string
           inferred_card_id?: string | null
           inferred_category?: string | null
           inferred_payment_method?: string | null
+          last_confirmed_by_user?: boolean | null
           last_used_at?: string | null
           merchant?: string
           merchant_normalized?: string
+          source_transaction_id?: string | null
           usage_count?: number | null
           user_id?: string
         }
