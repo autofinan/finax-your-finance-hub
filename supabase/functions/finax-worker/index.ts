@@ -2447,6 +2447,53 @@ async function processarJob(job: any): Promise<void> {
     });
     
     // ========================================================================
+    // 🧠 ELITE: SELF-HEALING CHECK (Verificar correções anteriores)
+    // ========================================================================
+    // Antes de prosseguir, verificar se já temos correções aprendidas para 
+    // este tipo de mensagem. Se sim, aplicar aos slots ou sugerir.
+    // ========================================================================
+    let elitePatternApplied = false;
+    
+    if (payload.messageType === "text" && conteudoProcessado && 
+        ["expense", "income", "recurring"].includes(decision.actionType)) {
+      try {
+        // 1. Verificar correções self-healing
+        const { checkPreviousCorrections, applyCorrectionToSlots } = await import("./learning/corrections.ts");
+        const correctionCheck = await checkPreviousCorrections(userId, conteudoProcessado);
+        
+        if (correctionCheck.hasSuggestion && correctionCheck.suggestion) {
+          console.log(`🔄 [ELITE] Correção encontrada: ${correctionCheck.suggestion.correctedField}=${correctionCheck.suggestion.correctedValue}`);
+          
+          if (correctionCheck.shouldAutoApply) {
+            // Aplicar correção automaticamente (cast para any para compatibilidade de tipos)
+            const correctedSlots = applyCorrectionToSlots(
+              decision.slots as any, 
+              correctionCheck.suggestion.correctedField, 
+              correctionCheck.suggestion.correctedValue
+            );
+            decision.slots = correctedSlots as ExtractedSlots;
+            console.log(`✅ [ELITE] Correção auto-aplicada`);
+          }
+        }
+        
+        // 2. Aplicar padrões de memória (Memory Layer)
+        if (decision.actionType === "expense" && decision.slots.description) {
+          const { applyUserPatterns } = await import("./memory/patterns.ts");
+          const patternResult = await applyUserPatterns(userId, decision.slots as any, conteudoProcessado);
+          
+          if (patternResult.patternApplied) {
+            decision.slots = patternResult.slots as ExtractedSlots;
+            elitePatternApplied = true;
+            console.log(`🧠 [ELITE] Padrão de memória aplicado para: ${decision.slots.description}`);
+          }
+        }
+      } catch (eliteErr) {
+        // Elite modules não devem bloquear fluxo principal
+        console.error(`⚠️ [ELITE] Erro (não-bloqueante):`, eliteErr);
+      }
+    }
+    
+    // ========================================================================
     // 🚫 GUARD CLAUSE DE DOMÍNIO + AUTO-DESCARTE
     // ========================================================================
     const domainCheck = assertDomainIsolation(decision.actionType, activeAction);
