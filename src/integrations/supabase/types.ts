@@ -2024,6 +2024,7 @@ export type Database = {
         Returns: undefined
       }
       fn_analise_consultiva: { Args: { p_usuario_id: string }; Returns: Json }
+      fn_cleanup_expired_patterns: { Args: never; Returns: undefined }
       fn_cleanup_expired_selections: { Args: never; Returns: undefined }
       fn_close_card_faturas: { Args: never; Returns: undefined }
       fn_close_expired_contexts: { Args: never; Returns: undefined }
@@ -2059,6 +2060,7 @@ export type Database = {
         Args: { p_ano: number; p_mes: number; p_user_id: string }
         Returns: undefined
       }
+      get_alert_stats: { Args: never; Returns: Json }
       is_service_role: { Args: never; Returns: boolean }
       limpar_conversas_expiradas: { Args: never; Returns: undefined }
       rpc_criar_parcelamento: {
