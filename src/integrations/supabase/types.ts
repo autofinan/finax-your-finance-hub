@@ -1229,6 +1229,45 @@ export type Database = {
           },
         ]
       }
+      semantic_categories: {
+        Row: {
+          categoria: string
+          confidence: number | null
+          created_at: string | null
+          decision_version: string | null
+          id: string
+          last_used_at: string | null
+          source: string | null
+          termo: string
+          termo_normalized: string
+          usage_count: number | null
+        }
+        Insert: {
+          categoria: string
+          confidence?: number | null
+          created_at?: string | null
+          decision_version?: string | null
+          id?: string
+          last_used_at?: string | null
+          source?: string | null
+          termo: string
+          termo_normalized: string
+          usage_count?: number | null
+        }
+        Update: {
+          categoria?: string
+          confidence?: number | null
+          created_at?: string | null
+          decision_version?: string | null
+          id?: string
+          last_used_at?: string | null
+          source?: string | null
+          termo?: string
+          termo_normalized?: string
+          usage_count?: number | null
+        }
+        Relationships: []
+      }
       spending_alerts: {
         Row: {
           alert_type: string
@@ -1641,39 +1680,51 @@ export type Database = {
         Row: {
           attempts: number | null
           created_at: string | null
+          dead_letter: boolean | null
           error: string | null
           id: string
           last_error: string | null
+          max_retries: number | null
           message_id: string
           next_retry_at: string | null
           payload: Json
+          priority: number | null
           processed_at: string | null
+          retry_count: number | null
           status: string | null
           user_id: string | null
         }
         Insert: {
           attempts?: number | null
           created_at?: string | null
+          dead_letter?: boolean | null
           error?: string | null
           id?: string
           last_error?: string | null
+          max_retries?: number | null
           message_id: string
           next_retry_at?: string | null
           payload: Json
+          priority?: number | null
           processed_at?: string | null
+          retry_count?: number | null
           status?: string | null
           user_id?: string | null
         }
         Update: {
           attempts?: number | null
           created_at?: string | null
+          dead_letter?: boolean | null
           error?: string | null
           id?: string
           last_error?: string | null
+          max_retries?: number | null
           message_id?: string
           next_retry_at?: string | null
           payload?: Json
+          priority?: number | null
           processed_at?: string | null
+          retry_count?: number | null
           status?: string | null
           user_id?: string | null
         }
