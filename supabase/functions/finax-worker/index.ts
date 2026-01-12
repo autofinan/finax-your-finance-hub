@@ -1442,26 +1442,22 @@ async function transcreverAudio(audioBase64: string): Promise<{ texto: string | 
 // 💾 INTENT HANDLERS
 // ============================================================================
 
-function inferCategory(description: string): string {
-  const desc = normalizeText(description);
-  const map: Record<string, string[]> = {
-    alimentacao: ["cafe", "pao", "lanche", "almoco", "jantar", "ifood", "rappi", "restaurante", "pizza"],
-    mercado: ["mercado", "supermercado", "feira"],
-    transporte: ["uber", "99", "taxi", "gasolina", "estacionamento"],
-    saude: ["farmacia", "remedio", "medico", "hospital"],
-    lazer: ["cinema", "netflix", "spotify", "bar", "festa"],
-  };
-  
-  for (const [cat, words] of Object.entries(map)) {
-    if (words.some(w => desc.includes(w))) return cat;
-  }
-  return "outros";
-}
+// 🧠 Categorização agora é feita via ai/categorizer.ts com IA-First + autoaprendizado
+import { categorizeDescription } from "./ai/categorizer.ts";
 
 async function registerExpense(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
   const valor = slots.amount!;
   const descricao = slots.description || "";
-  const categoria = inferCategory(descricao);
+  
+  // 🧠 CATEGORIZAÇÃO IA-FIRST COM AUTOAPRENDIZADO
+  const categoryResult = await categorizeDescription(descricao, slots.category);
+  const categoria = categoryResult.category;
+  
+  console.log(`📂 [EXPENSE] Categorização: "${descricao}" → ${categoria} (fonte: ${categoryResult.source}, conf: ${categoryResult.confidence})`);
+  if (categoryResult.learned) {
+    console.log(`   └─ 🧠 Termo "${categoryResult.keyTerm}" aprendido para futuras transações!`);
+  }
+  
   const formaPagamento = slots.payment_method || "outro";
   const cardId = slots.card_id || null;
   
@@ -1887,7 +1883,6 @@ async function tryRegisterRecurring(contract: Partial<RecurringContract>): Promi
 async function registerRecurring(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
   const valor = slots.amount;
   const descricao = slots.description || "";
-  const categoria = inferCategory(descricao);
   const periodicity = (slots.periodicity || "monthly") as "monthly" | "weekly" | "yearly";
   const dayOfMonth = slots.day_of_month || new Date().getDate();
   
@@ -1897,7 +1892,12 @@ async function registerRecurring(userId: string, slots: ExtractedSlots, actionId
     return { success: false, message: "Falta informar o valor 💰" };
   }
   
+  // 🧠 CATEGORIZAÇÃO IA-FIRST COM AUTOAPRENDIZADO
+  const categoryResult = await categorizeDescription(descricao, slots.category);
+  const categoria = categoryResult.category;
+  
   console.log(`🔄 [RECURRING] Iniciando: R$ ${valor} - ${descricao} (${periodicity})`);
+  console.log(`📂 [RECURRING] Categorização: "${descricao}" → ${categoria} (fonte: ${categoryResult.source})`);
   
   const agora = new Date();
   
