@@ -71,6 +71,18 @@ const SEMANTIC_PATTERNS = {
     verbs: ["quanto", "quanto gastei", "resumo", "saldo", "quanto tenho", "relatorio", "relatório"],
     contexts: ["esse mes", "este mês", "essa semana", "hoje"],
     weight: 0.9
+  },
+  // 🎯 METAS DE ECONOMIA
+  goal: {
+    verbs: ["meta", "metas", "criar meta", "nova meta", "adiciona na meta", "contribuir meta"],
+    contexts: ["economizar", "juntar", "guardar", "poupar", "objetivo"],
+    weight: 0.9
+  },
+  // 🛒 ASSISTENTE DE COMPRAS
+  purchase_advice: {
+    verbs: ["vale a pena", "devo comprar", "posso comprar", "compensa comprar", "devo gastar"],
+    contexts: ["compra", "comprar isso", "faz sentido comprar"],
+    weight: 0.9
   }
 };
 
@@ -273,6 +285,8 @@ function mapIntentToActionType(intent: string): ActionType {
   if (intent.includes("card") || intent === "update_card") return "card_event";
   if (intent.includes("cancel")) return "cancel";
   if (intent.includes("resumo") || intent.includes("query")) return "query";
+  if (intent.includes("meta") || intent.includes("goal")) return "goal";
+  if (intent.includes("comprar") || intent.includes("purchase") || intent.includes("vale a pena")) return "purchase_advice";
   return "unknown";
 }
 

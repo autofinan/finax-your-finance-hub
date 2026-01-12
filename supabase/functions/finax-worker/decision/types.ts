@@ -21,6 +21,8 @@ export type ActionType =
   | "set_context"   // definir contexto (viagem, evento)
   | "edit"          // edição/correção rápida
   | "chat"          // conversa livre
+  | "goal"          // metas de economia (criar, atualizar, consultar)
+  | "purchase_advice" // assistente de compras contextual
   | "unknown";      // não identificado
 
 // Mapeamento interno para compatibilidade
@@ -110,6 +112,8 @@ export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: s
   remove_card: { required: ["card"], optional: [] },
   installment: { required: ["amount", "installments", "description"], optional: ["category", "card"] },
   recurring: { required: ["amount", "description", "recurrence_type"], optional: ["category", "day_of_month"] },
+  goal: { required: ["goal_name", "target_amount"], optional: ["deadline", "category"] },
+  purchase_advice: { required: ["item_description", "item_value"], optional: ["category"] },
 };
 
 export const SLOT_PROMPTS: Record<string, { 
@@ -149,6 +153,10 @@ export const SLOT_PROMPTS: Record<string, {
   value: { text: "Qual o novo valor do limite?" },
   installments: { text: "Em quantas vezes?" },
   recurrence_type: { text: "É mensal, semanal ou anual?" },
+  goal_name: { text: "Qual o nome da meta?" },
+  target_amount: { text: "Qual o valor objetivo?" },
+  item_description: { text: "O que você quer comprar?" },
+  item_value: { text: "Quanto custa?" },
 };
 
 // ============================================================================

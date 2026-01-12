@@ -201,6 +201,63 @@ export type Database = {
           },
         ]
       }
+      bank_connections: {
+        Row: {
+          access_token_encrypted: string | null
+          created_at: string | null
+          id: string
+          institution_id: string | null
+          institution_name: string | null
+          last_sync_at: string | null
+          provider: string
+          refresh_token_encrypted: string | null
+          status: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          access_token_encrypted?: string | null
+          created_at?: string | null
+          id?: string
+          institution_id?: string | null
+          institution_name?: string | null
+          last_sync_at?: string | null
+          provider: string
+          refresh_token_encrypted?: string | null
+          status?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          access_token_encrypted?: string | null
+          created_at?: string | null
+          id?: string
+          institution_id?: string | null
+          institution_name?: string | null
+          last_sync_at?: string | null
+          provider?: string
+          refresh_token_encrypted?: string | null
+          status?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bank_connections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bank_connections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       cartoes_credito: {
         Row: {
           ativo: boolean | null
@@ -288,6 +345,54 @@ export type Database = {
           {
             foreignKeyName: "categorias_usuario_id_fkey"
             columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
+      chart_cache: {
+        Row: {
+          chart_data: Json
+          chart_type: string
+          created_at: string | null
+          expires_at: string
+          id: string
+          image_path: string | null
+          signed_url: string | null
+          user_id: string
+        }
+        Insert: {
+          chart_data: Json
+          chart_type: string
+          created_at?: string | null
+          expires_at: string
+          id?: string
+          image_path?: string | null
+          signed_url?: string | null
+          user_id: string
+        }
+        Update: {
+          chart_data?: Json
+          chart_type?: string
+          created_at?: string | null
+          expires_at?: string
+          id?: string
+          image_path?: string | null
+          signed_url?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chart_cache_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "chart_cache_user_id_fkey"
+            columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
@@ -1229,6 +1334,69 @@ export type Database = {
           },
         ]
       }
+      savings_goals: {
+        Row: {
+          auto_save_percentage: number | null
+          category: string | null
+          created_at: string | null
+          current_amount: number | null
+          deadline: string | null
+          id: string
+          name: string
+          progress_percentage: number | null
+          status: string | null
+          target_amount: number
+          updated_at: string | null
+          user_id: string
+          weekly_checkin_enabled: boolean | null
+        }
+        Insert: {
+          auto_save_percentage?: number | null
+          category?: string | null
+          created_at?: string | null
+          current_amount?: number | null
+          deadline?: string | null
+          id?: string
+          name: string
+          progress_percentage?: number | null
+          status?: string | null
+          target_amount: number
+          updated_at?: string | null
+          user_id: string
+          weekly_checkin_enabled?: boolean | null
+        }
+        Update: {
+          auto_save_percentage?: number | null
+          category?: string | null
+          created_at?: string | null
+          current_amount?: number | null
+          deadline?: string | null
+          id?: string
+          name?: string
+          progress_percentage?: number | null
+          status?: string | null
+          target_amount?: number
+          updated_at?: string | null
+          user_id?: string
+          weekly_checkin_enabled?: boolean | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "savings_goals_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "savings_goals_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       semantic_categories: {
         Row: {
           categoria: string
@@ -1267,6 +1435,57 @@ export type Database = {
           usage_count?: number | null
         }
         Relationships: []
+      }
+      shared_reports: {
+        Row: {
+          created_at: string | null
+          expires_at: string
+          id: string
+          is_revoked: boolean | null
+          max_views: number | null
+          report_type: string | null
+          token: string
+          user_id: string
+          view_count: number | null
+        }
+        Insert: {
+          created_at?: string | null
+          expires_at: string
+          id?: string
+          is_revoked?: boolean | null
+          max_views?: number | null
+          report_type?: string | null
+          token: string
+          user_id: string
+          view_count?: number | null
+        }
+        Update: {
+          created_at?: string | null
+          expires_at?: string
+          id?: string
+          is_revoked?: boolean | null
+          max_views?: number | null
+          report_type?: string | null
+          token?: string
+          user_id?: string
+          view_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "shared_reports_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "shared_reports_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
       }
       spending_alerts: {
         Row: {
@@ -1337,6 +1556,8 @@ export type Database = {
       transacoes: {
         Row: {
           atualizado_em: string | null
+          auto_imported: boolean | null
+          bank_connection_id: string | null
           cartao_id: string | null
           categoria: string
           context_id: string | null
@@ -1345,6 +1566,7 @@ export type Database = {
           data_transacao: string | null
           descricao: string | null
           essencial: boolean | null
+          external_id: string | null
           fatura_id: string | null
           forma_pagamento: string | null
           hash_unico: string | null
@@ -1369,6 +1591,8 @@ export type Database = {
         }
         Insert: {
           atualizado_em?: string | null
+          auto_imported?: boolean | null
+          bank_connection_id?: string | null
           cartao_id?: string | null
           categoria: string
           context_id?: string | null
@@ -1377,6 +1601,7 @@ export type Database = {
           data_transacao?: string | null
           descricao?: string | null
           essencial?: boolean | null
+          external_id?: string | null
           fatura_id?: string | null
           forma_pagamento?: string | null
           hash_unico?: string | null
@@ -1401,6 +1626,8 @@ export type Database = {
         }
         Update: {
           atualizado_em?: string | null
+          auto_imported?: boolean | null
+          bank_connection_id?: string | null
           cartao_id?: string | null
           categoria?: string
           context_id?: string | null
@@ -1409,6 +1636,7 @@ export type Database = {
           data_transacao?: string | null
           descricao?: string | null
           essencial?: boolean | null
+          external_id?: string | null
           fatura_id?: string | null
           forma_pagamento?: string | null
           hash_unico?: string | null
@@ -1432,6 +1660,13 @@ export type Database = {
           valor?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "transacoes_bank_connection_id_fkey"
+            columns: ["bank_connection_id"]
+            isOneToOne: false
+            referencedRelation: "bank_connections"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "transacoes_cartao_id_fkey"
             columns: ["cartao_id"]
@@ -1794,6 +2029,26 @@ export type Database = {
             referencedColumns: ["usuario_id"]
           },
         ]
+      }
+      vw_brain_summary: {
+        Row: {
+          confianca_media_cache: number | null
+          correcoes_confiantes: number | null
+          padroes_ativos: number | null
+          termos_aprendidos_ia: number | null
+          termos_feedback: number | null
+          termos_seed: number | null
+        }
+        Relationships: []
+      }
+      vw_cognitive_evolution: {
+        Row: {
+          dia: string | null
+          metric_name: string | null
+          ocorrencias: number | null
+          total: number | null
+        }
+        Relationships: []
       }
       vw_dashboard_usuario: {
         Row: {

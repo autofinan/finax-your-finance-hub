@@ -10,6 +10,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ExtractedSlots } from "../decision/types.ts";
+import { recordMetric } from "../governance/config.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -196,6 +197,13 @@ export async function applyUserPatterns(
       newSlots.payment_method = pattern.inferred_payment_method;
       newSlots._inferred_payment_from_pattern = true;
       patternApplied = true;
+      
+      // 📊 MÉTRICA: Padrão aplicado
+      recordMetric("pattern_applied", 1, { 
+        pattern_id: pattern.id, 
+        field: "payment_method",
+        confidence: pattern.confidence.toString()
+      }).catch(() => {});
       console.log(`🧠 [MEMORY] Aplicando payment_method inferido: ${pattern.inferred_payment_method}`);
     }
     
