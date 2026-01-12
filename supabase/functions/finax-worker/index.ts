@@ -2173,6 +2173,40 @@ async function processarJob(job: any): Promise<void> {
     const { data: usuario } = await supabase.from("usuarios").select("*").eq("id", userId).single();
     const nomeUsuario = usuario?.nome || "amigo(a)";
     
+    // ========================================================================
+    // 📷 GUARD: IMAGENS NÃO DISPARAM ANÁLISE
+    // ========================================================================
+    if (payload.messageType === "image") {
+      console.log(`📷 [WORKER] Imagem recebida - respondendo de forma neutra`);
+      await sendMessage(
+        payload.phoneNumber, 
+        "📷 Imagem recebida!\n\nSe quiser registrar algo, me manda o valor e descrição por texto 😊", 
+        payload.messageSource
+      );
+      
+      await supabase.from("historico_conversas").insert({
+        phone_number: payload.phoneNumber,
+        user_id: userId,
+        user_message: "[IMAGEM]",
+        ai_response: "Imagem recebida - resposta neutra",
+        tipo: "image"
+      });
+      
+      return; // TERMINA AQUI - NÃO PROCESSA IMAGEM
+    }
+    
+    // ========================================================================
+    // 🔕 GUARD: VERIFICAR OPERATION_MODE
+    // ========================================================================
+    const { data: perfil } = await supabase
+      .from("perfil_cliente")
+      .select("operation_mode")
+      .eq("usuario_id", userId)
+      .single();
+    
+    const operationMode = perfil?.operation_mode || "normal";
+    console.log(`🔕 [WORKER] operation_mode: ${operationMode}`);
+    
     // Verificar novo usuário (onboarding)
     const { count: historicoCount } = await supabase
       .from("historico_conversas")
@@ -3061,9 +3095,42 @@ async function processarJob(job: any): Promise<void> {
     const primeiroNome = nomeUsuario.split(" ")[0];
     await sendMessage(payload.phoneNumber, `Oi ${primeiroNome}! 👋\n\nNão entendi bem essa. Você pode:\n\n💸 *Registrar gasto:* "café 8 pix"\n💰 *Registrar entrada:* "recebi 200"\n📊 *Ver resumo:* "resumo"\n💬 *Conversar:* "tô gastando demais?"`, payload.messageSource);
     
-  } catch (error) {
-    console.error("❌ [WORKER] Erro:", error);
-    await sendMessage(payload.phoneNumber, "Ops, algo deu errado 😕\n\nTenta de novo?", payload.messageSource);
+  } catch (error: unknown) {
+    console.error("❌ [WORKER] Erro no processamento:", error);
+    
+    // Retry com backoff exponencial
+    const retryCount = (job.retry_count || 0) + 1;
+    const maxRetries = job.max_retries || 3;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    if (retryCount < maxRetries) {
+      // Calcular backoff exponencial (1s, 2s, 4s, max 30s)
+      const backoffMs = Math.min(30000, 1000 * Math.pow(2, retryCount));
+      const nextRetry = new Date(Date.now() + backoffMs);
+      
+      await supabase.from("webhook_jobs").update({
+        status: "pending",
+        retry_count: retryCount,
+        last_error: errorMessage,
+        next_retry_at: nextRetry.toISOString()
+      }).eq("id", job.id);
+      
+      console.log(`🔄 [WORKER] Retry ${retryCount}/${maxRetries} agendado para ${nextRetry.toISOString()}`);
+    } else {
+      // Mover para dead letter queue
+      await supabase.from("webhook_jobs").update({
+        status: "failed",
+        dead_letter: true,
+        last_error: errorMessage
+      }).eq("id", job.id);
+      
+      console.log(`💀 [WORKER] Job ${job.id} movido para dead letter queue após ${maxRetries} tentativas`);
+    }
+    
+    // Ainda tenta enviar mensagem de erro ao usuário
+    try {
+      await sendMessage(payload.phoneNumber, "Ops, algo deu errado 😕\n\nTenta de novo?", payload.messageSource);
+    } catch {}
   }
 }
 
@@ -3077,10 +3144,18 @@ serve(async (req) => {
   }
 
   try {
+    // ========================================================================
+    // 🔒 BUSCAR JOBS COM IDEMPOTÊNCIA E PRIORIDADE
+    // ========================================================================
+    // Buscar jobs pendentes OU que têm retry agendado para agora
+    const now = new Date().toISOString();
+    
     const { data: jobs, error } = await supabase
       .from("webhook_jobs")
       .select("*")
-      .eq("status", "pending")
+      .or(`status.eq.pending,and(status.eq.pending,next_retry_at.lte.${now})`)
+      .eq("dead_letter", false)
+      .order("priority", { ascending: true })
       .order("created_at", { ascending: true })
       .limit(10);
 
@@ -3095,20 +3170,37 @@ serve(async (req) => {
 
     console.log(`📋 [WORKER] ${jobs.length} job(s) para processar`);
 
-    const jobIds = jobs.map(j => j.id);
-    await supabase.from("webhook_jobs").update({ status: "processing" }).in("id", jobIds);
-
+    let processedCount = 0;
+    
     for (const job of jobs) {
+      // ========================================================================
+      // 🔒 LOCK OTIMISTA: Tentar marcar como processing
+      // ========================================================================
+      const { error: lockError, count } = await supabase
+        .from("webhook_jobs")
+        .update({ status: "processing", processed_at: new Date().toISOString() })
+        .eq("id", job.id)
+        .eq("status", "pending");
+      
+      if (lockError || count === 0) {
+        console.log(`⏭️ [WORKER] Job ${job.id?.slice(-8)} já em processamento por outra instância`);
+        continue;
+      }
+      
       try {
         await processarJob(job);
-        await supabase.from("webhook_jobs").update({ status: "done", processed_at: new Date().toISOString() }).eq("id", job.id);
+        await supabase.from("webhook_jobs").update({ 
+          status: "done", 
+          processed_at: new Date().toISOString() 
+        }).eq("id", job.id);
+        processedCount++;
       } catch (jobError) {
-        console.error(`❌ [JOB ${job.id}] Erro:`, jobError);
-        await supabase.from("webhook_jobs").update({ status: "error", last_error: String(jobError), attempts: (job.attempts || 0) + 1 }).eq("id", job.id);
+        // O erro já é tratado dentro de processarJob com retry
+        console.error(`❌ [JOB ${job.id?.slice(-8)}] Erro não tratado:`, jobError);
       }
     }
 
-    return new Response(JSON.stringify({ processed: jobs.length }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ processed: processedCount }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (error) {
     console.error("Erro geral:", error);
