@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ============================================================================
-// 🏭 FINAX WORKER v5.0 - ARQUITETURA MODULAR COM DECISION ENGINE
+// 🏭 FINAX WORKER v5.1 - ARQUITETURA MODULAR COM DECISION ENGINE + ELITE
 // ============================================================================
 //
 // ARQUITETURA:
@@ -10,6 +10,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // 2. CONTEXT MANAGER: Gerencia memória de curto prazo (actions)
 // 3. INTENT HANDLERS: Módulos isolados por domínio (expense, income, card, cancel)
 // 4. UI MESSAGES: Envio padronizado de mensagens
+// 5. SELF-HEALING: Aprendizado com correções do usuário (ELITE)
+// 6. MEMORY LAYER: Memória de longo prazo para padrões (ELITE)
+// 7. PROACTIVE AI: Alertas silenciosos consultados sob demanda (ELITE)
 //
 // REGRAS DE OURO:
 // - IA decide intenção, regras validam, fluxos executam
@@ -42,7 +45,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "control" | "recurring" | "set_context" | "chat" | "edit" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -243,6 +246,12 @@ const SEMANTIC_PATTERNS = {
     verbs: ["errado", "errei", "corrigir", "corrige", "corrigi", "era pra ser", "devia ser", "na verdade"],
     contexts: ["nao foi", "não foi", "foi na verdade", "queria dizer", "me enganei", "errado era", "era debito", "era pix", "era credito", "era dinheiro"],
     weight: 0.98
+  },
+  // 🚨 QUERY_ALERTS - Alertas proativos (ELITE)
+  query_alerts: {
+    verbs: ["meus alertas", "ver alertas", "alertas", "avisos", "meus avisos"],
+    contexts: ["alertas financeiros", "alertas do finax", "descartar alertas"],
+    weight: 0.96
   },
   // 🔄 RECORRENTE - Prioridade ALTA (antes de expense)
   recurring: {
@@ -447,6 +456,21 @@ function classifySemanticHeuristic(message: string): SemanticResult {
   // ========================================================================
   // CLASSIFICAÇÃO POR PADRÕES (HEURÍSTICA - NÃO DECISÃO!)
   // ========================================================================
+  
+  // 🚨 QUERY_ALERTS - Alertas proativos (ELITE)
+  for (const verb of SEMANTIC_PATTERNS.query_alerts.verbs) {
+    if (normalized.includes(verb)) {
+      // Verificar se é descarte
+      const isDismiss = normalized.includes("descartar");
+      return {
+        actionType: "query_alerts" as ActionType,
+        confidence: SEMANTIC_PATTERNS.query_alerts.weight,
+        slots: { dismiss: isDismiss },
+        reason: `Comando de alertas: "${verb}"`,
+        canExecuteDirectly: true
+      };
+    }
+  }
   
   // ✏️ EDIT/CORREÇÃO - Prioridade MÁXIMA (antes de qualquer coisa)
   for (const verb of SEMANTIC_PATTERNS.edit.verbs) {
@@ -2786,6 +2810,55 @@ async function processarJob(job: any): Promise<void> {
       // Fallback: resumo mensal
       const summary = await getMonthlySummary(userId);
       await sendMessage(payload.phoneNumber, summary, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // 🚨 QUERY_ALERTS - Alertas Proativos (ELITE)
+    // ========================================================================
+    if (decision.actionType === "query_alerts") {
+      console.log(`🚨 [ALERTS] Buscando alertas para usuário: ${userId}`);
+      
+      const { data: alerts } = await supabase
+        .from("spending_alerts")
+        .select("*")
+        .eq("user_id", userId)
+        .in("status", ["detected", "eligible"])
+        .is("sent_at", null)
+        .order("utility_score", { ascending: false })
+        .limit(5);
+      
+      if (!alerts?.length) {
+        await sendMessage(payload.phoneNumber, "✨ *Tudo tranquilo!*\n\nNão há nada fora do normal nos seus gastos. Continue assim! 💪", payload.messageSource);
+        return;
+      }
+      
+      // Marcar como enviados
+      await supabase
+        .from("spending_alerts")
+        .update({ 
+          sent_at: new Date().toISOString(), 
+          status: "sent" 
+        })
+        .in("id", alerts.map(a => a.id));
+      
+      // Formatar resposta
+      const severityEmoji: Record<string, string> = {
+        critical: "🚨",
+        warning: "⚠️",
+        info: "💡"
+      };
+      
+      let response = `📊 *Seus Alertas* (${alerts.length})\n\n`;
+      
+      for (const alert of alerts) {
+        const emoji = severityEmoji[alert.severity] || "💡";
+        response += `${emoji} ${alert.message}\n\n`;
+      }
+      
+      response += `_Responda "descartar alertas" para limpar._`;
+      
+      await sendMessage(payload.phoneNumber, response, payload.messageSource);
       return;
     }
     

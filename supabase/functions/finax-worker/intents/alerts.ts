@@ -41,13 +41,90 @@ export interface Alert {
 }
 
 // ============================================================================
-// 💾 SALVAR ALERTA (MODO SILENCIOSO)
+// ⏰ COOLDOWN POR TIPO DE ALERTA (PRODUÇÃO)
+// ============================================================================
+// Evita alertas repetitivos do mesmo tipo
+// ============================================================================
+
+const ALERT_COOLDOWN_DAYS: Record<AlertType, number> = {
+  goal_risk: 7,          // Uma vez por semana
+  category_spike: 5,     // A cada 5 dias
+  recurring_missed: 3,   // A cada 3 dias
+  unusual_spending: 2,   // A cada 2 dias
+  budget_exceeded: 7,    // Uma vez por semana
+};
+
+const MIN_UTILITY_SCORE = 0.4;  // Não persistir alertas com score abaixo disso
+
+// ============================================================================
+// 💾 SALVAR ALERTA (MODO SILENCIOSO) - PRODUÇÃO
+// ============================================================================
+// REGRAS DE PRODUÇÃO:
+// 1. Verificar cooldown por tipo de alerta
+// 2. Não persistir alertas com utilityScore < 0.4
+// 3. Registrar alertas descartados para análise
 // ============================================================================
 
 export async function saveAlert(userId: string, alert: Alert): Promise<string | null> {
-  console.log(`🚨 [ALERT] Salvando alerta ${alert.type} (SILENCIOSO)`);
+  console.log(`🚨 [ALERT] Avaliando alerta ${alert.type} (score: ${alert.utilityScore})`);
   
   try {
+    // REGRA 1: Verificar utilityScore mínimo
+    if (alert.utilityScore < MIN_UTILITY_SCORE) {
+      console.log(`⏭️ [ALERT] Descartado por utilityScore baixo: ${alert.utilityScore} < ${MIN_UTILITY_SCORE}`);
+      
+      // Registrar descarte para análise futura
+      await supabase.from("finax_logs").insert({
+        action_type: "alert_discarded",
+        user_id: userId,
+        entity_type: "spending_alert",
+        new_data: {
+          alert_type: alert.type,
+          utility_score: alert.utilityScore,
+          reason: "low_utility_score",
+          message: alert.message,
+          discarded_at: new Date().toISOString()
+        }
+      });
+      
+      return null;
+    }
+    
+    // REGRA 2: Verificar cooldown por tipo
+    const cooldownDays = ALERT_COOLDOWN_DAYS[alert.type] || 3;
+    const cooldownDate = new Date(Date.now() - cooldownDays * 24 * 60 * 60 * 1000);
+    
+    const { data: recentAlert } = await supabase
+      .from("spending_alerts")
+      .select("id, created_at")
+      .eq("user_id", userId)
+      .eq("alert_type", alert.type)
+      .eq("category", alert.category || null)
+      .gte("created_at", cooldownDate.toISOString())
+      .limit(1);
+    
+    if (recentAlert?.length) {
+      console.log(`⏭️ [ALERT] Descartado por cooldown: ${alert.type} já enviado há menos de ${cooldownDays} dias`);
+      
+      // Registrar descarte para análise futura
+      await supabase.from("finax_logs").insert({
+        action_type: "alert_discarded",
+        user_id: userId,
+        entity_type: "spending_alert",
+        new_data: {
+          alert_type: alert.type,
+          utility_score: alert.utilityScore,
+          reason: "cooldown_active",
+          cooldown_days: cooldownDays,
+          previous_alert_id: recentAlert[0].id,
+          discarded_at: new Date().toISOString()
+        }
+      });
+      
+      return null;
+    }
+    
+    // REGRA 3: Salvar alerta
     const { data, error } = await supabase
       .from("spending_alerts")
       .insert({
@@ -71,7 +148,7 @@ export async function saveAlert(userId: string, alert: Alert): Promise<string | 
       return null;
     }
     
-    console.log(`✅ [ALERT] Salvo: ${data.id}`);
+    console.log(`✅ [ALERT] Salvo: ${data.id} (score: ${alert.utilityScore})`);
     return data.id;
   } catch (error) {
     console.error("❌ [ALERT] Erro:", error);
