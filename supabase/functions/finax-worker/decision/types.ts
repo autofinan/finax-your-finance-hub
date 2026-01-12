@@ -15,7 +15,12 @@ export type ActionType =
   | "card_event"    // cartão (limite, nome, etc)
   | "cancel"        // cancelamento
   | "query"         // consulta
+  | "query_alerts"  // consulta de alertas proativos
   | "control"       // meta-comando (cancelar, deixa pra lá)
+  | "recurring"     // gasto recorrente
+  | "set_context"   // definir contexto (viagem, evento)
+  | "edit"          // edição/correção rápida
+  | "chat"          // conversa livre
   | "unknown";      // não identificado
 
 // Mapeamento interno para compatibilidade
