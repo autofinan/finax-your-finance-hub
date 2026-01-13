@@ -2944,6 +2944,71 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
+    // 🛡️ GUARD: SE HÁ EXPENSE/INCOME ATIVO, NUNCA ENTRAR EM CHAT
+    // ========================================================================
+    // Este guard protege contra a IA classificar erroneamente como "chat"
+    // quando o usuário está no meio de um fluxo de registro.
+    // ========================================================================
+    if ((decision.actionType === "chat" || decision.actionType === "unknown") &&
+        activeAction && 
+        (activeAction.intent === "expense" || activeAction.intent === "income") &&
+        activeAction.pending_slot) {
+      console.log(`🛡️ [GUARD] Bloqueando chat - action ativa: ${activeAction.intent} aguardando ${activeAction.pending_slot}`);
+      
+      // Tentar extrair o slot pendente da mensagem atual
+      const pendingSlot = activeAction.pending_slot;
+      let slotValue: any = null;
+      
+      if (pendingSlot === "payment_method") {
+        const normalizedGuard = normalizeText(conteudoProcessado);
+        if (normalizedGuard.includes("pix")) slotValue = "pix";
+        else if (normalizedGuard.includes("debito") || normalizedGuard.includes("débito")) slotValue = "debito";
+        else if (normalizedGuard.includes("credito") || normalizedGuard.includes("crédito")) slotValue = "credito";
+        else if (normalizedGuard.includes("dinheiro")) slotValue = "dinheiro";
+      } else if (pendingSlot === "amount") {
+        const numMatch = conteudoProcessado.match(/(\d+[.,]?\d*)/);
+        if (numMatch) slotValue = parseFloat(numMatch[1].replace(",", "."));
+      } else if (pendingSlot === "description") {
+        slotValue = conteudoProcessado.trim();
+      }
+      
+      if (slotValue !== null) {
+        // Preencher o slot e continuar o fluxo
+        const updatedSlots = { ...activeAction.slots, [pendingSlot]: slotValue };
+        const actionType = activeAction.intent as ActionType;
+        const missing = getMissingSlots(actionType, updatedSlots);
+        
+        if (hasAllRequiredSlots(actionType, updatedSlots)) {
+          // Executar!
+          const result = actionType === "income" 
+            ? await registerIncome(userId, updatedSlots, activeAction.id)
+            : await registerExpense(userId, updatedSlots, activeAction.id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+        
+        // Ainda falta slot → perguntar próximo
+        await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
+        const prompt = SLOT_PROMPTS[missing[0]];
+        if (prompt?.useButtons && prompt.buttons) {
+          await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+        } else {
+          await sendMessage(payload.phoneNumber, prompt?.text || `Qual o ${missing[0]}?`, payload.messageSource);
+        }
+        return;
+      }
+      
+      // Não conseguiu extrair → re-perguntar
+      const prompt = SLOT_PROMPTS[pendingSlot];
+      if (prompt?.useButtons && prompt.buttons) {
+        await sendButtons(payload.phoneNumber, `Hmm, não entendi 🤔\n\n${prompt.text}`, prompt.buttons, payload.messageSource);
+      } else {
+        await sendMessage(payload.phoneNumber, `Hmm, não entendi 🤔\n\n${prompt?.text || "Continue..."}`, payload.messageSource);
+      }
+      return;
+    }
+    
+    // ========================================================================
     // 💬 CHAT - Consultor Financeiro Conversacional
     // ========================================================================
     if (decision.actionType === "chat") {
