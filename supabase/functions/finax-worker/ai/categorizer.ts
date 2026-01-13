@@ -19,7 +19,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // Thresholds configuráveis
 const CACHE_CONFIDENCE_THRESHOLD = 0.8;  // Mínimo para aceitar do cache
-const AI_CONFIDENCE_TO_CACHE = 0.9;      // Mínimo para salvar no cache
+const AI_CONFIDENCE_TO_CACHE = 0.80;     // Mínimo para salvar no cache (baixado de 0.9 para aprender mais)
 const DECISION_VERSION = "v5.2-ai-first";
 
 // Categorias válidas do sistema

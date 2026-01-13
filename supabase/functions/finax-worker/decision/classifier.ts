@@ -165,13 +165,22 @@ export function classifyDeterministic(message: string): DeterministicResult {
   // 🎯 PADRÃO UNIVERSAL DE GASTO/ENTRADA: [texto] + [número]
   // ========================================================================
   
-  // PADRÃO A: "[texto] [número]" (ex: "dentista 360", "mercado 150")
-  const patternTextNumber = original.match(/^(.+?)\s+(\d+[.,]?\d*)(?:\s*(?:reais?)?)?$/i);
+  // ========================================================================
+  // PADRÃO F: "[texto] [número] [contexto]" (ex: "dentista 360 no crédito nubank")
+  // REGRA: Intenção DOMINANTE é sempre TRANSACIONAL, contexto adicional preenche slots
+  // ========================================================================
+  const patternWithContext = original.match(
+    /^(.+?)\s+(\d+[.,]?\d*)(?:\s+(?:reais?|no?|na?|de|com|pelo|via)?\s*(.+))?$/i
+  );
   
-  if (patternTextNumber) {
-    const description = patternTextNumber[1].trim();
-    const amount = parseFloat(patternTextNumber[2].replace(",", "."));
+  if (patternWithContext) {
+    const description = patternWithContext[1].trim();
+    const amount = parseFloat(patternWithContext[2].replace(",", "."));
+    const context = patternWithContext[3]?.trim() || null;
     const descNormalized = normalizeText(description);
+    
+    // Iniciar slots
+    const slots: ExtractedSlots = { amount, description };
     
     // Verificar se é entrada pela descrição
     let isDescriptionIncome = false;
@@ -182,13 +191,39 @@ export function classifyDeterministic(message: string): DeterministicResult {
       }
     }
     
+    // ========================================================================
+    // 🏦 EXTRAIR CONTEXTO ADICIONAL (cartão, método de pagamento)
+    // ========================================================================
+    if (context) {
+      const ctxNorm = normalizeText(context);
+      
+      // Detectar método de pagamento
+      if (ctxNorm.includes("pix")) slots.payment_method = "pix";
+      else if (ctxNorm.includes("debito")) slots.payment_method = "debito";
+      else if (ctxNorm.includes("credito") || ctxNorm.includes("cartao")) slots.payment_method = "credito";
+      else if (ctxNorm.includes("dinheiro")) slots.payment_method = "dinheiro";
+      
+      // Detectar cartão (bancos/fintechs)
+      const banks = ["nubank", "itau", "bradesco", "santander", "c6", "inter", "picpay", "banco do brasil", "caixa", "original", "next", "neon", "will", "xp"];
+      for (const bank of banks) {
+        if (ctxNorm.includes(bank)) {
+          slots.card = bank;
+          // Se mencionou cartão, provavelmente é crédito
+          if (!slots.payment_method) slots.payment_method = "credito";
+          break;
+        }
+      }
+      
+      console.log(`⚡ [CLASSIFIER] Contexto extraído: payment=${slots.payment_method}, card=${slots.card}`);
+    }
+    
     if (isExplicitIncome || isDescriptionIncome) {
       return {
         actionType: "income",
         confidence: 1.0,
-        slots: { amount, description },
+        slots,
         source: "deterministic",
-        reason: `Padrão entrada: "${description}" + ${amount}`
+        reason: `Padrão entrada completo: "${description}" + ${amount}${context ? ` + ctx: "${context}"` : ""}`
       };
     }
     
@@ -197,9 +232,9 @@ export function classifyDeterministic(message: string): DeterministicResult {
       return {
         actionType: "recurring",
         confidence: 1.0,
-        slots: { amount, description },
+        slots,
         source: "deterministic",
-        reason: `Padrão recorrente: "${description}" + ${amount}`
+        reason: `Padrão recorrente completo: "${description}" + ${amount}`
       };
     }
     
@@ -207,19 +242,56 @@ export function classifyDeterministic(message: string): DeterministicResult {
     return {
       actionType: "expense",
       confidence: 1.0,
-      slots: { amount, description },
+      slots,
       source: "deterministic",
-      reason: `Padrão gasto: "${description}" + ${amount}`
+      reason: `Padrão gasto completo: "${description}" + ${amount}${context ? ` + ctx: "${context}"` : ""}`
     };
   }
   
-  // PADRÃO B: "[número] [texto]" (ex: "360 dentista", "150 mercado")
-  const patternNumberText = original.match(/^(\d+[.,]?\d*)\s+(.+)$/i);
+  // PADRÃO B: "[número] [texto/contexto]" (ex: "360 dentista", "360 dentista pix nubank")
+  const patternNumberTextContext = original.match(/^(\d+[.,]?\d*)\s+(.+)$/i);
   
-  if (patternNumberText) {
-    const amount = parseFloat(patternNumberText[1].replace(",", "."));
-    const description = patternNumberText[2].trim();
-    const descNormalized = normalizeText(description);
+  if (patternNumberTextContext) {
+    const amount = parseFloat(patternNumberTextContext[1].replace(",", "."));
+    const fullText = patternNumberTextContext[2].trim();
+    const fullNormalized = normalizeText(fullText);
+    
+    // Tentar separar descrição de contexto (ex: "dentista pix nubank" → desc="dentista", ctx="pix nubank")
+    const slots: ExtractedSlots = { amount };
+    
+    // Detectar método de pagamento e extrair
+    let description = fullText;
+    if (fullNormalized.includes("pix")) {
+      slots.payment_method = "pix";
+      description = description.replace(/\b(no?\s+)?pix\b/gi, "").trim();
+    } else if (fullNormalized.includes("debito")) {
+      slots.payment_method = "debito";
+      description = description.replace(/\b(no?\s+)?d[eé]bito\b/gi, "").trim();
+    } else if (fullNormalized.includes("credito") || fullNormalized.includes("cartao")) {
+      slots.payment_method = "credito";
+      description = description.replace(/\b(no?\s+)?cr[eé]dito\b/gi, "").replace(/\b(no?\s+)?cart[aã]o\b/gi, "").trim();
+    } else if (fullNormalized.includes("dinheiro")) {
+      slots.payment_method = "dinheiro";
+      description = description.replace(/\b(em\s+)?dinheiro\b/gi, "").trim();
+    }
+    
+    // Detectar cartão
+    const banks = ["nubank", "itau", "bradesco", "santander", "c6", "inter", "picpay", "banco do brasil", "caixa", "original", "next", "neon", "will", "xp"];
+    for (const bank of banks) {
+      if (fullNormalized.includes(bank)) {
+        slots.card = bank;
+        if (!slots.payment_method) slots.payment_method = "credito";
+        description = description.replace(new RegExp(`\\b(no?\\s+)?${bank}\\b`, "gi"), "").trim();
+        break;
+      }
+    }
+    
+    // Limpar descrição final
+    slots.description = description
+      .replace(/\b(no|na|de|com|pelo|via)\b\s*$/gi, "")
+      .trim() || fullText;
+    
+    const descNormalized = normalizeText(slots.description);
     
     // Verificar se é entrada pela descrição
     let isDescriptionIncome = false;
@@ -234,9 +306,9 @@ export function classifyDeterministic(message: string): DeterministicResult {
       return {
         actionType: "income",
         confidence: 1.0,
-        slots: { amount, description },
+        slots,
         source: "deterministic",
-        reason: `Padrão entrada: ${amount} + "${description}"`
+        reason: `Padrão entrada: ${amount} + "${slots.description}"${slots.payment_method ? ` (${slots.payment_method})` : ""}`
       };
     }
     
@@ -245,9 +317,9 @@ export function classifyDeterministic(message: string): DeterministicResult {
       return {
         actionType: "recurring",
         confidence: 1.0,
-        slots: { amount, description },
+        slots,
         source: "deterministic",
-        reason: `Padrão recorrente: ${amount} + "${description}"`
+        reason: `Padrão recorrente: ${amount} + "${slots.description}"`
       };
     }
     
@@ -255,9 +327,9 @@ export function classifyDeterministic(message: string): DeterministicResult {
     return {
       actionType: "expense",
       confidence: 1.0,
-      slots: { amount, description },
+      slots,
       source: "deterministic",
-      reason: `Padrão gasto: ${amount} + "${description}"`
+      reason: `Padrão gasto: ${amount} + "${slots.description}"${slots.payment_method ? ` (${slots.payment_method})` : ""}`
     };
   }
   
