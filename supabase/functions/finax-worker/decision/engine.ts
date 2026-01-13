@@ -2,15 +2,16 @@
 // 🧠 DECISION ENGINE - PEÇA CENTRAL DO FINAX
 // ============================================================================
 //
-// O Decision Engine é responsável por:
-// 1. Classificar a intenção da mensagem ANTES de qualquer slot filling
-// 2. Determinar se temos confiança suficiente para agir
-// 3. Decidir exatamente O QUE perguntar (se necessário)
+// PROTOCOLO COGNITIVO EM 3 ETAPAS:
+// 1. CLASSIFICAÇÃO DETERMINÍSTICA (sem IA) - Resolve 80% dos casos
+// 2. CLASSIFICAÇÃO SEMÂNTICA (padrões) - Fallback para casos médios
+// 3. CLASSIFICAÇÃO IA (Gemini) - Apenas para casos complexos
 //
 // REGRAS DE OURO:
-// - IA DECIDE, regras VALIDAM, fluxo EXECUTA
+// - Determinístico primeiro, IA por último
 // - Nunca perguntar algo que o usuário já disse
 // - Nunca misturar tipos de ação (expense ≠ income ≠ card_event)
+// - Durante coleta de slots, NUNCA entrar em modo chat
 // ============================================================================
 
 import { 
@@ -21,6 +22,7 @@ import {
   SLOT_REQUIREMENTS,
   SLOT_PROMPTS 
 } from "./types.ts";
+import { classifyDeterministic } from "./classifier.ts";
 
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
@@ -160,21 +162,45 @@ export async function decisionEngine(input: DecisionInput): Promise<DecisionOutp
   console.log(`📩 [DE] Mensagem: "${message.slice(0, 50)}..."`);
   console.log(`📊 [DE] Contexto ativo: ${context.hasActiveAction ? context.activeActionIntent : "nenhum"}`);
   
-  // PASSO 1: Classificação semântica rápida (sem IA)
+  // ========================================================================
+  // ETAPA 1: CLASSIFICAÇÃO DETERMINÍSTICA (sem IA!)
+  // ========================================================================
+  const deterministicResult = classifyDeterministic(message);
+  console.log(`⚡ [DE] Determinístico: ${deterministicResult.actionType} (${(deterministicResult.confidence * 100).toFixed(0)}%) - ${deterministicResult.reason}`);
+  
+  // Se classificou com alta confiança E não precisa de IA → usar diretamente
+  if (deterministicResult.source === "deterministic" && deterministicResult.confidence >= 0.9) {
+    console.log(`✅ [DE] Usando classificação determinística: ${deterministicResult.actionType}`);
+    return buildDecision(
+      deterministicResult.actionType, 
+      deterministicResult.confidence, 
+      deterministicResult.slots, 
+      context
+    );
+  }
+  
+  // ========================================================================
+  // ETAPA 2: CLASSIFICAÇÃO SEMÂNTICA (padrões de verbos/contextos)
+  // ========================================================================
   const semanticResult = classifySemanticIntent(message);
   console.log(`🏷️ [DE] Semântico: ${semanticResult.type} (${(semanticResult.confidence * 100).toFixed(0)}%) - ${semanticResult.reason}`);
   
-  // PASSO 2: Se confiança alta E tipo claro → decidir sem IA
+  // Se confiança alta E tipo claro → decidir sem IA
   if (semanticResult.confidence >= 0.9 && semanticResult.type !== "unknown") {
-    console.log(`⚡ [DE] Decisão rápida: ${semanticResult.type}`);
+    console.log(`⚡ [DE] Decisão semântica: ${semanticResult.type}`);
     
     // Extrair slots básicos do texto
     const quickSlots = extractQuickSlots(message, semanticResult.type);
     
-    return buildDecision(semanticResult.type, semanticResult.confidence, quickSlots, context);
+    // Merge com slots do determinístico se houver
+    const mergedSlots = { ...deterministicResult.slots, ...quickSlots };
+    
+    return buildDecision(semanticResult.type, semanticResult.confidence, mergedSlots, context);
   }
   
-  // PASSO 3: Se há contexto ativo e mensagem parece resposta
+  // ========================================================================
+  // ETAPA 2.5: CONTEXTO ATIVO - preencher slot pendente
+  // ========================================================================
   if (context.hasActiveAction && context.pendingSlot) {
     const slotValue = extractSlotValue(message, context.pendingSlot);
     
@@ -198,10 +224,16 @@ export async function decisionEngine(input: DecisionInput): Promise<DecisionOutp
     }
   }
   
-  // PASSO 4: Chamar IA para casos complexos
+  // ========================================================================
+  // ETAPA 3: CHAMADA À IA (apenas casos complexos)
+  // ========================================================================
+  console.log(`🤖 [DE] Chamando IA para caso complexo...`);
   const aiResult = await callAIForDecision(message, context);
   
-  return buildDecision(aiResult.type, aiResult.confidence, aiResult.slots, context);
+  // Merge com slots do determinístico se houver
+  const finalSlots = { ...deterministicResult.slots, ...aiResult.slots };
+  
+  return buildDecision(aiResult.type, aiResult.confidence, finalSlots, context);
 }
 
 // ============================================================================
