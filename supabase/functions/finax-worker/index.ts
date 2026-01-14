@@ -1445,6 +1445,9 @@ async function transcreverAudio(audioBase64: string): Promise<{ texto: string | 
 // 🧠 Categorização agora é feita via ai/categorizer.ts com IA-First + autoaprendizado
 import { categorizeDescription } from "./ai/categorizer.ts";
 
+// 📊 Query handlers
+import { getExpensesByCategory } from "./intents/query.ts";
+
 async function registerExpense(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
   const valor = slots.amount!;
   const descricao = slots.description || "";
@@ -2096,29 +2099,37 @@ async function generateChatResponse(
   
   const systemPrompt = `Você é o Finax, consultor financeiro pessoal do ${userName}.
 
-Seu tom é: amigável, direto, empático, brasileiro. Nada de "fiscal" ou "robô burocrático".
-Você é um CONSULTOR FINANCEIRO AMIGO, não um registrador de dados.
+## TOM DE VOZ (OBRIGATÓRIO)
+- Seja: objetivo, claro, respeitoso, profissional.
+- Use português brasileiro natural, mas SEM exageros emocionais.
+- Seja direto e útil, sem ser frio ou robótico.
+
+## O QUE NUNCA FAZER
+- NÃO use gírias como "Putz", "Cara", "Mano", "Nossa"
+- NÃO seja excessivamente emotivo ou dramático
+- NÃO use frases como "a gente precisa dar um jeito"
+- NÃO assuma que a situação é ruim sem dados claros
+- NÃO personifique demais ("eu também fico preocupado")
+- NÃO use mais de 2-3 emojis por resposta
+
+## O QUE SEMPRE FAZER
+- Cite dados CONCRETOS quando disponíveis
+- Seja direto nas recomendações
+- Use linguagem profissional mas acessível
+- Limite resposta a 2-3 parágrafos curtos
+- Se não tiver dados suficientes, sugira que registre mais gastos
+- Se a mensagem for ambígua, pergunte em vez de adivinhar
 
 CONTEXTO FINANCEIRO DO USUÁRIO:
 ${financialSummary}
 ${contextInfo}
 
-REGRAS:
-- Seja empático e útil
-- Dê dicas PRÁTICAS quando fizer sentido
-- Use emojis com moderação (máximo 3-4 por resposta)
-- Resposta em no máximo 3 parágrafos curtos
-- Se não souber algo específico, dê conselho genérico útil
-- NUNCA diga "não entendi" - sempre agregue valor
-- Fale como um amigo que entende de finanças
-- Se o usuário perguntar algo que exige dados que você não tem, sugira que ele registre gastos
-
 VOCÊ PODE:
-- Analisar a situação financeira com base no resumo
-- Dar dicas de economia
+- Analisar a situação financeira com base nos dados
+- Dar dicas práticas de economia
 - Sugerir estratégias de orçamento
 - Responder perguntas sobre finanças pessoais
-- Oferecer apoio e motivação`;
+- Identificar padrões de gastos`;
 
   try {
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -2319,6 +2330,59 @@ async function processarJob(job: any): Promise<void> {
         await closeAction(activeAction.id);
         await createAction(userId, "income", "income", { amount: activeAction.slots.amount }, "source", payload.messageId);
         await sendButtons(payload.phoneNumber, "Como você recebeu?", SLOT_PROMPTS.source.buttons!, payload.messageSource);
+        return;
+      }
+      
+      // ========================================================================
+      // 🔤 PALAVRA SOLTA - GASTO
+      // ========================================================================
+      if (payload.buttonReplyId === "word_gasto" && activeAction?.intent === "clarify_word") {
+        const possibleDesc = activeAction.slots.possible_description || "";
+        console.log(`🔤 [BUTTON] Palavra "${possibleDesc}" é um GASTO`);
+        
+        await closeAction(activeAction.id);
+        
+        // Criar action de expense com a descrição preenchida
+        await createAction(userId, "expense", "expense", { description: possibleDesc }, "amount", payload.messageId);
+        await sendMessage(payload.phoneNumber, `💸 ${possibleDesc}\n\nQual foi o valor?`, payload.messageSource);
+        return;
+      }
+      
+      // ========================================================================
+      // 🔤 PALAVRA SOLTA - CONSULTA
+      // ========================================================================
+      if (payload.buttonReplyId === "word_consulta" && activeAction?.intent === "clarify_word") {
+        const possibleDesc = activeAction.slots.possible_description || "";
+        console.log(`🔤 [BUTTON] Palavra "${possibleDesc}" é uma CONSULTA`);
+        
+        await closeAction(activeAction.id);
+        
+        // Buscar gastos relacionados a esse termo
+        const { data: relatedTx } = await supabase
+          .from("transacoes")
+          .select("valor, categoria, descricao, data")
+          .eq("usuario_id", userId)
+          .eq("status", "confirmada")
+          .ilike("descricao", `%${possibleDesc}%`)
+          .order("data", { ascending: false })
+          .limit(5);
+        
+        if (relatedTx && relatedTx.length > 0) {
+          const total = relatedTx.reduce((sum, t) => sum + Number(t.valor), 0);
+          const list = relatedTx.map(t => 
+            `💸 R$ ${Number(t.valor).toFixed(2)} - ${new Date(t.data).toLocaleDateString("pt-BR")}`
+          ).join("\n");
+          
+          await sendMessage(payload.phoneNumber, 
+            `📊 *Gastos com "${possibleDesc}"*\n\n${list}\n\n💰 Total: R$ ${total.toFixed(2)}`,
+            payload.messageSource
+          );
+        } else {
+          await sendMessage(payload.phoneNumber, 
+            `Não encontrei gastos com "${possibleDesc}" 🤔\n\nSe quiser registrar, manda o valor!`,
+            payload.messageSource
+          );
+        }
         return;
       }
       
@@ -2856,6 +2920,18 @@ async function processarJob(job: any): Promise<void> {
     if (decision.actionType === "query") {
       const normalized = normalizeText(conteudoProcessado);
       
+      // ========================================================================
+      // 📊 GASTOS POR CATEGORIA - Handler específico
+      // ========================================================================
+      if (normalized.includes("categoria") || normalized.includes("categorias") ||
+          (normalized.includes("gasto") && normalized.includes("por")) ||
+          normalized.includes("breakdown") || normalized.includes("detalha")) {
+        console.log(`📊 [QUERY] Gastos por categoria detectado`);
+        const result = await getExpensesByCategory(userId);
+        await sendMessage(payload.phoneNumber, result, payload.messageSource);
+        return;
+      }
+      
       // Perguntas sobre cartão/limite
       if ((normalized.includes("limite") && (normalized.includes("disponivel") || normalized.includes("cartao") || normalized.includes("cartoes"))) ||
           (normalized.includes("quanto") && normalized.includes("limite"))) {
@@ -3111,6 +3187,33 @@ async function processarJob(job: any): Promise<void> {
       }
       
       await createAction(userId, "unknown", "numero_isolado", { amount: numValue }, "type_choice", payload.messageId);
+      return;
+    }
+    
+    // ========================================================================
+    // 🔤 FALLBACK: PALAVRA SOLTA (possível descrição)
+    // ========================================================================
+    // Se o classificador detectou uma palavra solta, perguntar clarificação
+    // ========================================================================
+    if (decision.actionType === "unknown" && decision.slots.possible_description) {
+      const possibleDesc = decision.slots.possible_description;
+      console.log(`🔤 [WORD] Palavra solta detectada: "${possibleDesc}" → perguntando clarificação`);
+      
+      await sendButtons(payload.phoneNumber, 
+        `"${possibleDesc}"\n\nVocê quer registrar um gasto ou consultar algo?`, 
+        [
+          { id: "word_gasto", title: "💸 Registrar gasto" },
+          { id: "word_consulta", title: "📊 Consultar" }
+        ], 
+        payload.messageSource
+      );
+      
+      // Salvar contexto para continuar o fluxo
+      await createAction(userId, "clarify", "clarify_word", 
+        { possible_description: possibleDesc }, 
+        "clarify_type", 
+        payload.messageId
+      );
       return;
     }
     
