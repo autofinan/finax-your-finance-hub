@@ -406,6 +406,39 @@ export function classifyDeterministic(message: string): DeterministicResult {
   }
   
   // ========================================================================
+  // PADRÃO G: PALAVRA SOLTA (possível descrição de gasto)
+  // Ex: "Dentista", "Mercado", "Uber" (sem número)
+  // → Guardar como possible_description e perguntar clarificação
+  // ========================================================================
+  
+  // Limpar e verificar se é palavra solta (2-30 chars, sem números)
+  const singleWordPattern = original.match(/^([A-Za-zÀ-ú\s]{2,30})$/i);
+  
+  if (singleWordPattern) {
+    const possibleDesc = singleWordPattern[1].trim();
+    const descNormalized = normalizeText(possibleDesc);
+    
+    // Verificar se NÃO é saudação/controle
+    const isControl = CONTROL_KEYWORDS.some(k => descNormalized === k || descNormalized.startsWith(k + " "));
+    
+    // Verificar se NÃO é query
+    const isQuery = QUERY_KEYWORDS.some(k => descNormalized.includes(k));
+    
+    // Se não é controle nem query, é possível descrição de gasto
+    if (!isControl && !isQuery && possibleDesc.length >= 2) {
+      console.log(`⚡ [CLASSIFIER] Palavra solta detectada: "${possibleDesc}" → precisa clarificação`);
+      
+      return {
+        actionType: "unknown",
+        confidence: 0.4,
+        slots: { possible_description: possibleDesc },
+        source: "deterministic",
+        reason: `Palavra solta detectada: "${possibleDesc}" → perguntar se é gasto ou consulta`
+      };
+    }
+  }
+  
+  // ========================================================================
   // 🤖 NÃO CONSEGUIU CLASSIFICAR → PRECISA DE IA
   // ========================================================================
   
