@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { classifyDeterministic } from "./decision/classifier.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v5.1 - ARQUITETURA MODULAR COM DECISION ENGINE + ELITE
@@ -1068,9 +1069,53 @@ async function decisionEngine(
   }
   
   // ========================================================================
-  // PRIORIDADE 2: IA EXTRAI E CLASSIFICA (Sempre!)
+  // PRIORIDADE 2: CLASSIFICAÇÃO DETERMINÍSTICA (antes de IA!)
   // ========================================================================
-  console.log(`🤖 [IA PRIMEIRO] Chamando IA para classificar...`);
+  // Importação já feita no topo: classifyDeterministic
+  const deterministicResult = classifyDeterministic(message);
+  console.log(`⚡ [DETERMINÍSTICO] ${deterministicResult.actionType} (${(deterministicResult.confidence * 100).toFixed(0)}%) - ${deterministicResult.reason}`);
+
+  // Se determinístico detectou palavra solta → NÃO chamar IA, forçar clarificação
+  if (deterministicResult.source === "deterministic" && 
+      deterministicResult.actionType === "unknown" && 
+      deterministicResult.slots.possible_description) {
+    console.log(`🔤 [WORD GUARD] Palavra solta "${deterministicResult.slots.possible_description}" → forçar clarificação`);
+    
+    return {
+      result: {
+        actionType: "unknown",
+        confidence: 0.4,
+        slots: deterministicResult.slots,
+        reason: deterministicResult.reason,
+        canExecuteDirectly: false
+      },
+      shouldBlockLegacyFlow: false
+    };
+  }
+
+  // Se determinístico tem alta confiança (>= 0.9) → usar diretamente
+  if (deterministicResult.source === "deterministic" && deterministicResult.confidence >= 0.9) {
+    // Cast para ActionType local (goal não existe aqui, mas nunca terá conf 0.9)
+    const detActionType = deterministicResult.actionType as ActionType;
+    const missing = getMissingSlots(detActionType, deterministicResult.slots);
+    console.log(`✅ [DETERMINÍSTICO] Usando resultado direto: ${detActionType}`);
+    
+    return {
+      result: {
+        actionType: detActionType,
+        confidence: deterministicResult.confidence,
+        slots: deterministicResult.slots,
+        reason: deterministicResult.reason,
+        canExecuteDirectly: missing.length === 0
+      },
+      shouldBlockLegacyFlow: true
+    };
+  }
+
+  // ========================================================================
+  // PRIORIDADE 3: IA EXTRAI E CLASSIFICA (quando determinístico incerto)
+  // ========================================================================
+  console.log(`🤖 [IA] Chamando IA para classificar (determinístico incerto)...`);
   
   const aiResult = await callAIForDecision(
     message,
@@ -3085,9 +3130,59 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
+    // 🛡️ CHAT GUARD - ÚLTIMA LINHA DE DEFESA CONTRA ALUCINAÇÃO
+    // ========================================================================
+    // Chat só entra se houver INTENÇÃO EXPLÍCITA de conversa.
+    // Mensagens curtas/ambíguas NUNCA devem entrar em chat.
+    // ========================================================================
+    function isExplicitChatIntent(text: string): boolean {
+      const t = text.toLowerCase().trim();
+      const words = t.split(/\s+/);
+      
+      // Regra 1: Mensagem tem "?" → é pergunta explícita
+      if (t.includes("?")) return true;
+      
+      // Regra 2: Mais de 6 palavras → frase completa (provavelmente contexto)
+      if (words.length > 6) return true;
+      
+      // Regra 3: Contém verbo de consulta/opinião/conselho
+      const chatVerbs = [
+        "como", "onde", "por que", "porque", "o que", "qual",
+        "me ajuda", "me diga", "acho", "devo", "vale a pena",
+        "dica", "opinião", "melhorar", "economizar", "gastando",
+        "posso", "consigo", "tenho", "tô", "estou", "será",
+        "certo", "errado", "demais", "muito", "pouco"
+      ];
+      
+      return chatVerbs.some(v => t.includes(v));
+    }
+
+    // ========================================================================
     // 💬 CHAT - Consultor Financeiro Conversacional
     // ========================================================================
     if (decision.actionType === "chat") {
+      // 🛡️ CHAT GUARD: Verificar se realmente é intenção de chat
+      if (!isExplicitChatIntent(conteudoProcessado)) {
+        console.log(`🛑 [CHAT_GUARD] Chat bloqueado → mensagem ambígua: "${conteudoProcessado}"`);
+        
+        // Tratar como palavra solta → pedir clarificação
+        await sendButtons(payload.phoneNumber, 
+          `"${conteudoProcessado}"\n\nVocê quer registrar um gasto ou consultar algo?`, 
+          [
+            { id: "word_gasto", title: "💸 Registrar gasto" },
+            { id: "word_consulta", title: "📊 Consultar" }
+          ], 
+          payload.messageSource
+        );
+        
+        await createAction(userId, "clarify", "clarify_word", 
+          { possible_description: conteudoProcessado }, 
+          "clarify_type", 
+          payload.messageId
+        );
+        return;
+      }
+      
       console.log(`💬 [CHAT] Ativando modo consultor para: "${conteudoProcessado.slice(0, 50)}..."`);
       
       // Buscar contexto financeiro do usuário
