@@ -1213,15 +1213,20 @@ function extractSlotValue(message: string, slotType: string): any {
 // 🎯 CONTEXT MANAGER
 // ============================================================================
 
+// ============================================================================
+// ⏱️ TTL CONFIGURÁVEL PARA ACTIONS (15 minutos)
+// ============================================================================
+const ACTION_TTL_MINUTES = 15;
+
 async function getActiveAction(userId: string): Promise<ActiveAction | null> {
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const ttlAgo = new Date(Date.now() - ACTION_TTL_MINUTES * 60 * 1000).toISOString();
   
   await supabase
     .from("actions")
     .update({ status: "expired" })
     .eq("user_id", userId)
     .in("status", ["collecting", "awaiting_input", "pending_selection"])
-    .lt("updated_at", fiveMinutesAgo);
+    .lt("updated_at", ttlAgo);
   
   const { data: action } = await supabase
     .from("actions")
@@ -1263,7 +1268,7 @@ async function createAction(
   messageId?: string | null
 ): Promise<ActiveAction> {
   const actionHash = `action_${userId.slice(0, 8)}_${Date.now()}`;
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + ACTION_TTL_MINUTES * 60 * 1000).toISOString();
   
   const { data: newAction, error } = await supabase
     .from("actions")
@@ -2284,10 +2289,102 @@ async function processarJob(job: any): Promise<void> {
     logDecision({ messageId: payload.messageId, decision: "start", details: { hasContext: !!activeAction, contextType: activeAction?.intent } });
     
     // ========================================================================
+    // 🤝 PRIORIDADE 0: ACK DETECTION (Cortesia)
+    // ========================================================================
+    // Mensagens de cortesia como "Obrigado", "Valeu", "Ok" não devem disparar
+    // nenhum fluxo de registro. Apenas responder amigavelmente.
+    // ========================================================================
+    const ACK_TOKENS = [
+      "obrigado", "obrigada", "obg", "brigado", "brigada",
+      "valeu", "vlw", "thanks", "thank you", "thx",
+      "ok", "okay", "blz", "beleza", "entendi", "entendido",
+      "certo", "fechou", "combinado", "perfeito", "massa",
+      "top", "show", "dahora", "legal", "ótimo", "otimo",
+      "maravilha", "excelente", "tranquilo", "suave"
+    ];
+    
+    function isAcknowledgement(text: string): boolean {
+      const normalized = normalizeText(text);
+      const words = normalized.split(/\s+/);
+      
+      // Se tem mais de 3 palavras, provavelmente não é só cortesia
+      if (words.length > 3) return false;
+      
+      // Verificar se algum token de ACK está presente
+      return ACK_TOKENS.some(token => normalized.includes(token));
+    }
+    
+    if (isAcknowledgement(payload.messageText || "")) {
+      console.log(`🤝 [ACK] Mensagem de cortesia detectada: "${payload.messageText}"`);
+      
+      // Se há action pendente, manter estado (não interromper coleta)
+      if (activeAction && activeAction.pending_slot) {
+        console.log(`🤝 [ACK] Action pendente - mantendo estado, não respondendo`);
+        // Silêncio - apenas manter o fluxo
+        return;
+      }
+      
+      // Responder amigavelmente
+      const ackResponses = [
+        "De nada! 😊 Me chama se precisar de algo.",
+        "Por nada! Tô aqui quando precisar 💪",
+        "Sempre às ordens! 🙌"
+      ];
+      const randomResponse = ackResponses[Math.floor(Math.random() * ackResponses.length)];
+      
+      await sendMessage(payload.phoneNumber, randomResponse, payload.messageSource);
+      
+      await supabase.from("historico_conversas").insert({
+        phone_number: payload.phoneNumber,
+        user_id: userId,
+        user_message: payload.messageText,
+        ai_response: randomResponse,
+        tipo: "ack"
+      });
+      
+      return;
+    }
+    
+    // ========================================================================
     // 🔘 PRIORIDADE 1: CALLBACK DE BOTÃO
     // ========================================================================
     if (payload.buttonReplyId) {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
+      
+      // ====================================================================
+      // 🛡️ GUARD: BOTÃO EXPIRADO (sem contexto ativo)
+      // ====================================================================
+      // Se recebemos um botão mas não há activeAction, significa que o
+      // contexto expirou. Responder amigavelmente pedindo para repetir.
+      // ====================================================================
+      if (!activeAction) {
+        console.log(`⏰ [EXPIRED_BUTTON] Botão clicado sem contexto ativo: ${payload.buttonReplyId}`);
+        
+        // Botões de clarificação de palavra solta
+        if (payload.buttonReplyId === "word_gasto" || payload.buttonReplyId === "word_consulta") {
+          await sendMessage(payload.phoneNumber, 
+            "⏰ Ops, demorei demais e perdi o contexto!\n\nPode repetir o que você quer registrar ou consultar?", 
+            payload.messageSource
+          );
+          return;
+        }
+        
+        // Botões de número isolado
+        if (payload.buttonReplyId === "num_gasto" || payload.buttonReplyId === "num_entrada") {
+          await sendMessage(payload.phoneNumber, 
+            "⏰ Hmm, perdi o fio da meada!\n\nPode mandar o valor de novo?", 
+            payload.messageSource
+          );
+          return;
+        }
+        
+        // Outros botões (pagamento, cartão, etc.)
+        await sendMessage(payload.phoneNumber, 
+          "⏰ Opa, o tempo passou e perdi o contexto.\n\nPode me mandar de novo o que você quer fazer?", 
+          payload.messageSource
+        );
+        return;
+      }
       
       // ✏️ EDIT - Correção de forma de pagamento
       if (payload.buttonReplyId.startsWith("edit_") && activeAction?.intent === "edit") {
@@ -3134,10 +3231,18 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     // Chat só entra se houver INTENÇÃO EXPLÍCITA de conversa.
     // Mensagens curtas/ambíguas NUNCA devem entrar em chat.
+    // THRESHOLD elevado para chat: precisa 0.85+ de confiança da IA
     // ========================================================================
     function isExplicitChatIntent(text: string): boolean {
       const t = text.toLowerCase().trim();
+      const normalizedT = normalizeText(text);
       const words = t.split(/\s+/);
+      
+      // Regra 0: Se é token de ACK, NUNCA é chat (já tratado antes, mas double-check)
+      const ackTokensLocal = ["obrigado", "obrigada", "valeu", "ok", "blz", "beleza", "entendi", "certo"];
+      if (words.length <= 2 && ackTokensLocal.some(tok => normalizedT.includes(tok))) {
+        return false;
+      }
       
       // Regra 1: Mensagem tem "?" → é pergunta explícita
       if (t.includes("?")) return true;
@@ -3150,20 +3255,26 @@ async function processarJob(job: any): Promise<void> {
         "como", "onde", "por que", "porque", "o que", "qual",
         "me ajuda", "me diga", "acho", "devo", "vale a pena",
         "dica", "opinião", "melhorar", "economizar", "gastando",
-        "posso", "consigo", "tenho", "tô", "estou", "será",
-        "certo", "errado", "demais", "muito", "pouco"
+        "posso", "consigo", "tenho", "tô", "estou", "será"
       ];
       
       return chatVerbs.some(v => t.includes(v));
     }
+    
+    // Threshold elevado para chat: precisa de alta confiança
+    const CHAT_CONFIDENCE_THRESHOLD = 0.85;
 
     // ========================================================================
     // 💬 CHAT - Consultor Financeiro Conversacional
     // ========================================================================
     if (decision.actionType === "chat") {
       // 🛡️ CHAT GUARD: Verificar se realmente é intenção de chat
-      if (!isExplicitChatIntent(conteudoProcessado)) {
-        console.log(`🛑 [CHAT_GUARD] Chat bloqueado → mensagem ambígua: "${conteudoProcessado}"`);
+      // Dupla verificação: confiança alta E intenção explícita
+      const hasExplicitIntent = isExplicitChatIntent(conteudoProcessado);
+      const hasHighConfidence = decision.confidence >= CHAT_CONFIDENCE_THRESHOLD;
+      
+      if (!hasExplicitIntent && !hasHighConfidence) {
+        console.log(`🛑 [CHAT_GUARD] Chat bloqueado → mensagem ambígua: "${conteudoProcessado}" (conf: ${decision.confidence.toFixed(2)})`);
         
         // Tratar como palavra solta → pedir clarificação
         await sendButtons(payload.phoneNumber, 
@@ -3183,6 +3294,7 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      console.log(`💬 [CHAT] Permitido → explícito: ${hasExplicitIntent}, confiança: ${decision.confidence.toFixed(2)}`);
       console.log(`💬 [CHAT] Ativando modo consultor para: "${conteudoProcessado.slice(0, 50)}..."`);
       
       // Buscar contexto financeiro do usuário
