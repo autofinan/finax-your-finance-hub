@@ -1097,6 +1097,86 @@ export type Database = {
           },
         ]
       }
+      orcamentos: {
+        Row: {
+          alerta_100_enviado: boolean | null
+          alerta_50_enviado: boolean | null
+          alerta_80_enviado: boolean | null
+          ativo: boolean | null
+          categoria: string | null
+          contexto_id: string | null
+          created_at: string | null
+          gasto_atual: number | null
+          id: string
+          limite: number
+          periodo: string | null
+          tipo: string
+          updated_at: string | null
+          usuario_id: string
+        }
+        Insert: {
+          alerta_100_enviado?: boolean | null
+          alerta_50_enviado?: boolean | null
+          alerta_80_enviado?: boolean | null
+          ativo?: boolean | null
+          categoria?: string | null
+          contexto_id?: string | null
+          created_at?: string | null
+          gasto_atual?: number | null
+          id?: string
+          limite: number
+          periodo?: string | null
+          tipo: string
+          updated_at?: string | null
+          usuario_id: string
+        }
+        Update: {
+          alerta_100_enviado?: boolean | null
+          alerta_50_enviado?: boolean | null
+          alerta_80_enviado?: boolean | null
+          ativo?: boolean | null
+          categoria?: string | null
+          contexto_id?: string | null
+          created_at?: string | null
+          gasto_atual?: number | null
+          id?: string
+          limite?: number
+          periodo?: string | null
+          tipo?: string
+          updated_at?: string | null
+          usuario_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "orcamentos_contexto_id_fkey"
+            columns: ["contexto_id"]
+            isOneToOne: false
+            referencedRelation: "user_contexts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "orcamentos_contexto_id_fkey"
+            columns: ["contexto_id"]
+            isOneToOne: false
+            referencedRelation: "vw_active_contexts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "orcamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "orcamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       parcelamentos: {
         Row: {
           ativa: boolean | null
@@ -1865,6 +1945,8 @@ export type Database = {
           onboarding_step: string | null
           phone_number: string
           plano: string | null
+          relatorio_mensal_pendente: boolean | null
+          relatorio_semanal_pendente: boolean | null
           saldo_mensal: number | null
           trial_fim: string | null
           trial_inicio: string | null
@@ -1883,6 +1965,8 @@ export type Database = {
           onboarding_step?: string | null
           phone_number: string
           plano?: string | null
+          relatorio_mensal_pendente?: boolean | null
+          relatorio_semanal_pendente?: boolean | null
           saldo_mensal?: number | null
           trial_fim?: string | null
           trial_inicio?: string | null
@@ -1901,6 +1985,8 @@ export type Database = {
           onboarding_step?: string | null
           phone_number?: string
           plano?: string | null
+          relatorio_mensal_pendente?: boolean | null
+          relatorio_semanal_pendente?: boolean | null
           saldo_mensal?: number | null
           trial_fim?: string | null
           trial_inicio?: string | null
@@ -2548,6 +2634,18 @@ export type Database = {
       fn_update_resumo_mensal: {
         Args: { p_ano: number; p_mes: number; p_user_id: string }
         Returns: undefined
+      }
+      fn_verificar_alertas_orcamento: {
+        Args: { p_usuario_id: string }
+        Returns: {
+          alerta_nivel: string
+          categoria: string
+          gasto_atual: number
+          limite: number
+          orcamento_id: string
+          percentual: number
+          tipo: string
+        }[]
       }
       get_alert_stats: { Args: never; Returns: Json }
       is_service_role: { Args: never; Returns: boolean }
