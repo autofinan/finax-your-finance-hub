@@ -12,6 +12,9 @@ const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const WHATSAPP_ACCESS_TOKEN = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
 const WHATSAPP_PHONE_NUMBER_ID = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
 
+// Janela de 24h para envio de relatórios (evitar custo extra de mensagem)
+const JANELA_24H_MS = 24 * 60 * 60 * 1000;
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // Envia mensagem via WhatsApp Business API
@@ -48,6 +51,58 @@ async function sendWhatsApp(to: string, text: string): Promise<boolean> {
   } catch (error) {
     console.error(`❌ Erro ao enviar WhatsApp:`, error);
     return false;
+  }
+}
+
+// Verifica se o usuário está dentro da janela de 24h de interação
+async function verificarJanela24h(userId: string, phoneNumber: string): Promise<boolean> {
+  try {
+    // Buscar última mensagem do usuário no histórico
+    const { data: ultimaMensagem } = await supabase
+      .from("historico_conversas")
+      .select("created_at")
+      .eq("user_id", userId)
+      .not("user_message", "is", null)
+      .not("user_message", "ilike", "%RELATÓRIO%")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!ultimaMensagem) {
+      console.log(`⏰ [${phoneNumber}] Sem histórico de mensagens - marcando como pendente`);
+      return false;
+    }
+
+    const ultimaInteracao = new Date(ultimaMensagem.created_at).getTime();
+    const agora = Date.now();
+    const dentroDaJanela = (agora - ultimaInteracao) <= JANELA_24H_MS;
+
+    if (dentroDaJanela) {
+      console.log(`✅ [${phoneNumber}] Dentro da janela 24h - pode enviar`);
+    } else {
+      console.log(`⏰ [${phoneNumber}] Fora da janela 24h - marcando como pendente`);
+    }
+
+    return dentroDaJanela;
+  } catch (error) {
+    console.error(`❌ Erro ao verificar janela 24h:`, error);
+    return false;
+  }
+}
+
+// Marcar relatório como pendente para enviar na próxima interação
+async function marcarRelatorioPendente(userId: string, tipo: "semanal" | "mensal"): Promise<void> {
+  try {
+    const campo = tipo === "semanal" ? "relatorio_semanal_pendente" : "relatorio_mensal_pendente";
+    
+    await supabase
+      .from("usuarios")
+      .update({ [campo]: true })
+      .eq("id", userId);
+    
+    console.log(`📌 Relatório ${tipo} marcado como pendente para ${userId}`);
+  } catch (error) {
+    console.error(`❌ Erro ao marcar relatório pendente:`, error);
   }
 }
 
@@ -141,10 +196,23 @@ serve(async (req) => {
     console.log(`📋 ${usuarios.length} usuários encontrados`);
 
     let enviados = 0;
+    let pendentes = 0;
     let erros = 0;
 
     for (const usuario of usuarios) {
       try {
+        // ====================================================================
+        // 🔒 VERIFICAR JANELA DE 24H ANTES DE ENVIAR
+        // ====================================================================
+        const dentroDaJanela = await verificarJanela24h(usuario.id, usuario.phone_number);
+        
+        if (!dentroDaJanela) {
+          // Marcar como pendente para enviar na próxima interação
+          await marcarRelatorioPendente(usuario.id, "semanal");
+          pendentes++;
+          continue;
+        }
+
         // Chama a função SQL para calcular dados do relatório
         const { data: relatorio, error: errRelatorio } = await supabase
           .rpc("fn_relatorio_semanal", { p_usuario_id: usuario.id });
@@ -174,10 +242,13 @@ serve(async (req) => {
         if (enviou) {
           enviados++;
 
-          // Atualiza timestamp do último relatório
+          // Atualiza timestamp do último relatório e limpa flag de pendente
           await supabase
             .from("usuarios")
-            .update({ ultimo_relatorio_semanal: new Date().toISOString() })
+            .update({ 
+              ultimo_relatorio_semanal: new Date().toISOString(),
+              relatorio_semanal_pendente: false
+            })
             .eq("id", usuario.id);
 
           // Salva no histórico
@@ -201,12 +272,13 @@ serve(async (req) => {
       }
     }
 
-    console.log(`✅ Relatórios enviados: ${enviados}, Erros: ${erros}`);
+    console.log(`✅ Enviados: ${enviados} | Pendentes: ${pendentes} | Erros: ${erros}`);
 
     return new Response(
       JSON.stringify({ 
         success: true, 
         enviados, 
+        pendentes,
         erros,
         total_usuarios: usuarios.length 
       }),
