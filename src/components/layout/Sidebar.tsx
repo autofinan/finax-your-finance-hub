@@ -33,8 +33,8 @@ export function Sidebar() {
             <Wallet className="w-5 h-5 text-primary-foreground" />
           </div>
           <div>
-            <h1 className="font-bold text-lg">FinBot</h1>
-            <p className="text-xs text-muted-foreground">Finanças Pessoais</p>
+            <h1 className="font-bold text-lg">Finax</h1>
+            <p className="text-xs text-muted-foreground">Seu assistente financeiro</p>
           </div>
         </div>
       </div>

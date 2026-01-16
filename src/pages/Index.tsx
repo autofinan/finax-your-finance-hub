@@ -2,17 +2,22 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { StatCard } from '@/components/dashboard/StatCard';
 import { RecentTransactions } from '@/components/dashboard/RecentTransactions';
 import { ExpenseChart } from '@/components/dashboard/ExpenseChart';
+import { PlanoCard } from '@/components/dashboard/PlanoCard';
+import { BudgetCard } from '@/components/dashboard/BudgetCard';
+import { QuickActions } from '@/components/dashboard/QuickActions';
 import { useTransacoes } from '@/hooks/useTransacoes';
 import { useGastosRecorrentes } from '@/hooks/useGastosRecorrentes';
-import { Wallet, TrendingUp, TrendingDown, RefreshCcw, Plus } from 'lucide-react';
+import { usePlanoStatus } from '@/hooks/usePlanoStatus';
+import { Wallet, TrendingUp, TrendingDown, RefreshCcw, Plus, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { TransactionForm } from '@/components/transacoes/TransactionForm';
-import { useMemo } from 'react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const Index = () => {
   const { transacoes, loading, addTransacao } = useTransacoes();
   const { gastos } = useGastosRecorrentes();
+  const { planoStatus, isTrialExpirado, isTrial } = usePlanoStatus();
   const [formOpen, setFormOpen] = useState(false);
 
   const stats = useMemo(() => {
@@ -69,7 +74,8 @@ const Index = () => {
 
   return (
     <AppLayout>
-      <div className="space-y-8">
+      <div className="space-y-6">
+        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold">Dashboard</h1>
@@ -81,6 +87,29 @@ const Index = () => {
           </Button>
         </div>
 
+        {/* Alertas de Trial */}
+        {isTrial && planoStatus?.diasRestantesTrial && planoStatus.diasRestantesTrial <= 4 && (
+          <Alert variant={planoStatus.alertaTrial === 'urgente' ? 'destructive' : 'default'}>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              {planoStatus.diasRestantesTrial === 1 
+                ? '⏰ Último dia do seu trial! Escolha um plano para continuar usando o Finax.'
+                : `⏰ Seu trial acaba em ${planoStatus.diasRestantesTrial} dias. Aproveite para escolher um plano!`
+              }
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {isTrialExpirado && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              Seu período de teste acabou. Escolha um plano para continuar organizando suas finanças!
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Stats Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             title="Saldo do Mês"
@@ -107,9 +136,20 @@ const Index = () => {
           />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <RecentTransactions transacoes={transacoes} loading={loading} />
-          <ExpenseChart transacoes={transacoes} />
+        {/* Main Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left Column - Main Content */}
+          <div className="lg:col-span-2 space-y-6">
+            <RecentTransactions transacoes={transacoes} loading={loading} />
+            <ExpenseChart transacoes={transacoes} />
+          </div>
+
+          {/* Right Column - Sidebar */}
+          <div className="space-y-6">
+            <PlanoCard />
+            <BudgetCard />
+            <QuickActions onAddTransaction={() => setFormOpen(true)} />
+          </div>
         </div>
       </div>
 
