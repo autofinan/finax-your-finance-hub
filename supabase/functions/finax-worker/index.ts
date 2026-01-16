@@ -224,6 +224,296 @@ function logDecision(data: { messageId: string; decision: string; details?: any 
 }
 
 // ============================================================================
+// 📷 ANÁLISE DE IMAGEM COM GEMINI VISION
+// ============================================================================
+
+interface OCRResult {
+  valor?: number;
+  descricao?: string;
+  forma_pagamento?: string;
+  data?: string;
+  confidence: number;
+  raw?: string;
+}
+
+// Analisa imagem com Gemini Vision para extrair dados financeiros
+async function analyzeImageWithGemini(base64Image: string): Promise<OCRResult> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Analise esta imagem de um cupom fiscal, recibo ou comprovante de pagamento.
+
+EXTRAIA APENAS as seguintes informações (se visíveis):
+1. VALOR TOTAL (número em reais)
+2. DESCRIÇÃO (o que foi comprado - resumo curto)
+3. FORMA DE PAGAMENTO (pix, débito, crédito, dinheiro - se identificável)
+4. DATA (se visível)
+
+REGRAS:
+- Retorne APENAS JSON válido, sem texto adicional
+- Se não encontrar um campo, não inclua no JSON
+- Para valor, retorne apenas o número (ex: 45.90)
+- Para descrição, seja breve (máximo 30 caracteres)
+- Se não conseguir identificar NADA útil, retorne {"confidence": 0}
+
+Formato de resposta:
+{
+  "valor": 45.90,
+  "descricao": "Supermercado",
+  "forma_pagamento": "pix",
+  "data": "15/01/2024",
+  "confidence": 0.85
+}`
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`
+                }
+              }
+            ]
+          }
+        ],
+      }),
+    });
+    
+    if (!response.ok) {
+      console.error(`📷 [GEMINI] Erro na API:`, response.status);
+      return { confidence: 0 };
+    }
+    
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '{"confidence": 0}';
+    
+    // Limpar resposta (remover markdown se houver)
+    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+    
+    try {
+      const parsed = JSON.parse(cleanJson);
+      
+      // Validar e normalizar resultado
+      const result: OCRResult = {
+        confidence: parsed.confidence || 0,
+        raw: cleanJson
+      };
+      
+      if (parsed.valor && typeof parsed.valor === "number" && parsed.valor > 0) {
+        result.valor = parsed.valor;
+      }
+      
+      if (parsed.descricao && typeof parsed.descricao === "string" && parsed.descricao.length > 0) {
+        result.descricao = parsed.descricao.slice(0, 50); // Limitar tamanho
+      }
+      
+      if (parsed.forma_pagamento) {
+        const paymentMap: Record<string, string> = {
+          "pix": "pix",
+          "débito": "debito", 
+          "debito": "debito",
+          "crédito": "credito",
+          "credito": "credito",
+          "cartão": "credito",
+          "cartao": "credito",
+          "dinheiro": "dinheiro",
+          "espécie": "dinheiro"
+        };
+        const normalized = String(parsed.forma_pagamento).toLowerCase();
+        result.forma_pagamento = paymentMap[normalized] || undefined;
+      }
+      
+      if (parsed.data) {
+        result.data = String(parsed.data);
+      }
+      
+      console.log(`📷 [GEMINI] Análise concluída: valor=${result.valor}, desc=${result.descricao}, conf=${result.confidence}`);
+      return result;
+      
+    } catch (parseError) {
+      console.error(`📷 [GEMINI] Erro ao parsear JSON:`, cleanJson.slice(0, 200));
+      return { confidence: 0, raw: cleanJson };
+    }
+    
+  } catch (error) {
+    console.error(`📷 [GEMINI] Erro:`, error);
+    return { confidence: 0 };
+  }
+}
+
+// ============================================================================
+// 💰 VERIFICAÇÃO DE ORÇAMENTOS
+// ============================================================================
+
+// Verifica orçamentos após registrar um gasto
+async function checkBudgetAfterExpense(userId: string, categoria: string, valorGasto: number): Promise<string | null> {
+  try {
+    // Buscar orçamentos ativos para esta categoria ou global
+    const { data: orcamentos } = await supabase
+      .from("orcamentos")
+      .select("*")
+      .eq("usuario_id", userId)
+      .eq("ativo", true)
+      .or(`tipo.eq.global,and(tipo.eq.categoria,categoria.eq.${categoria})`);
+    
+    if (!orcamentos || orcamentos.length === 0) return null;
+    
+    const alerts: string[] = [];
+    
+    for (const orcamento of orcamentos) {
+      const percentual = ((orcamento.gasto_atual + valorGasto) / orcamento.limite) * 100;
+      
+      // Verificar cada nível de alerta
+      if (percentual >= 100 && !orcamento.alerta_100_enviado) {
+        // Alerta crítico - estourou o limite
+        const tipo = orcamento.tipo === "global" ? "orçamento total" : `orçamento de ${orcamento.categoria}`;
+        alerts.push(`🚨 *Atenção!* Você atingiu 100% do ${tipo}!\n\nLimite: R$ ${orcamento.limite.toFixed(2)}\nGasto: R$ ${(orcamento.gasto_atual + valorGasto).toFixed(2)}`);
+        
+        await supabase.from("orcamentos")
+          .update({ alerta_100_enviado: true })
+          .eq("id", orcamento.id);
+          
+      } else if (percentual >= 80 && percentual < 100 && !orcamento.alerta_80_enviado) {
+        // Alerta de 80%
+        const tipo = orcamento.tipo === "global" ? "orçamento total" : `orçamento de ${orcamento.categoria}`;
+        alerts.push(`⚠️ Você usou 80% do ${tipo}.\n\nRestam R$ ${(orcamento.limite - orcamento.gasto_atual - valorGasto).toFixed(2)}`);
+        
+        await supabase.from("orcamentos")
+          .update({ alerta_80_enviado: true })
+          .eq("id", orcamento.id);
+          
+      } else if (percentual >= 50 && percentual < 80 && !orcamento.alerta_50_enviado) {
+        // Alerta de 50%
+        const tipo = orcamento.tipo === "global" ? "orçamento total" : `orçamento de ${orcamento.categoria}`;
+        alerts.push(`💡 Você atingiu 50% do ${tipo}.`);
+        
+        await supabase.from("orcamentos")
+          .update({ alerta_50_enviado: true })
+          .eq("id", orcamento.id);
+      }
+    }
+    
+    return alerts.length > 0 ? alerts.join("\n\n") : null;
+    
+  } catch (error) {
+    console.error("❌ [BUDGET] Erro ao verificar orçamentos:", error);
+    return null;
+  }
+}
+
+// ============================================================================
+// 📊 VERIFICAÇÃO E ENVIO DE RELATÓRIOS PENDENTES
+// ============================================================================
+
+// Verifica se há relatório pendente e envia após interação do usuário
+async function checkAndSendPendingReport(userId: string, phoneNumber: string, source: MessageSource): Promise<void> {
+  try {
+    // Buscar usuário com flags de relatório pendente
+    const { data: usuario } = await supabase
+      .from("usuarios")
+      .select("relatorio_semanal_pendente, relatorio_mensal_pendente, nome")
+      .eq("id", userId)
+      .single();
+    
+    if (!usuario) return;
+    
+    // Verificar relatório semanal pendente
+    if (usuario.relatorio_semanal_pendente) {
+      console.log(`📊 [REPORT] Relatório semanal pendente para ${userId} - enviando...`);
+      
+      // Buscar dados do relatório
+      const { data: relatorio } = await supabase.rpc("fn_relatorio_semanal", { 
+        p_usuario_id: userId 
+      });
+      
+      if (relatorio && relatorio.totais && (relatorio.totais.entradas > 0 || relatorio.totais.saidas > 0)) {
+        // Gerar texto do relatório com IA
+        const textoRelatorio = await gerarTextoRelatorioInline(relatorio, usuario.nome);
+        
+        // Enviar
+        await sendMessage(phoneNumber, textoRelatorio, source);
+        
+        // Marcar como enviado
+        await supabase.from("usuarios")
+          .update({ 
+            relatorio_semanal_pendente: false,
+            ultimo_relatorio_semanal: new Date().toISOString()
+          })
+          .eq("id", userId);
+        
+        // Salvar no histórico
+        await supabase.from("historico_conversas").insert({
+          phone_number: phoneNumber,
+          user_id: userId,
+          user_message: "[RELATÓRIO PENDENTE - ENVIADO]",
+          ai_response: textoRelatorio,
+          tipo: "relatorio_semanal"
+        });
+        
+        console.log(`✅ [REPORT] Relatório semanal enviado para ${userId}`);
+      } else {
+        // Limpar flag se não há dados
+        await supabase.from("usuarios")
+          .update({ relatorio_semanal_pendente: false })
+          .eq("id", userId);
+      }
+    }
+  } catch (error) {
+    console.error("❌ [REPORT] Erro ao verificar relatórios pendentes:", error);
+  }
+}
+
+// Gera texto do relatório inline (versão simplificada)
+async function gerarTextoRelatorioInline(dados: any, nomeUsuario: string | null): Promise<string> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Você é o Finax, um assistente financeiro via WhatsApp.
+Escreva um RELATÓRIO SEMANAL curto e amigável.
+
+REGRAS:
+- Use APENAS os números fornecidos
+- Máximo 10 linhas
+- 2-3 emojis
+- Uma dica prática curta no final
+- Português brasileiro informal`
+          },
+          {
+            role: "user",
+            content: `Relatório para ${nomeUsuario || "Usuário"}:\n${JSON.stringify(dados, null, 2)}`
+          }
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "📊 Não foi possível gerar o relatório.";
+  } catch (error) {
+    console.error("Erro ao gerar relatório inline:", error);
+    return "📊 Erro ao gerar relatório.";
+  }
+}
+
+// ============================================================================
 // 🧠 DECISION ENGINE - ARQUITETURA CORRIGIDA
 // ============================================================================
 // REGRAS DE OURO:
@@ -1569,14 +1859,26 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   
   if (actionId) await closeAction(actionId, tx.id);
   
+  // ========================================================================
+  // 💰 VERIFICAR ALERTAS DE ORÇAMENTO APÓS REGISTRO
+  // ========================================================================
+  const budgetAlert = await checkBudgetAfterExpense(userId, categoria, valor);
+  
   const dataFormatada = agora.toLocaleDateString("pt-BR");
   const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
   
   const emoji = categoria === "alimentacao" ? "🍽️" : categoria === "mercado" ? "🛒" : categoria === "transporte" ? "🚗" : "💸";
   
+  // Montar mensagem com alerta de orçamento se houver
+  let message = `${emoji} *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${formaPagamento}${cardInfo}\n📅 ${dataFormatada} às ${horaFormatada}${contextInfo}`;
+  
+  if (budgetAlert) {
+    message += `\n\n${budgetAlert}`;
+  }
+  
   return {
     success: true,
-    message: `${emoji} *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${formaPagamento}${cardInfo}\n📅 ${dataFormatada} às ${horaFormatada}${contextInfo}`
+    message
   };
 }
 
@@ -2235,25 +2537,111 @@ async function processarJob(job: any): Promise<void> {
     const nomeUsuario = usuario?.nome || "amigo(a)";
     
     // ========================================================================
-    // 📷 GUARD: IMAGENS NÃO DISPARAM ANÁLISE
+    // 📷 PROCESSAMENTO INTELIGENTE DE IMAGENS (OCR com Gemini Vision)
+    // ========================================================================
+    // Em vez de ignorar imagens, analisamos com IA para extrair dados.
+    // Se não encontrar informação completa, fazemos perguntas inteligentes.
     // ========================================================================
     if (payload.messageType === "image") {
-      console.log(`📷 [WORKER] Imagem recebida - respondendo de forma neutra`);
-      await sendMessage(
-        payload.phoneNumber, 
-        "📷 Imagem recebida!\n\nSe quiser registrar algo, me manda o valor e descrição por texto 😊", 
-        payload.messageSource
-      );
+      console.log(`📷 [WORKER] Imagem recebida - iniciando análise com Gemini Vision`);
       
-      await supabase.from("historico_conversas").insert({
-        phone_number: payload.phoneNumber,
-        user_id: userId,
-        user_message: "[IMAGEM]",
-        ai_response: "Imagem recebida - resposta neutra",
-        tipo: "image"
-      });
-      
-      return; // TERMINA AQUI - NÃO PROCESSA IMAGEM
+      try {
+        // 1. Baixar imagem do WhatsApp
+        const imageBase64 = await downloadWhatsAppMedia(payload.mediaId || "", eventoId || "");
+        
+        if (!imageBase64) {
+          console.log(`📷 [WORKER] Não foi possível baixar a imagem`);
+          await sendMessage(payload.phoneNumber, "Não consegui baixar a imagem 😕 Pode tentar enviar novamente?", payload.messageSource);
+          return;
+        }
+        
+        // 2. Analisar imagem com Gemini Vision
+        const ocrResult = await analyzeImageWithGemini(imageBase64);
+        console.log(`📷 [OCR] Resultado: ${JSON.stringify(ocrResult)}`);
+        
+        // 3. Salvar análise na tabela media_analysis
+        await supabase.from("media_analysis").insert({
+          message_id: payload.messageId,
+          evento_bruto_id: eventoId || null,
+          raw_ocr: ocrResult.raw || null,
+          parsed: ocrResult,
+          confidence: ocrResult.confidence || 0,
+          source: "gemini_vision"
+        });
+        
+        // 4. Fluxo baseado no resultado
+        if (ocrResult.valor && ocrResult.descricao) {
+          // Caso perfeito: tem valor E descrição → processar como expense
+          console.log(`📷 [OCR] Dados completos: R$ ${ocrResult.valor} - ${ocrResult.descricao}`);
+          
+          const slots: ExtractedSlots = {
+            amount: ocrResult.valor,
+            description: ocrResult.descricao,
+            payment_method: ocrResult.forma_pagamento || undefined
+          };
+          
+          // Se tem forma de pagamento, pode executar direto
+          if (slots.payment_method) {
+            const result = await registerExpense(userId, slots, undefined);
+            await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          } else {
+            // Falta forma de pagamento → perguntar
+            await createAction(userId, "expense", "expense", slots, "payment_method", payload.messageId);
+            await sendButtons(
+              payload.phoneNumber, 
+              `📷 Vi na imagem:\n\n💰 *Valor:* R$ ${ocrResult.valor.toFixed(2)}\n📝 *Descrição:* ${ocrResult.descricao}\n\nComo você pagou?`,
+              SLOT_PROMPTS.payment_method.buttons!,
+              payload.messageSource
+            );
+          }
+          
+        } else if (ocrResult.valor) {
+          // Só valor: perguntar descrição
+          console.log(`📷 [OCR] Só valor encontrado: R$ ${ocrResult.valor}`);
+          
+          await createAction(userId, "expense", "expense", { amount: ocrResult.valor }, "description", payload.messageId);
+          await sendMessage(
+            payload.phoneNumber, 
+            `📷 Vi que o valor é *R$ ${ocrResult.valor.toFixed(2)}*.\n\nO que você comprou?`,
+            payload.messageSource
+          );
+          
+        } else {
+          // Nada identificado: perguntar valor primeiro (de forma amigável)
+          console.log(`📷 [OCR] Nenhum dado identificado na imagem`);
+          
+          await createAction(userId, "expense", "expense", { from_image: true }, "amount", payload.messageId);
+          await sendMessage(
+            payload.phoneNumber, 
+            "📷 Recebi a imagem!\n\nVamos registrar juntos. Qual foi o valor?",
+            payload.messageSource
+          );
+        }
+        
+        // Salvar no histórico
+        await supabase.from("historico_conversas").insert({
+          phone_number: payload.phoneNumber,
+          user_id: userId,
+          user_message: "[IMAGEM]",
+          ai_response: `OCR processado: valor=${ocrResult.valor || 'N/A'}, desc=${ocrResult.descricao || 'N/A'}`,
+          tipo: "image_ocr"
+        });
+        
+        return;
+        
+      } catch (ocrError) {
+        console.error(`📷 [OCR] Erro no processamento:`, ocrError);
+        
+        // Fallback amigável
+        await createAction(userId, "expense", "expense", { from_image: true }, "amount", payload.messageId);
+        await sendMessage(
+          payload.phoneNumber, 
+          "📷 Recebi a imagem!\n\nVamos registrar juntos. Qual foi o valor?",
+          payload.messageSource
+        );
+        
+        return;
+      }
     }
     
     // ========================================================================
