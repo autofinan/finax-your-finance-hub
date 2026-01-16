@@ -117,6 +117,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "ai_corrections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       ai_decision_versions: {
@@ -199,6 +206,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "alert_feedback_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       bank_connections: {
@@ -256,6 +270,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "bank_connections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       cartoes_credito: {
@@ -307,6 +328,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "cartoes_credito_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       categorias: {
@@ -347,6 +375,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "categorias_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -397,35 +432,60 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "chart_cache_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       codigos_ativacao: {
         Row: {
           codigo: string
           criado_em: string | null
+          email_comprador: string | null
           id: string
+          origem: string | null
+          phone_number_destino: string | null
+          plano_destino: string | null
+          transaction_id: string | null
           usado: boolean | null
           usado_em: string | null
           usuario_id: string | null
           valido_ate: string
+          valor_pago: number | null
         }
         Insert: {
           codigo: string
           criado_em?: string | null
+          email_comprador?: string | null
           id?: string
+          origem?: string | null
+          phone_number_destino?: string | null
+          plano_destino?: string | null
+          transaction_id?: string | null
           usado?: boolean | null
           usado_em?: string | null
           usuario_id?: string | null
           valido_ate: string
+          valor_pago?: number | null
         }
         Update: {
           codigo?: string
           criado_em?: string | null
+          email_comprador?: string | null
           id?: string
+          origem?: string | null
+          phone_number_destino?: string | null
+          plano_destino?: string | null
+          transaction_id?: string | null
           usado?: boolean | null
           usado_em?: string | null
           usuario_id?: string | null
           valido_ate?: string
+          valor_pago?: number | null
         }
         Relationships: [
           {
@@ -440,6 +500,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "codigos_ativacao_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -521,6 +588,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "conversas_ativas_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -643,6 +717,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "eventos_brutos_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       faturas: {
@@ -692,6 +773,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "faturas_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -753,6 +841,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "faturas_cartao_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -902,6 +997,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       hipoteses_registro: {
@@ -968,6 +1070,13 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "hipoteses_registro_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -1095,6 +1204,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "messages_outbox_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       orcamentos: {
@@ -1175,6 +1291,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "orcamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       parcelamentos: {
@@ -1224,6 +1347,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "parcelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -1316,7 +1446,38 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "perfil_cliente_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
+      }
+      plano_features: {
+        Row: {
+          ativo: boolean | null
+          created_at: string | null
+          feature: string
+          id: string
+          plano: string
+        }
+        Insert: {
+          ativo?: boolean | null
+          created_at?: string | null
+          feature: string
+          id?: string
+          plano: string
+        }
+        Update: {
+          ativo?: boolean | null
+          created_at?: string | null
+          feature?: string
+          id?: string
+          plano?: string
+        }
+        Relationships: []
       }
       processed_messages: {
         Row: {
@@ -1412,6 +1573,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "resumo_mensal_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       savings_goals: {
@@ -1473,6 +1641,13 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "savings_goals_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -1565,6 +1740,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "shared_reports_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       spending_alerts: {
@@ -1629,6 +1811,13 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "spending_alerts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -1803,6 +1992,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       user_contexts: {
@@ -1861,6 +2057,13 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -1930,6 +2133,13 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "user_patterns_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -2114,6 +2324,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       vw_brain_summary: {
@@ -2186,6 +2403,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "faturas_cartao_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       vw_gastos_categoria: {
@@ -2209,6 +2433,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -2265,6 +2496,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "parcelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       vw_parcelas_pendentes_usuario: {
@@ -2305,6 +2543,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "parcelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -2385,6 +2630,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       vw_resumo_mensal: {
@@ -2411,6 +2663,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
       vw_resumo_mes_atual: {
@@ -2435,6 +2694,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -2472,6 +2738,42 @@ export type Database = {
         }
         Relationships: []
       }
+      vw_status_plano: {
+        Row: {
+          alerta_trial: string | null
+          dias_restantes_trial: number | null
+          nome: string | null
+          phone_number: string | null
+          plano: string | null
+          status_plano: string | null
+          trial_fim: string | null
+          trial_inicio: string | null
+          usuario_id: string | null
+        }
+        Insert: {
+          alerta_trial?: never
+          dias_restantes_trial?: never
+          nome?: string | null
+          phone_number?: string | null
+          plano?: string | null
+          status_plano?: never
+          trial_fim?: string | null
+          trial_inicio?: string | null
+          usuario_id?: string | null
+        }
+        Update: {
+          alerta_trial?: never
+          dias_restantes_trial?: never
+          nome?: string | null
+          phone_number?: string | null
+          plano?: string | null
+          status_plano?: never
+          trial_fim?: string | null
+          trial_inicio?: string | null
+          usuario_id?: string | null
+        }
+        Relationships: []
+      }
       vw_transacoes_agrupadas_categoria: {
         Row: {
           categoria: string | null
@@ -2493,6 +2795,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -2518,6 +2827,13 @@ export type Database = {
             columns: ["usuario_id"]
             isOneToOne: false
             referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
         ]
@@ -2585,6 +2901,13 @@ export type Database = {
             referencedRelation: "vw_dashboard_usuario"
             referencedColumns: ["usuario_id"]
           },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
         ]
       }
     }
@@ -2592,6 +2915,10 @@ export type Database = {
       atualizar_resumo_mensal: {
         Args: { p_usuario: string }
         Returns: undefined
+      }
+      feature_permitida: {
+        Args: { p_feature: string; p_usuario_id: string }
+        Returns: boolean
       }
       fn_adjust_alert_utility: { Args: never; Returns: undefined }
       fn_analise_consultiva: { Args: { p_usuario_id: string }; Returns: Json }
@@ -2647,6 +2974,18 @@ export type Database = {
           tipo: string
         }[]
       }
+      gerar_codigo_ativacao: {
+        Args: {
+          p_dias_validade?: number
+          p_email?: string
+          p_origem?: string
+          p_phone_destino?: string
+          p_plano?: string
+          p_transaction_id?: string
+          p_valor?: number
+        }
+        Returns: string
+      }
       get_alert_stats: { Args: never; Returns: Json }
       is_service_role: { Args: never; Returns: boolean }
       limpar_conversas_expiradas: { Args: never; Returns: undefined }
@@ -2683,10 +3022,9 @@ export type Database = {
           id: string
         }[]
       }
-      validar_codigo_ativacao: {
-        Args: { p_codigo: string; p_usuario_id: string }
-        Returns: Json
-      }
+      validar_codigo_ativacao:
+        | { Args: { p_codigo: string; p_usuario_id: string }; Returns: Json }
+        | { Args: { p_codigo: string; p_usuario_id: string }; Returns: Json }
     }
     Enums: {
       [_ in never]: never

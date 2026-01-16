@@ -2537,6 +2537,133 @@ async function processarJob(job: any): Promise<void> {
     const nomeUsuario = usuario?.nome || "amigo(a)";
     
     // ========================================================================
+    // 🔒 BLOQUEIO COGNITIVO: VERIFICAR PLANO DO USUÁRIO
+    // ========================================================================
+    // Antes de qualquer processamento, verificar se o trial expirou.
+    // Se expirou, bloquear e direcionar para ativação.
+    // ========================================================================
+    if (usuario) {
+      const plano = usuario.plano || "trial";
+      const trialFim = usuario.trial_fim ? new Date(usuario.trial_fim) : null;
+      const agora = new Date();
+      
+      // Verificar se trial expirou
+      if (plano === "trial" && trialFim && trialFim < agora) {
+        console.log(`🔒 [BLOQUEIO] Trial expirado para usuário ${userId}`);
+        
+        // Verificar se a mensagem é um código de ativação (FINAX-XXXXXX)
+        const msgText = payload.messageText?.trim().toUpperCase() || "";
+        const codigoMatch = msgText.match(/^(FINAX[-\s]?)?([A-Z0-9]{6,12})$/);
+        
+        if (codigoMatch) {
+          // Tentar validar código
+          const codigo = codigoMatch[2] || codigoMatch[0];
+          console.log(`🔑 [ATIVAÇÃO] Tentando validar código: ${codigo}`);
+          
+          const { data: resultado } = await supabase.rpc("validar_codigo_ativacao", {
+            p_codigo: codigo,
+            p_usuario_id: userId
+          });
+          
+          if (resultado?.valido) {
+            await sendMessage(payload.phoneNumber, 
+              `✅ *Plano ${resultado.plano === 'pro' ? 'Pro' : 'Básico'} ativado com sucesso!*\n\nAgora você tem acesso completo ao Finax. 🎉\n\nMe conta: o que posso te ajudar hoje?`, 
+              payload.messageSource
+            );
+            
+            // Salvar no histórico
+            await supabase.from("historico_conversas").insert({
+              phone_number: payload.phoneNumber,
+              user_id: userId,
+              user_message: `[CÓDIGO: ${codigo}]`,
+              ai_response: `Plano ${resultado.plano} ativado`,
+              tipo: "ativacao"
+            });
+            return;
+          } else {
+            const erroMsgs: Record<string, string> = {
+              codigo_inexistente: "Hmm, não encontrei esse código. Confere se digitou certinho? 🤔",
+              codigo_usado: "Esse código já foi usado anteriormente.",
+              codigo_expirado: "Esse código expirou. Entre em contato para ajuda."
+            };
+            
+            await sendMessage(payload.phoneNumber, 
+              erroMsgs[resultado?.erro] || "Código inválido. Tenta de novo?", 
+              payload.messageSource
+            );
+            return;
+          }
+        }
+        
+        // Se não é código, enviar mensagem de trial expirado
+        const primeiroNome = nomeUsuario.split(" ")[0];
+        await sendMessage(payload.phoneNumber, 
+          `⏰ Oi ${primeiroNome}! Seu período de teste de 14 dias acabou.\n\nO Finax te ajudou a organizar suas finanças. Quer continuar?\n\n📱 *Básico* - Registros, orçamentos e relatórios\n⭐ *Pro* - Tudo + cartões, metas e insights\n\n👉 Acesse: [link do checkout]\n\nOu envie seu código de ativação aqui!`, 
+          payload.messageSource
+        );
+        
+        // Salvar no histórico
+        await supabase.from("historico_conversas").insert({
+          phone_number: payload.phoneNumber,
+          user_id: userId,
+          user_message: payload.messageText || "[MÍDIA]",
+          ai_response: "[TRIAL EXPIRADO - BLOQUEIO]",
+          tipo: "bloqueio_trial"
+        });
+        return;
+      }
+      
+      // Verificar alerta de trial expirando (dias 10, 12, 14)
+      if (plano === "trial" && trialFim) {
+        const diasRestantes = Math.ceil((trialFim.getTime() - agora.getTime()) / (1000 * 60 * 60 * 24));
+        
+        // Verificar se já enviamos alerta hoje
+        const { data: alertaHoje } = await supabase
+          .from("historico_conversas")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("tipo", "alerta_trial")
+          .gte("created_at", new Date(agora.getFullYear(), agora.getMonth(), agora.getDate()).toISOString())
+          .limit(1);
+        
+        if (!alertaHoje || alertaHoje.length === 0) {
+          if (diasRestantes === 4) {
+            await supabase.from("historico_conversas").insert({
+              phone_number: payload.phoneNumber,
+              user_id: userId,
+              user_message: "[ALERTA TRIAL]",
+              ai_response: "4 dias restantes",
+              tipo: "alerta_trial"
+            });
+            // Alerta sutil no próximo processamento (não bloqueia)
+            console.log(`⚠️ [TRIAL] Usuário ${userId} tem 4 dias restantes`);
+          } else if (diasRestantes === 2) {
+            await supabase.from("historico_conversas").insert({
+              phone_number: payload.phoneNumber,
+              user_id: userId,
+              user_message: "[ALERTA TRIAL]",
+              ai_response: "2 dias restantes",
+              tipo: "alerta_trial"
+            });
+            console.log(`⚠️ [TRIAL] Usuário ${userId} tem 2 dias restantes`);
+          } else if (diasRestantes === 1) {
+            await supabase.from("historico_conversas").insert({
+              phone_number: payload.phoneNumber,
+              user_id: userId,
+              user_message: "[ALERTA TRIAL]",
+              ai_response: "1 dia restante",
+              tipo: "alerta_trial"
+            });
+            console.log(`🚨 [TRIAL] Usuário ${userId} tem 1 dia restante`);
+          }
+        }
+      }
+      
+      // Verificar e enviar relatórios pendentes
+      await checkAndSendPendingReport(userId, payload.phoneNumber, payload.messageSource);
+    }
+    
+    // ========================================================================
     // 📷 PROCESSAMENTO INTELIGENTE DE IMAGENS (OCR com Gemini Vision)
     // ========================================================================
     // Em vez de ignorar imagens, analisamos com IA para extrair dados.

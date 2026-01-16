@@ -221,13 +221,16 @@ async function buscarOuCriarUsuario(phoneNumber: string, nome: string | null): P
     
     if (usuario) return usuario.id;
     
-    // Criar novo
+    // Criar novo usuário com trial de 14 dias
+    const trialFim = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
     const { data: novoUsuario } = await supabase
       .from("usuarios")
       .insert({ 
         phone_number: phoneNumber,
         nome: nome,
-        plano: "pro"
+        plano: "trial",
+        trial_inicio: new Date().toISOString(),
+        trial_fim: trialFim
       })
       .select("id")
       .single();
