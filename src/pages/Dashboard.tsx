@@ -14,7 +14,7 @@ import { useState, useMemo } from 'react';
 import { TransactionForm } from '@/components/transacoes/TransactionForm';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
-const Index = () => {
+const Dashboard = () => {
   const { transacoes, loading, addTransacao } = useTransacoes();
   const { gastos } = useGastosRecorrentes();
   const { planoStatus, isTrialExpirado, isTrial } = usePlanoStatus();
@@ -162,4 +162,4 @@ const Index = () => {
   );
 };
 
-export default Index;
+export default Dashboard;
