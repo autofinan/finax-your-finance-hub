@@ -1,6 +1,8 @@
-import { Check, Sparkles, ArrowRight } from "lucide-react";
+import { Check, Sparkles, ArrowRight, Crown, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useStripeCheckout } from "@/hooks/useStripeCheckout";
+import { useNavigate } from "react-router-dom";
 
 const plans = [
   {
@@ -8,6 +10,7 @@ const plans = [
     description: "Organização + Consciência",
     price: "19,90",
     period: "/mês",
+    icon: Zap,
     features: [
       "Registro automático de gastos",
       "Relatórios semanais e mensais",
@@ -18,17 +21,19 @@ const plans = [
     ],
     cta: "Começar com Básico",
     popular: false,
+    plan: "basico" as const,
   },
   {
     name: "Pro",
     description: "Controle Profundo + Evolução",
     price: "29,90",
     period: "/mês",
+    icon: Crown,
     features: [
       "Tudo do plano Básico",
       "Controle de cartões com limite",
       "Parcelamentos rastreados",
-      "Insights preditivos",
+      "Insights preditivos com IA",
       "Projeções financeiras",
       "Gestão familiar",
       "Comparativos de períodos",
@@ -37,20 +42,33 @@ const plans = [
     cta: "Começar Trial Pro",
     popular: true,
     trial: true,
+    plan: "pro" as const,
   },
 ];
 
 const Pricing = () => {
-  const handleCTA = (planName: string) => {
-    // TODO: Integrate with Stripe
-    window.open("https://wa.me/5511999999999?text=Quero assinar o plano " + planName, "_blank");
+  const { createCheckout, loading } = useStripeCheckout();
+  const navigate = useNavigate();
+
+  const handleCTA = async (plan: 'basico' | 'pro') => {
+    // For now, redirect to auth first, then checkout will happen from dashboard
+    // In production, you might want to create checkout session directly
+    navigate('/auth', { state: { plan } });
   };
 
   return (
-    <section id="planos" className="py-20 md:py-32 bg-secondary/30">
-      <div className="container mx-auto px-4">
+    <section id="planos" className="py-20 md:py-32 relative overflow-hidden">
+      {/* Background */}
+      <div className="absolute inset-0 bg-gradient-to-b from-secondary/30 via-background to-secondary/30" />
+      <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl" />
+      <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-accent/10 rounded-full blur-3xl" />
+      
+      <div className="container mx-auto px-4 relative">
         {/* Header */}
         <div className="text-center max-w-3xl mx-auto mb-16 space-y-4">
+          <Badge variant="secondary" className="mb-4 bg-success/10 text-success border-success/20">
+            14 dias grátis no plano Pro
+          </Badge>
           <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold">
             Planos que cabem no seu{" "}
             <span className="text-gradient">bolso</span>
@@ -65,42 +83,52 @@ const Pricing = () => {
           {plans.map((plan) => (
             <div
               key={plan.name}
-              className={`relative p-8 rounded-3xl bg-card border-2 transition-all duration-300 hover:shadow-xl ${
+              className={`relative p-8 rounded-3xl bg-card transition-all duration-300 hover:shadow-2xl ${
                 plan.popular
-                  ? "border-primary shadow-xl shadow-primary/10"
-                  : "border-border hover:border-primary/30"
+                  ? "border-2 border-primary shadow-xl shadow-primary/10 hover:shadow-primary/20"
+                  : "border-2 border-border hover:border-primary/30"
               }`}
             >
               {/* Popular Badge */}
               {plan.popular && (
                 <div className="absolute -top-4 left-1/2 -translate-x-1/2">
-                  <Badge className="gradient-brand border-0 px-4 py-1 text-sm shadow-lg">
+                  <Badge className="gradient-brand border-0 px-4 py-1.5 text-sm shadow-lg shadow-primary/25">
                     <Sparkles className="w-4 h-4 mr-1" />
                     Mais Popular
                   </Badge>
                 </div>
               )}
 
-              {/* Trial Badge */}
-              {plan.trial && (
-                <Badge variant="secondary" className="mb-4 bg-success/10 text-success border-0">
-                  14 dias grátis
-                </Badge>
-              )}
-
-              {/* Plan Info */}
-              <div className="mb-6">
-                <h3 className="text-2xl font-bold mb-1">{plan.name}</h3>
-                <p className="text-muted-foreground">{plan.description}</p>
+              {/* Plan Header */}
+              <div className="flex items-start justify-between mb-6">
+                <div>
+                  {/* Trial Badge */}
+                  {plan.trial && (
+                    <Badge variant="outline" className="mb-3 bg-success/10 text-success border-success/30">
+                      14 dias grátis
+                    </Badge>
+                  )}
+                  <h3 className="text-2xl font-bold mb-1 flex items-center gap-2">
+                    {plan.name}
+                    {plan.popular && <Crown className="w-5 h-5 text-warning" />}
+                  </h3>
+                  <p className="text-muted-foreground">{plan.description}</p>
+                </div>
+                <div className={`p-3 rounded-xl ${plan.popular ? 'gradient-brand' : 'bg-primary/10'}`}>
+                  <plan.icon className={`w-6 h-6 ${plan.popular ? 'text-white' : 'text-primary'}`} />
+                </div>
               </div>
 
               {/* Price */}
               <div className="mb-8">
                 <div className="flex items-baseline gap-1">
                   <span className="text-sm text-muted-foreground">R$</span>
-                  <span className="text-5xl font-bold">{plan.price}</span>
+                  <span className="text-5xl font-bold tracking-tight">{plan.price}</span>
                   <span className="text-muted-foreground">{plan.period}</span>
                 </div>
+                {plan.trial && (
+                  <p className="text-sm text-success mt-1">Comece grátis, pague depois</p>
+                )}
               </div>
 
               {/* Features */}
@@ -110,7 +138,7 @@ const Pricing = () => {
                     <div
                       className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
                         plan.popular
-                          ? "gradient-brand"
+                          ? "gradient-brand shadow-sm"
                           : "bg-primary/10"
                       }`}
                     >
@@ -128,25 +156,43 @@ const Pricing = () => {
               {/* CTA */}
               <Button
                 size="lg"
-                className={`w-full text-lg py-6 ${
+                disabled={loading}
+                className={`w-full text-lg py-6 transition-all duration-300 ${
                   plan.popular
-                    ? "gradient-brand hover:opacity-90"
-                    : "bg-secondary hover:bg-secondary/80 text-foreground"
+                    ? "gradient-brand hover:opacity-90 shadow-lg shadow-primary/25 hover:shadow-primary/40"
+                    : "bg-secondary hover:bg-secondary/80 text-foreground hover:text-primary"
                 }`}
-                onClick={() => handleCTA(plan.name)}
+                onClick={() => handleCTA(plan.plan)}
               >
-                {plan.cta}
-                <ArrowRight className="ml-2 w-5 h-5" />
+                {loading ? (
+                  <span className="flex items-center gap-2">
+                    <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                    Processando...
+                  </span>
+                ) : (
+                  <>
+                    {plan.cta}
+                    <ArrowRight className="ml-2 w-5 h-5" />
+                  </>
+                )}
               </Button>
 
               {/* No Card Note */}
               {plan.trial && (
                 <p className="text-center text-sm text-muted-foreground mt-4">
-                  Sem cartão de crédito • Cancele quando quiser
+                  ✓ Sem cartão de crédito • ✓ Cancele quando quiser
                 </p>
               )}
             </div>
           ))}
+        </div>
+
+        {/* Money Back Guarantee */}
+        <div className="mt-12 text-center">
+          <p className="inline-flex items-center gap-2 text-sm text-muted-foreground bg-card px-4 py-2 rounded-full border border-border">
+            <span className="text-lg">🔒</span>
+            Satisfação garantida ou seu dinheiro de volta em até 7 dias
+          </p>
         </div>
       </div>
     </section>
