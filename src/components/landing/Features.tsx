@@ -1,121 +1,151 @@
 import {
-  Wallet,
-  PieChart,
-  Bell,
-  Calendar,
+  Mic,
+  Camera,
+  Brain,
   CreditCard,
-  TrendingUp,
-  Users,
   Target,
+  Bell,
+  TrendingUp,
+  Calendar,
+  ShoppingBag,
   Zap,
-  BarChart3,
   Shield,
-  Sparkles,
+  Users,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 const basicFeatures = [
   {
-    icon: Wallet,
-    title: "Registro automático",
-    description: "Registre gastos naturalmente por mensagem de texto",
+    icon: Mic,
+    title: "Áudio inteligente",
+    description: 'Manda áudio: "Gastei 50 no mercado" - A IA transcreve e registra tudo',
+    gradient: "from-[#6366F1] to-[#8B5CF6]",
   },
   {
-    icon: PieChart,
+    icon: Camera,
+    title: "Foto de cupom",
+    description: "Tira foto do recibo. A IA lê valor, descrição e forma de pagamento",
+    gradient: "from-[#3B82F6] to-[#06B6D4]",
+  },
+  {
+    icon: Brain,
+    title: "Categorização automática",
+    description: '"Uber" = Transporte. "Mercado" = Alimentação. Sem você fazer nada.',
+    gradient: "from-[#10B981] to-[#14B8A6]",
+  },
+  {
+    icon: TrendingUp,
     title: "Relatórios semanais",
-    description: "Resumos claros dos seus gastos toda semana",
-  },
-  {
-    icon: Target,
-    title: "Orçamentos simples",
-    description: "Defina limites por categoria e acompanhe",
+    description: "Toda segunda chega resumo: quanto gastou, onde economizou, tendências",
+    gradient: "from-[#F59E0B] to-[#EF4444]",
   },
   {
     icon: Bell,
-    title: "Alertas de gastos",
-    description: "Notificações quando se aproximar do limite",
+    title: "Alertas proativos",
+    description: 'Avisa quando tá gastando demais: "Você atingiu 80% do limite de lazer"',
+    gradient: "from-[#EC4899] to-[#8B5CF6]",
   },
   {
     icon: Calendar,
-    title: "Histórico completo",
-    description: "Consulte transações passadas facilmente",
-  },
-  {
-    icon: Shield,
-    title: "Dados seguros",
-    description: "Suas informações protegidas e privadas",
+    title: "Gastos recorrentes",
+    description: 'Registra uma vez: "Netflix 50 todo mês" - Finax lembra e cobra sempre',
+    gradient: "from-[#06B6D4] to-[#3B82F6]",
   },
 ];
 
 const proFeatures = [
   {
     icon: CreditCard,
-    title: "Cartões com limite",
-    description: "Controle múltiplos cartões e faturas",
+    title: "Múltiplos cartões",
+    description: "Controla Nubank, Itaú, Inter... Vê fatura, limite e quanto falta fechar",
+    gradient: "from-[#6366F1] to-[#8B5CF6]",
+    badge: "Pro",
+  },
+  {
+    icon: Target,
+    title: "Metas de economia",
+    description: '"Quero juntar 15mil pra viagem Europa" - Acompanha progresso e sugere economias',
+    gradient: "from-[#10B981] to-[#14B8A6]",
+    badge: "Pro",
+  },
+  {
+    icon: ShoppingBag,
+    title: "Consultor de compras",
+    description: '"Vale a pena comprar iPhone?" - IA analisa seu momento e recomenda',
+    gradient: "from-[#F59E0B] to-[#EF4444]",
+    badge: "Pro",
   },
   {
     icon: Zap,
-    title: "Parcelamentos",
-    description: "Rastreie todas as parcelas automaticamente",
-  },
-  {
-    icon: TrendingUp,
-    title: "Insights preditivos",
-    description: "Projeções e tendências do seu dinheiro",
-  },
-  {
-    icon: BarChart3,
-    title: "Comparativos",
-    description: "Compare períodos e identifique padrões",
+    title: "Contextos (viagens)",
+    description: '"Vou viajar pra Paris de 09 a 20" - Separa gastos da viagem automaticamente',
+    gradient: "from-[#EC4899] to-[#8B5CF6]",
+    badge: "Pro",
   },
   {
     icon: Users,
     title: "Gestão familiar",
-    description: "Compartilhe controle com sua família",
+    description: "Compartilha com cônjuge/filhos. Cada um manda gasto, tudo fica junto",
+    gradient: "from-[#3B82F6] to-[#06B6D4]",
+    badge: "Pro",
   },
   {
-    icon: Sparkles,
-    title: "Recomendações IA",
-    description: "Dicas personalizadas de economia",
+    icon: Shield,
+    title: "Insights preditivos",
+    description: '"No ritmo atual, você vai fechar o mês com R$ 300 negativos" + sugestões',
+    gradient: "from-[#6366F1] to-[#3B82F6]",
+    badge: "Pro",
   },
 ];
 
 const Features = () => {
   return (
-    <section id="funcionalidades" className="py-20 md:py-32">
-      <div className="container mx-auto px-4">
+    <section id="funcionalidades" className="relative py-24 md:py-32 overflow-hidden">
+      {/* Background */}
+      <div className="absolute inset-0 bg-gradient-to-b from-background to-slate-950" />
+
+      <div className="container mx-auto px-4 relative z-10">
         {/* Header */}
-        <div className="text-center max-w-3xl mx-auto mb-16 space-y-4">
-          <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold">
-            Tudo que você precisa para{" "}
-            <span className="text-gradient">evoluir</span>
+        <div className="text-center max-w-3xl mx-auto mb-20 space-y-6">
+          <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold leading-tight">
+            <span className="text-white">Tudo que você precisa</span>
+            <br />
+            <span className="bg-gradient-to-r from-[#6366F1] via-[#3B82F6] to-[#10B981] bg-clip-text text-transparent">
+              pra evoluir de verdade
+            </span>
           </h2>
-          <p className="text-lg text-muted-foreground">
-            Do básico ao avançado, conforme você evolui financeiramente.
+          <p className="text-xl text-slate-400">
+            Do básico ao avançado. Conforme você evolui financeiramente.
           </p>
         </div>
 
         {/* Basic Features */}
-        <div className="mb-16">
-          <div className="flex items-center gap-3 mb-8">
-            <h3 className="text-2xl font-bold">Plano Básico</h3>
-            <Badge variant="secondary" className="text-sm">
+        <div className="mb-24">
+          <div className="flex items-center justify-center gap-4 mb-12">
+            <h3 className="text-3xl font-bold text-white">Plano Básico</h3>
+            <Badge className="bg-[#6366F1]/20 text-[#6366F1] border border-[#6366F1]/30 px-4 py-1 text-sm font-semibold">
               Organização + Consciência
             </Badge>
           </div>
+
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {basicFeatures.map((feature) => (
+            {basicFeatures.map((feature, index) => (
               <div
                 key={feature.title}
-                className="group p-6 rounded-xl border border-border bg-card hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all duration-300"
+                className="group relative bg-slate-900/50 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-white/20 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl hover:shadow-[#6366F1]/10"
+                style={{ animationDelay: `${index * 100}ms` }}
               >
-                <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                  <feature.icon className="w-6 h-6 text-primary" />
+                {/* Gradient Glow */}
+                <div className={`absolute inset-0 rounded-2xl bg-gradient-to-br ${feature.gradient} opacity-0 group-hover:opacity-5 transition-opacity duration-300 blur-xl`} />
+
+                {/* Icon */}
+                <div className={`relative w-14 h-14 rounded-xl bg-gradient-to-br ${feature.gradient} flex items-center justify-center mb-4 shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                  <feature.icon className="w-7 h-7 text-white" />
                 </div>
-                <h4 className="font-semibold mb-2">{feature.title}</h4>
-                <p className="text-sm text-muted-foreground">
-                  {feature.description}
-                </p>
+
+                {/* Content */}
+                <h4 className="text-lg font-bold text-white mb-2">{feature.title}</h4>
+                <p className="text-sm text-slate-400 leading-relaxed">{feature.description}</p>
               </div>
             ))}
           </div>
@@ -123,36 +153,66 @@ const Features = () => {
 
         {/* Pro Features */}
         <div className="relative">
-          {/* Gradient Border */}
-          <div className="absolute inset-0 gradient-brand rounded-3xl opacity-10" />
+          {/* Gradient Border Container */}
+          <div className="absolute inset-0 bg-gradient-to-r from-[#6366F1] via-[#8B5CF6] to-[#3B82F6] rounded-3xl blur-xl opacity-20" />
           
-          <div className="relative bg-card rounded-3xl border border-primary/20 p-8 md:p-12">
-            <div className="flex flex-wrap items-center gap-3 mb-8">
-              <h3 className="text-2xl font-bold">Plano Pro</h3>
-              <Badge className="gradient-brand border-0 text-sm">
+          <div className="relative bg-slate-900/80 backdrop-blur-xl border-2 border-[#6366F1]/30 rounded-3xl p-8 md:p-12">
+            <div className="flex flex-wrap items-center justify-center gap-4 mb-12">
+              <h3 className="text-3xl font-bold text-white">Plano Pro</h3>
+              <Badge className="bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white border-0 px-4 py-1.5 text-sm font-bold shadow-lg">
                 Controle Profundo + Evolução
               </Badge>
-              <Badge variant="outline" className="text-sm border-accent text-accent">
-                Mais Popular
+              <Badge className="bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 px-4 py-1 text-sm font-semibold">
+                14 dias grátis
               </Badge>
             </div>
+
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {proFeatures.map((feature) => (
+              {proFeatures.map((feature, index) => (
                 <div
                   key={feature.title}
-                  className="group p-6 rounded-xl bg-secondary/30 hover:bg-secondary/50 transition-all duration-300"
+                  className="group relative bg-slate-800/50 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-[#6366F1]/50 hover:bg-slate-800/80 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl hover:shadow-[#6366F1]/20"
+                  style={{ animationDelay: `${index * 100}ms` }}
                 >
-                  <div className="w-12 h-12 rounded-xl gradient-brand flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-lg shadow-primary/20">
-                    <feature.icon className="w-6 h-6 text-white" />
+                  {/* Pro Badge */}
+                  <div className="absolute -top-3 -right-3">
+                    <Badge className="bg-gradient-to-r from-[#F59E0B] to-[#EF4444] text-white border-0 px-3 py-1 text-xs font-bold shadow-lg">
+                      {feature.badge}
+                    </Badge>
                   </div>
-                  <h4 className="font-semibold mb-2">{feature.title}</h4>
-                  <p className="text-sm text-muted-foreground">
-                    {feature.description}
-                  </p>
+
+                  {/* Gradient Glow */}
+                  <div className={`absolute inset-0 rounded-2xl bg-gradient-to-br ${feature.gradient} opacity-0 group-hover:opacity-10 transition-opacity duration-300 blur-xl`} />
+
+                  {/* Icon */}
+                  <div className={`relative w-14 h-14 rounded-xl bg-gradient-to-br ${feature.gradient} flex items-center justify-center mb-4 shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                    <feature.icon className="w-7 h-7 text-white" />
+                  </div>
+
+                  {/* Content */}
+                  <h4 className="text-lg font-bold text-white mb-2">{feature.title}</h4>
+                  <p className="text-sm text-slate-400 leading-relaxed">{feature.description}</p>
                 </div>
               ))}
             </div>
           </div>
+        </div>
+
+        {/* Bottom CTA */}
+        <div className="mt-16 text-center">
+          <p className="text-slate-400 mb-6">
+            Todas as funcionalidades Pro disponíveis no <span className="text-white font-semibold">trial gratuito de 14 dias</span>
+          </p>
+          <button
+            onClick={() => {
+              const element = document.getElementById("planos");
+              element?.scrollIntoView({ behavior: "smooth" });
+            }}
+            className="inline-flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] hover:opacity-90 rounded-full text-white font-semibold transition-all hover:scale-105 active:scale-95 shadow-xl shadow-[#6366F1]/50"
+          >
+            Começar Trial Grátis
+            <Zap className="w-5 h-5" />
+          </button>
         </div>
       </div>
     </section>
