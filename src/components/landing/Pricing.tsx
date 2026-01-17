@@ -1,8 +1,5 @@
-import { Check, Sparkles, ArrowRight, Crown, Zap } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { useStripeCheckout } from "@/hooks/useStripeCheckout";
-import { useNavigate } from "react-router-dom";
+import React, { useState } from 'react';
+import { Check, Sparkles, ArrowRight, Crown, Zap, Star, Users, TrendingUp } from 'lucide-react';
 
 const plans = [
   {
@@ -17,11 +14,12 @@ const plans = [
       "Orçamentos por categoria",
       "Alertas de gastos",
       "Histórico completo",
-      "Consulta de saldo",
+      "Consulta de saldo instantânea",
     ],
     cta: "Começar com Básico",
     popular: false,
-    plan: "basico" as const,
+    plan: "basico",
+    users: "200+ usuários"
   },
   {
     name: "Pro",
@@ -34,133 +32,156 @@ const plans = [
       "Controle de cartões com limite",
       "Parcelamentos rastreados",
       "Insights preditivos com IA",
+      "Consultor de compras inteligente",
+      "Contextos temporários (viagens)",
+      "Metas de economia avançadas",
+      "Gestão familiar compartilhada",
       "Projeções financeiras",
-      "Gestão familiar",
-      "Comparativos de períodos",
-      "Recomendações de economia",
+      "Recomendações personalizadas",
     ],
-    cta: "Começar Trial Pro",
+    cta: "Começar Trial Pro Grátis",
     popular: true,
     trial: true,
-    plan: "pro" as const,
+    plan: "pro",
+    users: "300+ usuários"
   },
 ];
 
 const Pricing = () => {
-  const { createCheckout, loading } = useStripeCheckout();
-  const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
 
-  const handleCTA = async (plan: 'basico' | 'pro') => {
-    // For now, redirect to auth first, then checkout will happen from dashboard
-    // In production, you might want to create checkout session directly
-    navigate('/auth', { state: { plan } });
+  const handleCTA = (plan) => {
+    setLoading(true);
+    // Simula navegação
+    setTimeout(() => {
+      window.location.href = `/auth?plan=${plan}`;
+    }, 500);
   };
 
   return (
-    <section id="planos" className="py-20 md:py-32 relative overflow-hidden">
-      {/* Background */}
-      <div className="absolute inset-0 bg-gradient-to-b from-secondary/30 via-background to-secondary/30" />
-      <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl" />
-      <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-accent/10 rounded-full blur-3xl" />
+    <section id="planos" className="py-20 md:py-32 relative overflow-hidden bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900">
+      {/* Animated Background */}
+      <div className="absolute inset-0 overflow-hidden">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl" />
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-blue-600/20 rounded-full blur-3xl" />
+      </div>
+
+      {/* Grid Pattern */}
+      <div className="absolute inset-0 bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:64px_64px]" />
       
-      <div className="container mx-auto px-4 relative">
+      <div className="container mx-auto px-4 relative z-10">
         {/* Header */}
         <div className="text-center max-w-3xl mx-auto mb-16 space-y-4">
-          <Badge variant="secondary" className="mb-4 bg-success/10 text-success border-success/20">
-            14 dias grátis no plano Pro
-          </Badge>
-          <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 backdrop-blur-sm mb-4">
+            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <span className="text-sm font-medium text-emerald-300">
+              14 dias grátis no plano Pro • Sem cartão de crédito
+            </span>
+          </div>
+
+          <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-white">
             Planos que cabem no seu{" "}
-            <span className="text-gradient">bolso</span>
+            <span className="bg-gradient-to-r from-emerald-400 to-green-400 bg-clip-text text-transparent">
+              bolso
+            </span>
           </h2>
-          <p className="text-lg text-muted-foreground">
-            O Básico organiza sua vida financeira. O Pro te ajuda a evoluir de verdade.
+          <p className="text-lg text-slate-300">
+            O Básico organiza sua vida financeira. O Pro te ajuda a{" "}
+            <span className="text-white font-semibold">evoluir de verdade</span>.
           </p>
         </div>
 
         {/* Plans Grid */}
-        <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-          {plans.map((plan) => (
+        <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
+          {plans.map((plan, index) => (
             <div
               key={plan.name}
-              className={`relative p-8 rounded-3xl bg-card transition-all duration-300 hover:shadow-2xl ${
+              className={`relative p-8 rounded-3xl transition-all duration-300 ${
                 plan.popular
-                  ? "border-2 border-primary shadow-xl shadow-primary/10 hover:shadow-primary/20"
-                  : "border-2 border-border hover:border-primary/30"
-              }`}
+                  ? "bg-gradient-to-b from-indigo-950/50 to-indigo-900/30 border-2 border-indigo-500/50 shadow-2xl shadow-indigo-500/20 hover:shadow-indigo-500/30 hover:border-indigo-400/60"
+                  : "bg-white/5 border-2 border-white/10 hover:bg-white/10 hover:border-indigo-500/30 hover:shadow-xl hover:shadow-indigo-500/10"
+              } backdrop-blur-sm hover:-translate-y-1`}
+              style={{ animationDelay: `${index * 100}ms` }}
             >
               {/* Popular Badge */}
               {plan.popular && (
                 <div className="absolute -top-4 left-1/2 -translate-x-1/2">
-                  <Badge className="gradient-brand border-0 px-4 py-1.5 text-sm shadow-lg shadow-primary/25">
-                    <Sparkles className="w-4 h-4 mr-1" />
-                    Mais Popular
-                  </Badge>
+                  <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-indigo-500 to-blue-500 border-0 shadow-lg shadow-indigo-500/50">
+                    <Sparkles className="w-4 h-4 text-white" />
+                    <span className="text-sm font-bold text-white">Mais Popular</span>
+                  </div>
                 </div>
               )}
 
               {/* Plan Header */}
               <div className="flex items-start justify-between mb-6">
-                <div>
+                <div className="flex-1">
                   {/* Trial Badge */}
                   {plan.trial && (
-                    <Badge variant="outline" className="mb-3 bg-success/10 text-success border-success/30">
-                      14 dias grátis
-                    </Badge>
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 mb-3">
+                      <Star className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="text-xs font-semibold text-emerald-300">14 dias grátis</span>
+                    </div>
                   )}
-                  <h3 className="text-2xl font-bold mb-1 flex items-center gap-2">
+                  <h3 className="text-2xl font-bold mb-1 flex items-center gap-2 text-white">
                     {plan.name}
-                    {plan.popular && <Crown className="w-5 h-5 text-warning" />}
+                    {plan.popular && <Crown className="w-5 h-5 text-amber-400" />}
                   </h3>
-                  <p className="text-muted-foreground">{plan.description}</p>
+                  <p className="text-slate-400 mb-2">{plan.description}</p>
+                  <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                    <Users className="w-3.5 h-3.5" />
+                    <span>{plan.users}</span>
+                  </div>
                 </div>
-                <div className={`p-3 rounded-xl ${plan.popular ? 'gradient-brand' : 'bg-primary/10'}`}>
-                  <plan.icon className={`w-6 h-6 ${plan.popular ? 'text-white' : 'text-primary'}`} />
+                <div className={`p-3 rounded-xl ${plan.popular ? 'bg-gradient-to-br from-indigo-500 to-blue-500 shadow-lg shadow-indigo-500/30' : 'bg-indigo-500/10'}`}>
+                  <plan.icon className={`w-6 h-6 ${plan.popular ? 'text-white' : 'text-indigo-400'}`} />
                 </div>
               </div>
 
               {/* Price */}
-              <div className="mb-8">
+              <div className="mb-8 pb-8 border-b border-white/10">
                 <div className="flex items-baseline gap-1">
-                  <span className="text-sm text-muted-foreground">R$</span>
-                  <span className="text-5xl font-bold tracking-tight">{plan.price}</span>
-                  <span className="text-muted-foreground">{plan.period}</span>
+                  <span className="text-sm text-slate-400 font-medium">R$</span>
+                  <span className="text-5xl font-bold tracking-tight text-white">{plan.price}</span>
+                  <span className="text-slate-400 font-medium">{plan.period}</span>
                 </div>
                 {plan.trial && (
-                  <p className="text-sm text-success mt-1">Comece grátis, pague depois</p>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <TrendingUp className="w-4 h-4 text-emerald-400" />
+                    <p className="text-sm text-emerald-400 font-medium">Comece grátis, pague depois</p>
+                  </div>
                 )}
               </div>
 
               {/* Features */}
-              <ul className="space-y-4 mb-8">
-                {plan.features.map((feature) => (
-                  <li key={feature} className="flex items-start gap-3">
+              <ul className="space-y-3.5 mb-8">
+                {plan.features.map((feature, idx) => (
+                  <li key={idx} className="flex items-start gap-3">
                     <div
                       className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
                         plan.popular
-                          ? "gradient-brand shadow-sm"
-                          : "bg-primary/10"
+                          ? "bg-gradient-to-br from-indigo-500 to-blue-500 shadow-sm"
+                          : "bg-indigo-500/20"
                       }`}
                     >
                       <Check
                         className={`w-3 h-3 ${
-                          plan.popular ? "text-white" : "text-primary"
+                          plan.popular ? "text-white" : "text-indigo-400"
                         }`}
                       />
                     </div>
-                    <span className="text-foreground/80">{feature}</span>
+                    <span className="text-slate-300 text-sm leading-relaxed">{feature}</span>
                   </li>
                 ))}
               </ul>
 
               {/* CTA */}
-              <Button
-                size="lg"
+              <button
                 disabled={loading}
-                className={`w-full text-lg py-6 transition-all duration-300 ${
+                className={`w-full text-base font-semibold py-4 px-6 rounded-xl transition-all duration-300 flex items-center justify-center gap-2 ${
                   plan.popular
-                    ? "gradient-brand hover:opacity-90 shadow-lg shadow-primary/25 hover:shadow-primary/40"
-                    : "bg-secondary hover:bg-secondary/80 text-foreground hover:text-primary"
+                    ? "bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 hover:scale-[1.02]"
+                    : "bg-white/10 hover:bg-white/20 text-white border border-white/20 hover:border-indigo-500/50"
                 }`}
                 onClick={() => handleCTA(plan.plan)}
               >
@@ -172,15 +193,22 @@ const Pricing = () => {
                 ) : (
                   <>
                     {plan.cta}
-                    <ArrowRight className="ml-2 w-5 h-5" />
+                    <ArrowRight className="w-5 h-5" />
                   </>
                 )}
-              </Button>
+              </button>
 
               {/* No Card Note */}
               {plan.trial && (
-                <p className="text-center text-sm text-muted-foreground mt-4">
-                  ✓ Sem cartão de crédito • ✓ Cancele quando quiser
+                <p className="text-center text-xs text-slate-500 mt-4 flex items-center justify-center gap-4">
+                  <span className="flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    Sem cartão
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    Cancele quando quiser
+                  </span>
                 </p>
               )}
             </div>
@@ -188,11 +216,29 @@ const Pricing = () => {
         </div>
 
         {/* Money Back Guarantee */}
-        <div className="mt-12 text-center">
-          <p className="inline-flex items-center gap-2 text-sm text-muted-foreground bg-card px-4 py-2 rounded-full border border-border">
-            <span className="text-lg">🔒</span>
-            Satisfação garantida ou seu dinheiro de volta em até 7 dias
-          </p>
+        <div className="mt-16 text-center">
+          <div className="inline-flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 border border-white/10 backdrop-blur-sm">
+            <span className="text-2xl">🔒</span>
+            <span className="text-sm text-slate-300">
+              <span className="font-semibold text-white">Satisfação garantida</span> ou seu dinheiro de volta em até 7 dias
+            </span>
+          </div>
+        </div>
+
+        {/* Social Proof */}
+        <div className="mt-12 flex flex-wrap items-center justify-center gap-8">
+          {[
+            { value: "500+", label: "Usuários ativos" },
+            { value: "4.9", label: "Avaliação média" },
+            { value: "98%", label: "Satisfação" }
+          ].map((stat) => (
+            <div key={stat.label} className="text-center">
+              <div className="text-2xl font-bold bg-gradient-to-r from-indigo-400 to-blue-400 bg-clip-text text-transparent mb-1">
+                {stat.value}
+              </div>
+              <div className="text-xs text-slate-500">{stat.label}</div>
+            </div>
+          ))}
         </div>
       </div>
     </section>
