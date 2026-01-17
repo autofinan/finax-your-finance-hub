@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, Sparkles, CreditCard, CheckCircle, Star } from "lucide-react";
+import { ArrowRight, Sparkles, CheckCircle, TrendingUp } from "lucide-react";
 import WhatsAppMockup from "./WhatsAppMockup";
 
 const Hero = () => {
@@ -12,123 +12,133 @@ const Hero = () => {
   };
 
   return (
-    <section className="relative min-h-screen flex items-center pt-20 pb-16 overflow-hidden">
-      {/* Background Elements */}
-      <div className="absolute inset-0 -z-10">
+    <section className="relative min-h-screen flex items-center pt-24 pb-16 overflow-hidden bg-gradient-to-b from-[#0F172A] via-[#1E293B] to-background">
+      {/* Animated Background */}
+      <div className="absolute inset-0 overflow-hidden">
         {/* Gradient Orbs */}
-        <div className="absolute top-20 left-10 w-72 h-72 bg-primary/20 rounded-full blur-3xl animate-pulse-slow" />
-        <div className="absolute bottom-20 right-10 w-96 h-96 bg-accent/20 rounded-full blur-3xl animate-pulse-slow" style={{ animationDelay: "1.5s" }} />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-br from-primary/10 to-accent/10 rounded-full blur-3xl" />
+        <div className="absolute top-20 -left-40 w-96 h-96 bg-[#6366F1]/30 rounded-full blur-3xl animate-pulse" style={{ animationDuration: "4s" }} />
+        <div className="absolute top-40 right-0 w-[500px] h-[500px] bg-[#3B82F6]/20 rounded-full blur-3xl animate-pulse" style={{ animationDuration: "6s", animationDelay: "1s" }} />
+        <div className="absolute bottom-0 left-1/3 w-96 h-96 bg-[#10B981]/20 rounded-full blur-3xl animate-pulse" style={{ animationDuration: "5s", animationDelay: "2s" }} />
         
-        {/* Decorative Grid */}
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,hsl(var(--primary)/0.03)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--primary)/0.03)_1px,transparent_1px)] bg-[size:4rem_4rem]" />
-        
-        {/* Floating Icons */}
-        <div className="absolute top-32 right-1/4 text-success/30 animate-float hidden lg:block">
-          <CheckCircle size={32} />
-        </div>
-        <div className="absolute bottom-40 left-1/4 text-warning/30 animate-float hidden lg:block" style={{ animationDelay: "1s" }}>
-          <Star size={28} fill="currentColor" />
-        </div>
+        {/* Grid Pattern */}
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#6366F1_1px,transparent_1px),linear-gradient(to_bottom,#6366F1_1px,transparent_1px)] bg-[size:4rem_4rem] opacity-[0.03]" />
       </div>
 
-      <div className="container mx-auto px-4">
-        <div className="grid lg:grid-cols-2 gap-12 lg:gap-8 items-center">
+      <div className="container mx-auto px-4 relative z-10">
+        <div className="grid lg:grid-cols-2 gap-12 items-center">
+          
           {/* Left Content */}
-          <div className="text-center lg:text-left space-y-8 animate-fade-in">
-            {/* Badge */}
-            <Badge variant="secondary" className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-gradient-to-r from-primary/10 to-accent/10 text-primary border border-primary/20 shadow-sm">
-              <Sparkles className="w-4 h-4 text-accent" />
-              Trial Pro de 14 dias grátis
-            </Badge>
+          <div className="text-center lg:text-left space-y-8">
+            
+            {/* Badge with glow */}
+            <div className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-gradient-to-r from-[#6366F1]/20 to-[#3B82F6]/20 border border-[#6366F1]/30 backdrop-blur-sm shadow-lg shadow-[#6366F1]/20">
+              <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
+              <span className="text-sm font-medium text-white">
+                500+ usuários economizando 15% ao mês
+              </span>
+            </div>
 
-            {/* Title */}
-            <div className="space-y-4">
-              <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.1]">
-                <span className="text-gradient">Converse.</span>{" "}
-                <span className="text-gradient-reverse">Organize.</span>{" "}
-                <span className="relative">
-                  Evolua.
-                  <svg className="absolute -bottom-2 left-0 w-full" height="8" viewBox="0 0 100 8" preserveAspectRatio="none">
-                    <path d="M0 7 Q 50 0 100 7" stroke="url(#gradient)" strokeWidth="3" fill="none" strokeLinecap="round"/>
-                    <defs>
-                      <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" stopColor="hsl(217 91% 60%)" />
-                        <stop offset="100%" stopColor="hsl(258 90% 66%)" />
-                      </linearGradient>
-                    </defs>
-                  </svg>
+            {/* Main Headline */}
+            <div className="space-y-6">
+              <h1 className="text-5xl md:text-6xl lg:text-7xl font-bold leading-tight">
+                <span className="block text-white">
+                  Pare de perder
+                </span>
+                <span className="block bg-gradient-to-r from-[#6366F1] via-[#3B82F6] to-[#10B981] bg-clip-text text-transparent">
+                  dinheiro sem saber
+                </span>
+                <span className="block text-white">
+                  onde.
                 </span>
               </h1>
-              <p className="text-lg md:text-xl text-muted-foreground max-w-xl mx-auto lg:mx-0 leading-relaxed">
-                O Finax transforma conversas em controle financeiro real — com IA que te ajuda a sair das dívidas, organizar seus gastos e evoluir financeiramente.
+              
+              <p className="text-xl md:text-2xl text-slate-300 max-w-2xl leading-relaxed">
+                Sua IA financeira está no <span className="text-[#10B981] font-semibold">WhatsApp</span>.
+                <br />
+                Manda <span className="text-[#6366F1]">áudio</span>, <span className="text-[#3B82F6]">foto</span> ou <span className="text-white">texto</span>.
+                <br />
+                A Finax organiza <span className="font-bold text-white">TUDO</span> automaticamente.
               </p>
             </div>
 
+            {/* Value Props */}
+            <div className="flex flex-col sm:flex-row gap-6 justify-center lg:justify-start">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-[#10B981]/20 flex items-center justify-center border border-[#10B981]/30">
+                  <CheckCircle className="w-6 h-6 text-[#10B981]" />
+                </div>
+                <div className="text-left">
+                  <div className="text-2xl font-bold text-white">15%</div>
+                  <div className="text-sm text-slate-400">economia média</div>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-[#6366F1]/20 flex items-center justify-center border border-[#6366F1]/30">
+                  <TrendingUp className="w-6 h-6 text-[#6366F1]" />
+                </div>
+                <div className="text-left">
+                  <div className="text-2xl font-bold text-white">2.3x</div>
+                  <div className="text-sm text-slate-400">mais controle</div>
+                </div>
+              </div>
+            </div>
+
             {/* CTAs */}
-            <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start pt-4">
               <Button
                 size="lg"
-                className="gradient-brand hover:opacity-90 transition-all text-lg px-8 py-6 shadow-xl shadow-primary/30 hover:shadow-primary/40 hover:scale-[1.02] active:scale-[0.98]"
+                className="text-lg px-8 py-7 bg-gradient-to-r from-[#6366F1] to-[#3B82F6] hover:opacity-90 transition-all shadow-2xl shadow-[#6366F1]/50 hover:shadow-[#6366F1]/70 hover:scale-105 active:scale-95 border-0 text-white font-semibold"
                 onClick={() => scrollToSection("planos")}
               >
-                Comece seu Trial Grátis
-                <ArrowRight className="ml-2 w-5 h-5" />
+                <Sparkles className="w-5 h-5 mr-2" />
+                Começar Trial Grátis
+                <ArrowRight className="w-5 h-5 ml-2" />
               </Button>
+              
               <Button
                 variant="outline"
                 size="lg"
-                className="text-lg px-8 py-6 border-2 border-border hover:border-primary/50 hover:bg-primary/5 transition-all"
+                className="text-lg px-8 py-7 border-2 border-white/20 hover:border-[#6366F1] hover:bg-[#6366F1]/10 transition-all backdrop-blur-sm text-white"
                 onClick={() => scrollToSection("como-funciona")}
               >
                 Ver como funciona
               </Button>
             </div>
 
-            {/* Trust Badges */}
-            <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 text-sm">
-              <div className="flex items-center gap-2 bg-card/80 backdrop-blur px-4 py-2 rounded-full border border-border shadow-sm">
-                <CreditCard className="w-4 h-4 text-primary" />
-                <span className="text-muted-foreground">Sem cartão de crédito</span>
+            {/* Trust Indicators */}
+            <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 pt-6">
+              <div className="flex items-center gap-2 text-slate-300 text-sm">
+                <CheckCircle className="w-5 h-5 text-[#10B981]" />
+                Sem cartão de crédito
               </div>
-              <div className="flex items-center gap-2 bg-card/80 backdrop-blur px-4 py-2 rounded-full border border-border shadow-sm">
-                <CheckCircle className="w-4 h-4 text-success" />
-                <span className="text-muted-foreground">Cancele quando quiser</span>
+              <div className="w-1 h-1 rounded-full bg-slate-600" />
+              <div className="flex items-center gap-2 text-slate-300 text-sm">
+                <CheckCircle className="w-5 h-5 text-[#10B981]" />
+                Cancele quando quiser
               </div>
-            </div>
-
-            {/* Social Proof */}
-            <div className="flex items-center justify-center lg:justify-start gap-6 pt-4">
-              <div className="flex -space-x-3">
-                {["M", "J", "A", "C"].map((letter, i) => (
-                  <div
-                    key={letter}
-                    className="w-10 h-10 rounded-full gradient-brand flex items-center justify-center text-white font-semibold text-sm border-2 border-background shadow-lg"
-                    style={{ zIndex: 4 - i }}
-                  >
-                    {letter}
-                  </div>
-                ))}
-              </div>
-              <div className="text-left">
-                <div className="flex items-center gap-1">
-                  {[...Array(5)].map((_, i) => (
-                    <Star key={i} className="w-4 h-4 fill-warning text-warning" />
-                  ))}
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  <span className="font-semibold text-foreground">500+</span> usuários ativos
-                </p>
+              <div className="w-1 h-1 rounded-full bg-slate-600" />
+              <div className="flex items-center gap-2 text-slate-300 text-sm">
+                <CheckCircle className="w-5 h-5 text-[#10B981]" />
+                14 dias grátis
               </div>
             </div>
           </div>
 
           {/* Right Content - WhatsApp Mockup */}
-          <div className="flex justify-center lg:justify-end animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            <WhatsAppMockup />
+          <div className="relative flex justify-center lg:justify-end">
+            {/* Glow effect behind mockup */}
+            <div className="absolute inset-0 bg-gradient-to-r from-[#6366F1]/30 to-[#3B82F6]/30 blur-3xl opacity-50" />
+            
+            <div className="relative">
+              <WhatsAppMockup />
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Bottom gradient fade */}
+      <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-background to-transparent" />
     </section>
   );
 };
