@@ -1,5 +1,9 @@
 import React, { useState } from 'react';
-import { Check, Sparkles, ArrowRight, Crown, Zap, Star, Users, TrendingUp } from 'lucide-react';
+import { Check, Sparkles, ArrowRight, Crown, Zap, Star, Users, TrendingUp, MessageCircle } from 'lucide-react';
+import { CheckoutModal } from '@/components/checkout/CheckoutModal';
+
+const WHATSAPP_NUMBER = '556581034588';
+const WHATSAPP_LINK = `https://wa.me/${WHATSAPP_NUMBER}?text=Oi`;
 
 const plans = [
   {
@@ -16,9 +20,9 @@ const plans = [
       "Histórico completo",
       "Consulta de saldo instantânea",
     ],
-    cta: "Começar com Básico",
+    cta: "Assinar Básico",
     popular: false,
-    plan: "basico",
+    plan: "basico" as const,
     users: "200+ usuários"
   },
   {
@@ -42,20 +46,24 @@ const plans = [
     cta: "Começar Trial Pro Grátis",
     popular: true,
     trial: true,
-    plan: "pro",
+    plan: "pro" as const,
     users: "300+ usuários"
   },
 ];
 
 const Pricing = () => {
-  const [loading, setLoading] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<'basico' | 'pro'>('pro');
 
-  const handleCTA = (plan) => {
-    setLoading(true);
-    // Simula navegação
-    setTimeout(() => {
-      window.location.href = `/auth?plan=${plan}`;
-    }, 500);
+  const handleCTA = (plan: typeof plans[0]) => {
+    if (plan.trial) {
+      // Trial grátis → WhatsApp
+      window.open(WHATSAPP_LINK, '_blank');
+    } else {
+      // Plano pago → Checkout
+      setSelectedPlan(plan.plan);
+      setCheckoutOpen(true);
+    }
   };
 
   return (
@@ -177,19 +185,18 @@ const Pricing = () => {
 
               {/* CTA */}
               <button
-                disabled={loading}
                 className={`w-full text-base font-semibold py-4 px-6 rounded-xl transition-all duration-300 flex items-center justify-center gap-2 ${
                   plan.popular
                     ? "bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 hover:scale-[1.02]"
                     : "bg-white/10 hover:bg-white/20 text-white border border-white/20 hover:border-indigo-500/50"
                 }`}
-                onClick={() => handleCTA(plan.plan)}
+                onClick={() => handleCTA(plan)}
               >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                    Processando...
-                  </span>
+                {plan.trial ? (
+                  <>
+                    <MessageCircle className="w-5 h-5" />
+                    {plan.cta}
+                  </>
                 ) : (
                   <>
                     {plan.cta}
@@ -241,6 +248,13 @@ const Pricing = () => {
           ))}
         </div>
       </div>
+
+      {/* Checkout Modal */}
+      <CheckoutModal
+        open={checkoutOpen}
+        onOpenChange={setCheckoutOpen}
+        plan={selectedPlan}
+      />
     </section>
   );
 };

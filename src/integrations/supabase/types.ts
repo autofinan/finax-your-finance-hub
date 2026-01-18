@@ -279,6 +279,70 @@ export type Database = {
           },
         ]
       }
+      cancelamentos: {
+        Row: {
+          created_at: string
+          data_cancelamento: string
+          detalhes: string | null
+          id: string
+          meses_assinante: number | null
+          motivo: string | null
+          ofertas_recusadas: string[] | null
+          phone_number: string
+          plano_anterior: string | null
+          stripe_subscription_id: string | null
+          usuario_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          data_cancelamento?: string
+          detalhes?: string | null
+          id?: string
+          meses_assinante?: number | null
+          motivo?: string | null
+          ofertas_recusadas?: string[] | null
+          phone_number: string
+          plano_anterior?: string | null
+          stripe_subscription_id?: string | null
+          usuario_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          data_cancelamento?: string
+          detalhes?: string | null
+          id?: string
+          meses_assinante?: number | null
+          motivo?: string | null
+          ofertas_recusadas?: string[] | null
+          phone_number?: string
+          plano_anterior?: string | null
+          stripe_subscription_id?: string | null
+          usuario_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cancelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cancelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "cancelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       cartoes_credito: {
         Row: {
           ativo: boolean | null
@@ -1300,6 +1364,39 @@ export type Database = {
           },
         ]
       }
+      otp_codes: {
+        Row: {
+          attempts: number
+          code: string
+          created_at: string
+          expires_at: string
+          id: string
+          phone_e164: string
+          phone_number: string
+          used: boolean
+        }
+        Insert: {
+          attempts?: number
+          code: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          phone_e164: string
+          phone_number: string
+          used?: boolean
+        }
+        Update: {
+          attempts?: number
+          code?: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          phone_e164?: string
+          phone_number?: string
+          used?: boolean
+        }
+        Relationships: []
+      }
       parcelamentos: {
         Row: {
           ativa: boolean | null
@@ -2144,6 +2241,70 @@ export type Database = {
           },
         ]
       }
+      user_sessions: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+          ip_address: string | null
+          last_used_at: string
+          phone_e164: string
+          refresh_token: string | null
+          revoked: boolean
+          token: string
+          user_agent: string | null
+          usuario_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          ip_address?: string | null
+          last_used_at?: string
+          phone_e164: string
+          refresh_token?: string | null
+          revoked?: boolean
+          token: string
+          user_agent?: string | null
+          usuario_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          ip_address?: string | null
+          last_used_at?: string
+          phone_e164?: string
+          refresh_token?: string | null
+          revoked?: boolean
+          token?: string
+          user_agent?: string | null
+          usuario_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_sessions_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_sessions_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "user_sessions_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       usuarios: {
         Row: {
           ativo: boolean | null
@@ -2153,6 +2314,7 @@ export type Database = {
           nome: string | null
           onboarding_status: string | null
           onboarding_step: string | null
+          phone_e164: string | null
           phone_number: string
           plano: string | null
           relatorio_mensal_pendente: boolean | null
@@ -2173,6 +2335,7 @@ export type Database = {
           nome?: string | null
           onboarding_status?: string | null
           onboarding_step?: string | null
+          phone_e164?: string | null
           phone_number: string
           plano?: string | null
           relatorio_mensal_pendente?: boolean | null
@@ -2193,6 +2356,7 @@ export type Database = {
           nome?: string | null
           onboarding_status?: string | null
           onboarding_step?: string | null
+          phone_e164?: string | null
           phone_number?: string
           plano?: string | null
           relatorio_mensal_pendente?: boolean | null
@@ -2916,6 +3080,7 @@ export type Database = {
         Args: { p_usuario: string }
         Returns: undefined
       }
+      cleanup_expired_sessions: { Args: never; Returns: undefined }
       feature_permitida: {
         Args: { p_feature: string; p_usuario_id: string }
         Returns: boolean
@@ -2989,6 +3154,7 @@ export type Database = {
       get_alert_stats: { Args: never; Returns: Json }
       is_service_role: { Args: never; Returns: boolean }
       limpar_conversas_expiradas: { Args: never; Returns: undefined }
+      normalize_phone_e164: { Args: { phone: string }; Returns: string }
       rpc_criar_parcelamento: {
         Args: {
           p_categoria?: string
