@@ -8,34 +8,25 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const VONAGE_API_KEY = Deno.env.get("VONAGE_API_KEY");
-const VONAGE_API_SECRET = Deno.env.get("VONAGE_API_SECRET");
-const VONAGE_WHATSAPP_NUMBER = Deno.env.get("VONAGE_WHATSAPP_NUMBER");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // Normalizar telefone para formato E.164
 function normalizePhoneE164(phone: string): string {
-  // Remove tudo que não é dígito
   const digits = phone.replace(/\D/g, "");
   
-  // Se já começa com 55 e tem 12-13 dígitos, assume que está correto
   if (digits.startsWith("55") && digits.length >= 12 && digits.length <= 13) {
     return "+" + digits;
   }
   
-  // Se tem 10-11 dígitos (DDD + número), adiciona +55
   if (digits.length >= 10 && digits.length <= 11) {
     return "+55" + digits;
   }
   
-  // Se tem 8-9 dígitos (só número), não conseguimos saber o DDD
-  // Retorna com +55 mas pode estar incompleto
   if (digits.length >= 8 && digits.length <= 9) {
     return "+55" + digits;
   }
   
-  // Fallback: retorna com + se não tem
   return digits.startsWith("+") ? digits : "+" + digits;
 }
 
@@ -44,38 +35,40 @@ function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Enviar mensagem via Vonage WhatsApp
-async function sendWhatsAppOTP(phone: string, code: string): Promise<boolean> {
-  if (!VONAGE_API_KEY || !VONAGE_API_SECRET || !VONAGE_WHATSAPP_NUMBER) {
-    console.error("❌ [OTP] Vonage credentials not configured");
-    return false;
-  }
+// Verificar se usuário mandou mensagem nas últimas 24h (janela WhatsApp)
+async function checkWhatsAppWindow(userId: string): Promise<boolean> {
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  
+  const { data: recentMessages } = await supabase
+    .from("eventos_brutos")
+    .select("id")
+    .eq("user_id", userId)
+    .gte("created_at", twentyFourHoursAgo)
+    .limit(1);
 
+  return !!(recentMessages && recentMessages.length > 0);
+}
+
+// Enviar OTP via fila de mensagens do Finax (usando messages_outbox)
+async function sendOTPViaFinax(userId: string, phoneE164: string, code: string): Promise<boolean> {
   const message = `🔐 *Código de acesso Finax*\n\nSeu código é: *${code}*\n\n⏰ Válido por 5 minutos.\n\n_Não compartilhe este código com ninguém._`;
 
   try {
-    const response = await fetch("https://messages-sandbox.nexmo.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Basic " + btoa(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`),
-      },
-      body: JSON.stringify({
-        message_type: "text",
-        text: message,
-        to: phone.replace("+", ""),
-        from: VONAGE_WHATSAPP_NUMBER,
-        channel: "whatsapp",
-      }),
-    });
+    const { error } = await supabase
+      .from("messages_outbox")
+      .insert({
+        user_id: userId,
+        phone: phoneE164.replace("+", ""),
+        message: message,
+        status: "pending",
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      console.error(`❌ [OTP] Vonage error:`, error);
+    if (error) {
+      console.error(`❌ [OTP] Erro ao inserir na fila:`, error);
       return false;
     }
 
-    console.log(`✅ [OTP] Código enviado para ${phone}`);
+    console.log(`✅ [OTP] Código inserido na fila para ${phoneE164}`);
     return true;
   } catch (error) {
     console.error(`❌ [OTP] Erro ao enviar:`, error);
@@ -99,37 +92,29 @@ serve(async (req) => {
       );
     }
 
-    // Normalizar telefone - extract digits first for consistent normalization
+    // Normalizar telefone
     const phoneDigits = phone.replace(/\D/g, "");
     const phoneE164 = normalizePhoneE164(phone);
-    // Also get digits-only for rate limit check (last 9 digits)
     const phoneLast9 = phoneDigits.slice(-9);
 
     console.log(`📱 [OTP] Solicitação para: ${phone} → ${phoneE164}`);
 
-    // SECURITY: Check rate limit FIRST using multiple formats to prevent bypass
-    // Check both the normalized E.164 and the last 9 digits
+    // Check rate limit
     const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     
-    const { data: recentOTPs, error: rateError } = await supabase
+    const { data: recentOTPs } = await supabase
       .from("otp_codes")
       .select("id, created_at")
       .or(`phone_e164.eq.${phoneE164},phone_number.ilike.%${phoneLast9}%`)
       .gte("created_at", oneDayAgo)
       .order("created_at", { ascending: false });
 
-    if (rateError) {
-      console.error(`❌ [OTP] Rate limit check error:`, rateError);
-    }
-
-    // Check per-minute rate limit
     const recentInLastMinute = recentOTPs?.filter(otp => 
       new Date(otp.created_at) > new Date(oneMinuteAgo)
     ) || [];
     
     if (recentInLastMinute.length > 0) {
-      // SECURITY: Return same message format as success to prevent timing attacks
       console.log(`⚠️ [OTP] Rate limited (minute): ${phone}`);
       return new Response(
         JSON.stringify({ 
@@ -141,7 +126,6 @@ serve(async (req) => {
       );
     }
 
-    // Check daily rate limit (max 10 per day)
     if (recentOTPs && recentOTPs.length >= 10) {
       console.log(`⚠️ [OTP] Rate limited (daily): ${phone}`);
       return new Response(
@@ -169,11 +153,9 @@ serve(async (req) => {
       );
     }
 
-    // SECURITY FIX: Don't reveal if user exists or not
-    // Return same successful response regardless of user existence
+    // Usuário não existe - retorna mensagem genérica
     if (!usuario) {
-      console.log(`⚠️ [OTP] Non-existent user attempted: ${phone}`);
-      // Return success to prevent user enumeration attacks
+      console.log(`⚠️ [OTP] Usuário não encontrado: ${phone}`);
       return new Response(
         JSON.stringify({ 
           success: true,
@@ -184,9 +166,27 @@ serve(async (req) => {
       );
     }
 
-    // User exists - generate and send code
+    // User exists - verificar janela de 24h
+    const hasRecentMessage = await checkWhatsAppWindow(usuario.id);
+
+    if (!hasRecentMessage) {
+      console.log(`⚠️ [OTP] Fora da janela 24h: ${phone}`);
+      // Retorna indicação de que precisa mandar mensagem primeiro
+      return new Response(
+        JSON.stringify({ 
+          success: false,
+          requiresWhatsApp: true,
+          message: "Mande um 'oi' para o Finax no WhatsApp primeiro para receber seu código.",
+          whatsappNumber: "5565981034588",
+          whatsappLink: "https://wa.me/5565981034588?text=oi",
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Dentro da janela - gerar e enviar código
     const code = generateOTP();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minutos
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
     // Salvar código
     const { error: insertError } = await supabase
@@ -208,19 +208,17 @@ serve(async (req) => {
       );
     }
 
-    // Enviar via WhatsApp
-    const sent = await sendWhatsAppOTP(phoneE164, code);
+    // Enviar via fila do Finax
+    const sent = await sendOTPViaFinax(usuario.id, phoneE164, code);
 
     if (!sent) {
-      // Fallback: log do código para desenvolvimento
-      console.log(`⚠️ [OTP] Código para ${phone}: ${code} (WhatsApp falhou)`);
+      console.log(`⚠️ [OTP] Código para ${phone}: ${code} (fila falhou, código gerado)`);
     }
 
-    // SECURITY: Return same message as non-existent user
     return new Response(
       JSON.stringify({ 
         success: true,
-        message: "Se este número estiver cadastrado, você receberá um código.",
+        message: "Código enviado! Verifique seu WhatsApp.",
         expiresIn: 300,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
