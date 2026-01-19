@@ -99,17 +99,66 @@ serve(async (req) => {
       );
     }
 
-    // Normalizar telefone
-    const phoneE164 = normalizePhoneE164(phone);
+    // Normalizar telefone - extract digits first for consistent normalization
     const phoneDigits = phone.replace(/\D/g, "");
+    const phoneE164 = normalizePhoneE164(phone);
+    // Also get digits-only for rate limit check (last 9 digits)
+    const phoneLast9 = phoneDigits.slice(-9);
 
     console.log(`📱 [OTP] Solicitação para: ${phone} → ${phoneE164}`);
+
+    // SECURITY: Check rate limit FIRST using multiple formats to prevent bypass
+    // Check both the normalized E.164 and the last 9 digits
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    
+    const { data: recentOTPs, error: rateError } = await supabase
+      .from("otp_codes")
+      .select("id, created_at")
+      .or(`phone_e164.eq.${phoneE164},phone_number.ilike.%${phoneLast9}%`)
+      .gte("created_at", oneDayAgo)
+      .order("created_at", { ascending: false });
+
+    if (rateError) {
+      console.error(`❌ [OTP] Rate limit check error:`, rateError);
+    }
+
+    // Check per-minute rate limit
+    const recentInLastMinute = recentOTPs?.filter(otp => 
+      new Date(otp.created_at) > new Date(oneMinuteAgo)
+    ) || [];
+    
+    if (recentInLastMinute.length > 0) {
+      // SECURITY: Return same message format as success to prevent timing attacks
+      console.log(`⚠️ [OTP] Rate limited (minute): ${phone}`);
+      return new Response(
+        JSON.stringify({ 
+          success: true,
+          message: "Se este número estiver cadastrado, você receberá um código.",
+          expiresIn: 300,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Check daily rate limit (max 10 per day)
+    if (recentOTPs && recentOTPs.length >= 10) {
+      console.log(`⚠️ [OTP] Rate limited (daily): ${phone}`);
+      return new Response(
+        JSON.stringify({ 
+          success: true,
+          message: "Se este número estiver cadastrado, você receberá um código.",
+          expiresIn: 300,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // Verificar se usuário existe
     const { data: usuario, error: userError } = await supabase
       .from("usuarios")
       .select("id, phone_number, phone_e164, nome, plano")
-      .or(`phone_e164.eq.${phoneE164},phone_number.ilike.%${phoneDigits.slice(-9)}%`)
+      .or(`phone_e164.eq.${phoneE164},phone_number.ilike.%${phoneLast9}%`)
       .maybeSingle();
 
     if (userError) {
@@ -120,37 +169,22 @@ serve(async (req) => {
       );
     }
 
+    // SECURITY FIX: Don't reveal if user exists or not
+    // Return same successful response regardless of user existence
     if (!usuario) {
-      console.log(`❌ [OTP] Usuário não encontrado: ${phone}`);
+      console.log(`⚠️ [OTP] Non-existent user attempted: ${phone}`);
+      // Return success to prevent user enumeration attacks
       return new Response(
         JSON.stringify({ 
-          error: "Número não cadastrado",
-          message: "Este número ainda não usa o Finax. Envie uma mensagem para (65) 9 8103-4588 para começar!"
+          success: true,
+          message: "Se este número estiver cadastrado, você receberá um código.",
+          expiresIn: 300,
         }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Verificar rate limit (1 OTP por minuto)
-    const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
-    const { data: recentOTP } = await supabase
-      .from("otp_codes")
-      .select("id")
-      .eq("phone_e164", phoneE164)
-      .gte("created_at", oneMinuteAgo)
-      .limit(1);
-
-    if (recentOTP && recentOTP.length > 0) {
-      return new Response(
-        JSON.stringify({ 
-          error: "Aguarde um momento",
-          message: "Você já solicitou um código recentemente. Aguarde 1 minuto."
-        }),
-        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Gerar novo código
+    // User exists - generate and send code
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minutos
 
@@ -182,11 +216,12 @@ serve(async (req) => {
       console.log(`⚠️ [OTP] Código para ${phone}: ${code} (WhatsApp falhou)`);
     }
 
+    // SECURITY: Return same message as non-existent user
     return new Response(
       JSON.stringify({ 
         success: true,
-        message: "Código enviado! Verifique seu WhatsApp.",
-        expiresIn: 300, // 5 minutos em segundos
+        message: "Se este número estiver cadastrado, você receberá um código.",
+        expiresIn: 300,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
