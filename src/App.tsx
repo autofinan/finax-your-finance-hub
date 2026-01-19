@@ -13,6 +13,7 @@ import Configuracoes from "./pages/Configuracoes";
 import Cartoes from "./pages/Cartoes";
 import Faturas from "./pages/Faturas";
 import Parcelamentos from "./pages/Parcelamentos";
+import Cancelar from "./pages/Cancelar";
 import NotFound from "./pages/NotFound";
 import Auth from "./pages/Auth";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -29,6 +30,7 @@ const App = () => (
           {/* Public Routes */}
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
+          <Route path="/cancelar" element={<Cancelar />} />
           
           {/* Protected Routes */}
           <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
