@@ -7,8 +7,28 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, stripe-signature",
 };
 
+// Normalize phone to E.164 format
+function normalizePhone(phone: string): string {
+  // Remove all non-digit characters
+  let digits = phone.replace(/\D/g, "");
+  
+  // Handle Brazilian numbers
+  if (digits.startsWith("55")) {
+    // Already has country code
+  } else if (digits.length === 11 || digits.length === 10) {
+    // Add country code
+    digits = "55" + digits;
+  }
+  
+  return "+" + digits;
+}
+
+// Get last 9 digits for fallback matching
+function getLast9Digits(phone: string): string {
+  return phone.replace(/\D/g, "").slice(-9);
+}
+
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -60,7 +80,7 @@ serve(async (req) => {
 
     console.log(`Processing Stripe event: ${event.type}`);
 
-    // Handle checkout.session.completed - Initial subscription or one-time payment
+    // Handle checkout.session.completed
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
       
@@ -72,9 +92,9 @@ serve(async (req) => {
 
       // Get customer phone and email
       const email = session.customer_email || session.customer_details?.email;
-      const phone = session.customer_details?.phone || session.metadata?.phone;
+      const rawPhone = session.customer_details?.phone || session.metadata?.phone;
       
-      if (!email && !phone) {
+      if (!email && !rawPhone) {
         console.error("No email or phone in checkout session");
         return new Response(JSON.stringify({ received: true, warning: "No customer contact info" }), {
           status: 200,
@@ -82,13 +102,18 @@ serve(async (req) => {
         });
       }
 
+      // Normalize phone number
+      const phoneE164 = rawPhone ? normalizePhone(rawPhone) : null;
+      const phoneLast9 = rawPhone ? getLast9Digits(rawPhone) : null;
+
+      console.log(`Phone normalization: raw=${rawPhone}, E164=${phoneE164}, last9=${phoneLast9}`);
+
       // Determine plan from price ID
       const priceBasico = Deno.env.get("STRIPE_PRICE_BASICO");
       const pricePro = Deno.env.get("STRIPE_PRICE_PRO");
       
-      // Get line items to determine which plan was purchased
       const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
-      let planoPurchased = "basico"; // default
+      let planoPurchased = "basico";
       
       for (const item of lineItems.data) {
         if (item.price?.id === pricePro) {
@@ -100,41 +125,74 @@ serve(async (req) => {
         }
       }
 
-      console.log(`Plan purchased: ${planoPurchased} for ${email || phone}`);
+      console.log(`Plan purchased: ${planoPurchased}`);
 
-      // Find user by email or phone
-      let userQuery = supabase.from("usuarios").select("*");
-      
-      if (phone) {
-        // Normalize phone number
-        const normalizedPhone = phone.replace(/\D/g, "");
-        userQuery = userQuery.or(`phone_number.eq.${phone},phone_number.ilike.%${normalizedPhone.slice(-9)}%`);
-      } else if (email) {
-        // Try to find by phone number stored with email pattern or metadata
-        userQuery = userQuery.eq("phone_number", email);
+      // Try to find user with multiple matching strategies
+      let user = null;
+
+      // Strategy 1: Try phone_e164 exact match
+      if (phoneE164) {
+        const { data: userByE164 } = await supabase
+          .from("usuarios")
+          .select("*")
+          .eq("phone_e164", phoneE164)
+          .maybeSingle();
+        
+        if (userByE164) {
+          user = userByE164;
+          console.log(`Found user by phone_e164: ${user.id}`);
+        }
       }
 
-      const { data: users, error: userError } = await userQuery.maybeSingle();
-
-      if (userError) {
-        console.error("Error finding user:", userError);
+      // Strategy 2: Try last 9 digits fallback
+      if (!user && phoneLast9) {
+        const { data: usersByPartial } = await supabase
+          .from("usuarios")
+          .select("*")
+          .ilike("phone_number", `%${phoneLast9}`);
+        
+        if (usersByPartial && usersByPartial.length === 1) {
+          user = usersByPartial[0];
+          console.log(`Found user by last 9 digits: ${user.id}`);
+        } else if (usersByPartial && usersByPartial.length > 1) {
+          console.warn(`Multiple users found with last 9 digits: ${phoneLast9}`);
+        }
       }
 
-      if (users) {
+      // Strategy 3: Try email-like phone_number
+      if (!user && email) {
+        const { data: userByEmail } = await supabase
+          .from("usuarios")
+          .select("*")
+          .eq("phone_number", email)
+          .maybeSingle();
+        
+        if (userByEmail) {
+          user = userByEmail;
+          console.log(`Found user by email in phone_number: ${user.id}`);
+        }
+      }
+
+      if (user) {
         // Update existing user's plan
         const { error: updateError } = await supabase
           .from("usuarios")
           .update({
             plano: planoPurchased,
-            trial_fim: null, // Clear trial end since they're now paying
+            trial_fim: null,
             updated_at: new Date().toISOString(),
+            // Also update phone_e164 if we have it
+            ...(phoneE164 && !user.phone_e164 ? { phone_e164: phoneE164 } : {}),
           })
-          .eq("id", users.id);
+          .eq("id", user.id);
 
         if (updateError) {
           console.error("Error updating user plan:", updateError);
         } else {
-          console.log(`User ${users.id} upgraded to ${planoPurchased}`);
+          console.log(`User ${user.id} upgraded to ${planoPurchased}`);
+          
+          // TODO: Send WhatsApp confirmation message
+          // This would use the messages_outbox table
         }
       } else {
         // Create activation code for user to claim later
@@ -146,9 +204,9 @@ serve(async (req) => {
             codigo: activationCode,
             plano_destino: planoPurchased,
             email_comprador: email,
-            phone_number_destino: phone,
+            phone_number_destino: rawPhone,
             transaction_id: session.id,
-            valido_ate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+            valido_ate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
             origem: "stripe_checkout",
             valor_pago: session.amount_total ? session.amount_total / 100 : null,
           });
@@ -156,8 +214,9 @@ serve(async (req) => {
         if (codeError) {
           console.error("Error creating activation code:", codeError);
         } else {
-          console.log(`Created activation code ${activationCode} for ${email || phone}`);
-          // TODO: Send email/SMS with activation code
+          console.log(`Created activation code ${activationCode} for ${email || rawPhone}`);
+          
+          // TODO: Send code via WhatsApp/Email
         }
       }
     }
@@ -167,27 +226,26 @@ serve(async (req) => {
       const subscription = event.data.object as Stripe.Subscription;
       console.log("Subscription updated:", subscription.id);
       
-      // Get customer email
       const customer = await stripe.customers.retrieve(subscription.customer as string);
-      if (!customer.deleted && customer.email) {
+      if (!customer.deleted && customer.phone) {
+        const phoneE164 = normalizePhone(customer.phone);
         const priceId = subscription.items.data[0]?.price.id;
         const pricePro = Deno.env.get("STRIPE_PRICE_PRO");
         
         const newPlan = priceId === pricePro ? "pro" : "basico";
         
-        // Find and update user
-        const { data: users } = await supabase
+        const { data: user } = await supabase
           .from("usuarios")
           .select("*")
-          .ilike("phone_number", `%${customer.email}%`)
+          .eq("phone_e164", phoneE164)
           .maybeSingle();
 
-        if (users) {
+        if (user) {
           await supabase
             .from("usuarios")
             .update({ plano: newPlan, updated_at: new Date().toISOString() })
-            .eq("id", users.id);
-          console.log(`User ${users.id} subscription updated to ${newPlan}`);
+            .eq("id", user.id);
+          console.log(`User ${user.id} subscription updated to ${newPlan}`);
         }
       }
     }
@@ -198,24 +256,25 @@ serve(async (req) => {
       console.log("Subscription canceled:", subscription.id);
       
       const customer = await stripe.customers.retrieve(subscription.customer as string);
-      if (!customer.deleted && customer.email) {
-        // Find and downgrade user to trial (expired)
-        const { data: users } = await supabase
+      if (!customer.deleted && customer.phone) {
+        const phoneE164 = normalizePhone(customer.phone);
+        
+        const { data: user } = await supabase
           .from("usuarios")
           .select("*")
-          .ilike("phone_number", `%${customer.email}%`)
+          .eq("phone_e164", phoneE164)
           .maybeSingle();
 
-        if (users) {
+        if (user) {
           await supabase
             .from("usuarios")
             .update({
-              plano: "trial",
-              trial_fim: new Date().toISOString(), // Expired trial
+              plano: "expired",
+              trial_fim: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             })
-            .eq("id", users.id);
-          console.log(`User ${users.id} subscription canceled, set to expired trial`);
+            .eq("id", user.id);
+          console.log(`User ${user.id} subscription canceled`);
         }
       }
     }
@@ -224,7 +283,6 @@ serve(async (req) => {
     if (event.type === "invoice.payment_failed") {
       const invoice = event.data.object as Stripe.Invoice;
       console.log("Payment failed for invoice:", invoice.id);
-      // Could send notification to user about failed payment
     }
 
     return new Response(JSON.stringify({ received: true }), {
