@@ -8,52 +8,96 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const VONAGE_API_KEY = Deno.env.get("VONAGE_API_KEY");
-const VONAGE_API_SECRET = Deno.env.get("VONAGE_API_SECRET");
-const VONAGE_WHATSAPP_NUMBER = Deno.env.get("VONAGE_WHATSAPP_NUMBER");
+
+// 🔥 CONFIGURAÇÃO API OFICIAL WHATSAPP
+const WHATSAPP_API_URL = Deno.env.get("WHATSAPP_API_URL")!; // Ex: https://graph.facebook.com/v18.0/SEU_PHONE_NUMBER_ID/messages
+const WHATSAPP_ACCESS_TOKEN = Deno.env.get("WHATSAPP_ACCESS_TOKEN")!;
+const WHATSAPP_PHONE_NUMBER_ID = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID")!;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ============================================================================
-// 📱 NORMALIZAÇÃO ROBUSTA DE TELEFONE
+// 📱 NORMALIZAÇÃO DE TELEFONE
 // ============================================================================
-// Problema: Operadoras brasileiras adicionaram 9° dígito, mas nem todos atualizaram.
-// Solução: Buscar por múltiplos formatos + usar últimos 8 dígitos como fallback.
-// ============================================================================
-
 function normalizePhoneE164(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   
-  // Já tem +55 e tamanho correto
   if (digits.startsWith("55") && digits.length >= 12 && digits.length <= 13) {
-    return "+" + digits;
+    return digits;
   }
   
-  // DDD + número (10 ou 11 dígitos)
   if (digits.length >= 10 && digits.length <= 11) {
-    return "+55" + digits;
+    return "55" + digits;
   }
   
-  // Só número local (8 ou 9 dígitos) - assumir DDD padrão
   if (digits.length >= 8 && digits.length <= 9) {
-    return "+55" + digits;
+    return "55" + digits;
   }
   
-  return digits.startsWith("+") ? digits : "+" + digits;
+  return digits.startsWith("55") ? digits : "55" + digits;
 }
 
-// Extrair últimos 8 dígitos para matching flexível (ignora 9° dígito)
 function extractPhoneLast8(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   return digits.slice(-8);
 }
 
-// Gerar código OTP de 6 dígitos
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Verificar se usuário mandou mensagem nas últimas 24h (janela WhatsApp)
+// ============================================================================
+// 📤 ENVIO VIA API OFICIAL DO WHATSAPP
+// ============================================================================
+async function sendOTPWhatsApp(phoneE164: string, code: string): Promise<boolean> {
+  const message = `🔐 *Código de acesso Finax*\n\nSeu código é: *${code}*\n\n⏰ Válido por 5 minutos.\n\n_Não compartilhe este código com ninguém._`;
+
+  try {
+    // Garantir que o número está no formato correto (sem +)
+    const cleanNumber = phoneE164.replace(/\D/g, "");
+    
+    const response = await fetch(WHATSAPP_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: cleanNumber,
+        type: "text",
+        text: {
+          preview_url: false,
+          body: message
+        }
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ [OTP] WhatsApp API falhou (${response.status}):`, errorText);
+      
+      // Tentar parsear o erro
+      try {
+        const errorJson = JSON.parse(errorText);
+        console.error(`❌ [OTP] Erro detalhado:`, JSON.stringify(errorJson, null, 2));
+      } catch {}
+      
+      return false;
+    }
+
+    const result = await response.json();
+    console.log(`✅ [OTP] Código enviado via WhatsApp para ${cleanNumber}`, result);
+    return true;
+    
+  } catch (error) {
+    console.error(`❌ [OTP] Erro ao enviar via WhatsApp API:`, error);
+    return false;
+  }
+}
+
+// Verificar janela de 24h
 async function checkWhatsAppWindow(userId: string): Promise<boolean> {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   
@@ -67,45 +111,7 @@ async function checkWhatsAppWindow(userId: string): Promise<boolean> {
   return !!(recentMessages && recentMessages.length > 0);
 }
 
-// ============================================================================
-// 📤 ENVIO DIRETO VIA VONAGE (sem fila)
-// ============================================================================
-async function sendOTPDirectVonage(phoneE164: string, code: string): Promise<boolean> {
-  const message = `🔐 *Código de acesso Finax*\n\nSeu código é: *${code}*\n\n⏰ Válido por 5 minutos.\n\n_Não compartilhe este código com ninguém._`;
-
-  try {
-    const cleanNumber = phoneE164.replace(/\D/g, "");
-    const response = await fetch("https://messages-sandbox.nexmo.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Basic ${btoa(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`)}`,
-      },
-      body: JSON.stringify({
-        from: VONAGE_WHATSAPP_NUMBER,
-        to: cleanNumber,
-        message_type: "text",
-        text: message,
-        channel: "whatsapp",
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`❌ [OTP] Vonage falhou (${response.status}):`, errorText);
-      return false;
-    }
-
-    console.log(`✅ [OTP] Código enviado via Vonage para ${phoneE164}`);
-    return true;
-  } catch (error) {
-    console.error(`❌ [OTP] Erro ao enviar via Vonage:`, error);
-    return false;
-  }
-}
-
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -120,14 +126,12 @@ serve(async (req) => {
       );
     }
 
-    // Normalizar telefone
-    const phoneDigits = phone.replace(/\D/g, "");
     const phoneE164 = normalizePhoneE164(phone);
     const phoneLast8 = extractPhoneLast8(phone);
 
     console.log(`📱 [OTP] Solicitação para: ${phone} → E164: ${phoneE164}, últimos 8: ${phoneLast8}`);
 
-    // Check rate limit
+    // Rate limit
     const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     
@@ -166,13 +170,7 @@ serve(async (req) => {
       );
     }
 
-    // ========================================================================
-    // 🔍 BUSCA FLEXÍVEL DE USUÁRIO (múltiplos formatos de telefone)
-    // ========================================================================
-    // Buscar por:
-    // 1. phone_e164 exato
-    // 2. phone_number contendo últimos 8 dígitos (ignora 9° dígito)
-    // ========================================================================
+    // Buscar usuário
     const { data: usuario, error: userError } = await supabase
       .from("usuarios")
       .select("id, phone_number, phone_e164, nome, plano")
@@ -187,9 +185,8 @@ serve(async (req) => {
       );
     }
 
-    // Usuário não existe - retorna mensagem genérica
     if (!usuario) {
-      console.log(`⚠️ [OTP] Usuário não encontrado: ${phone} (last8: ${phoneLast8})`);
+      console.log(`⚠️ [OTP] Usuário não encontrado: ${phone}`);
       return new Response(
         JSON.stringify({ 
           success: true,
@@ -202,12 +199,11 @@ serve(async (req) => {
 
     console.log(`✅ [OTP] Usuário encontrado: ${usuario.id} (${usuario.nome})`);
 
-    // User exists - verificar janela de 24h
+    // Verificar janela de 24h
     const hasRecentMessage = await checkWhatsAppWindow(usuario.id);
 
     if (!hasRecentMessage) {
       console.log(`⚠️ [OTP] Fora da janela 24h: ${phone}`);
-      // Retorna indicação de que precisa mandar mensagem primeiro
       return new Response(
         JSON.stringify({ 
           success: false,
@@ -220,7 +216,7 @@ serve(async (req) => {
       );
     }
 
-    // Dentro da janela - gerar e enviar código
+    // Gerar código
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
@@ -244,19 +240,18 @@ serve(async (req) => {
       );
     }
 
-    // ========================================================================
-    // 📤 ENVIAR DIRETAMENTE VIA VONAGE (sem fila)
-    // ========================================================================
-    // Usar o phone_e164 do USUÁRIO (não o input) para garantir formato correto
+    // 🔥 ENVIAR VIA API OFICIAL DO WHATSAPP
     const userPhoneE164 = usuario.phone_e164 || phoneE164;
-    const sent = await sendOTPDirectVonage(userPhoneE164, code);
+    const sent = await sendOTPWhatsApp(userPhoneE164, code);
 
     if (!sent) {
-      console.log(`⚠️ [OTP] Código para ${phone}: ${code} (envio falhou, código gerado)`);
-      // Não expor falha ao usuário - ele pode tentar novamente
+      console.error(`⚠️ [OTP] FALHA NO ENVIO para ${userPhoneE164}. Código: ${code}`);
+      // Não expor falha ao usuário
+    } else {
+      console.log(`✅ [OTP] Código enviado com sucesso para ${userPhoneE164}: ${code}`);
     }
 
-    // Atualizar phone_e164 do usuário se estava vazio ou diferente
+    // Atualizar phone_e164 do usuário se necessário
     if (usuario.phone_e164 !== phoneE164) {
       await supabase
         .from("usuarios")
