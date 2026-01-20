@@ -8,6 +8,7 @@ import { QuickActions } from '@/components/dashboard/QuickActions';
 import { useTransacoes } from '@/hooks/useTransacoes';
 import { useGastosRecorrentes } from '@/hooks/useGastosRecorrentes';
 import { usePlanoStatus } from '@/hooks/usePlanoStatus';
+import { useAuth } from '@/contexts/AuthContext';
 import { Wallet, TrendingUp, TrendingDown, RefreshCcw, Plus, Sparkles, Target, Calendar, PieChart, Bot, X, Send } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import { TransactionForm } from '@/components/transacoes/TransactionForm';
@@ -22,9 +23,10 @@ import {
 } from 'recharts';
 
 const Dashboard = () => {
-  const { transacoes, loading, addTransacao } = useTransacoes();
-  const { gastos } = useGastosRecorrentes();
-  const { planoStatus, isTrialExpirado, isTrial } = usePlanoStatus();
+  const { user, isTrialExpirado, isTrial, loading: authLoading } = useAuth();
+  const { transacoes, loading, addTransacao } = useTransacoes(user?.id);
+  const { gastos } = useGastosRecorrentes(user?.id);
+  const { planoStatus } = usePlanoStatus();
   const [formOpen, setFormOpen] = useState(false);
   const [finBotOpen, setFinBotOpen] = useState(false);
   const [finInput, setFinInput] = useState('');
