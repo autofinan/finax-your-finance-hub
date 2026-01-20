@@ -20,6 +20,7 @@ interface AuthContextType {
   isPro: boolean;
   isBasico: boolean;
   isTrial: boolean;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -31,54 +32,82 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const refreshUser = async () => {
+    const token = localStorage.getItem(TOKEN_KEY);
+    
+    if (!token) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase.functions.invoke('validate-session', {
+        body: { token },
+      });
+
+      if (error) {
+        console.error('❌ Erro ao validar sessão:', error);
+        throw error;
+      }
+
+      if (!data || !data.valid || !data.user) {
+        console.log('⚠️ Sessão inválida ou expirada');
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        localStorage.removeItem('finax_refresh_token');
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      // Sessão válida - atualizar dados do usuário
+      console.log('✅ Sessão válida, usuário:', data.user);
+      localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+      setUser(data.user);
+      setLoading(false);
+      
+    } catch (err) {
+      console.error('❌ Erro ao validar sessão:', err);
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      localStorage.removeItem('finax_refresh_token');
+      setUser(null);
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const loadSession = async () => {
       const token = localStorage.getItem(TOKEN_KEY);
       const savedUser = localStorage.getItem(USER_KEY);
 
       if (!token) {
+        console.log('⚠️ Nenhum token encontrado');
         setLoading(false);
         return;
       }
 
-      // Usar usuário salvo primeiro para UI rápida
+      // Usar usuário salvo TEMPORARIAMENTE para UI rápida
       if (savedUser) {
         try {
           const parsedUser = JSON.parse(savedUser);
+          console.log('📱 Usuário local carregado:', parsedUser);
           setUser(parsedUser);
-        } catch {
-          // Ignora erro de parse
+        } catch (e) {
+          console.error('❌ Erro ao parsear usuário salvo:', e);
         }
       }
 
-      // Validar sessão no servidor
-      try {
-        const { data, error } = await supabase.functions.invoke('validate-session', {
-          body: { token },
-        });
-
-        if (error || !data?.valid) {
-          localStorage.removeItem(TOKEN_KEY);
-          localStorage.removeItem(USER_KEY);
-          localStorage.removeItem('finax_refresh_token');
-          setUser(null);
-        } else {
-          // Sessão válida - atualizar dados do usuário
-          localStorage.setItem(USER_KEY, JSON.stringify(data.user));
-          setUser(data.user);
-        }
-      } catch (err) {
-        console.error('Erro ao validar sessão:', err);
-        // Manter usuário local se tiver (offline mode)
-      } finally {
-        setLoading(false);
-      }
+      // SEMPRE validar sessão no servidor
+      await refreshUser();
     };
 
     loadSession();
   }, []);
 
   const logout = () => {
+    console.log('👋 Fazendo logout...');
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     localStorage.removeItem('finax_refresh_token');
@@ -90,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading,
     isAuthenticated: !!user,
     logout,
+    refreshUser,
     isTrialExpirado: user?.planoStatus === 'trial_expirado',
     isPro: user?.plano === 'pro',
     isBasico: user?.plano === 'basico',
