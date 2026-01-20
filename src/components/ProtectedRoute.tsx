@@ -1,91 +1,18 @@
-import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
 }
 
 const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { isAuthenticated, loading } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        // Check for WhatsApp session token
-        const sessionToken = localStorage.getItem("finax_session_token");
-        const sessionExpiry = localStorage.getItem("finax_session_expiry");
-        
-        if (!sessionToken || !sessionExpiry) {
-          setIsAuthenticated(false);
-          setLoading(false);
-          return;
-        }
-
-        // Check if session is expired locally
-        if (new Date(sessionExpiry) < new Date()) {
-          localStorage.removeItem("finax_session_token");
-          localStorage.removeItem("finax_session_expiry");
-          localStorage.removeItem("finax_user_id");
-          localStorage.removeItem("finax_phone");
-          setIsAuthenticated(false);
-          setLoading(false);
-          return;
-        }
-
-        // Validate session with backend
-        const response = await fetch(
-          "https://hhvaqirjrssldsxoezxs.supabase.co/functions/v1/validate-session",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${sessionToken}`,
-            },
-            body: JSON.stringify({ token: sessionToken }),
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.valid) {
-            setIsAuthenticated(true);
-          } else {
-            // Clear invalid session
-            localStorage.removeItem("finax_session_token");
-            localStorage.removeItem("finax_session_expiry");
-            localStorage.removeItem("finax_user_id");
-            localStorage.removeItem("finax_phone");
-            setIsAuthenticated(false);
-          }
-        } else {
-          // Session validation failed - but might be network issue
-          // Trust local expiry for now
-          setIsAuthenticated(true);
-        }
-      } catch (error) {
-        console.error("Session validation error:", error);
-        // Network error - trust local session if it exists and not expired
-        const sessionToken = localStorage.getItem("finax_session_token");
-        const sessionExpiry = localStorage.getItem("finax_session_expiry");
-        
-        if (sessionToken && sessionExpiry && new Date(sessionExpiry) > new Date()) {
-          setIsAuthenticated(true);
-        } else {
-          setIsAuthenticated(false);
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkAuth();
-  }, []);
-
-  useEffect(() => {
-    if (!loading && isAuthenticated === false) {
+    if (!loading && !isAuthenticated) {
       navigate("/auth", { replace: true });
     }
   }, [isAuthenticated, loading, navigate]);

@@ -11,7 +11,10 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Normalizar telefone para formato E.164
+// ============================================================================
+// 📱 NORMALIZAÇÃO ROBUSTA DE TELEFONE
+// ============================================================================
+
 function normalizePhoneE164(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   
@@ -24,6 +27,12 @@ function normalizePhoneE164(phone: string): string {
   }
   
   return digits.startsWith("+") ? digits : "+" + digits;
+}
+
+// Extrair últimos 8 dígitos para matching flexível (ignora 9° dígito)
+function extractPhoneLast8(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  return digits.slice(-8);
 }
 
 // Gerar token de sessão seguro
@@ -56,14 +65,19 @@ serve(async (req) => {
     }
 
     const phoneE164 = normalizePhoneE164(phone);
+    const phoneLast8 = extractPhoneLast8(phone);
 
-    console.log(`🔐 [VERIFY] Verificando código para: ${phoneE164}`);
+    console.log(`🔐 [VERIFY] Verificando código para: ${phoneE164} (last8: ${phoneLast8})`);
 
-    // Buscar código válido
+    // ========================================================================
+    // 🔍 BUSCA FLEXÍVEL DE CÓDIGO OTP
+    // ========================================================================
+    // Buscar por phone_e164 OU últimos 8 dígitos para maior flexibilidade
+    // ========================================================================
     const { data: otpRecord, error: otpError } = await supabase
       .from("otp_codes")
       .select("*")
-      .eq("phone_e164", phoneE164)
+      .or(`phone_e164.eq.${phoneE164},phone_number.ilike.%${phoneLast8}%`)
       .eq("used", false)
       .gte("expires_at", new Date().toISOString())
       .order("created_at", { ascending: false })
@@ -129,12 +143,13 @@ serve(async (req) => {
       .update({ used: true })
       .eq("id", otpRecord.id);
 
-    // Buscar usuário
-    const phoneDigits = phone.replace(/\D/g, "");
+    // ========================================================================
+    // 🔍 BUSCA FLEXÍVEL DE USUÁRIO
+    // ========================================================================
     const { data: usuario, error: userError } = await supabase
       .from("usuarios")
       .select("id, phone_number, phone_e164, nome, plano, trial_inicio, trial_fim")
-      .or(`phone_e164.eq.${phoneE164},phone_number.ilike.%${phoneDigits.slice(-9)}%`)
+      .or(`phone_e164.eq.${phoneE164},phone_number.ilike.%${phoneLast8}%,phone_e164.ilike.%${phoneLast8}%`)
       .maybeSingle();
 
     if (userError || !usuario) {
@@ -145,12 +160,15 @@ serve(async (req) => {
       );
     }
 
-    // Atualizar phone_e164 se necessário
-    if (!usuario.phone_e164) {
+    console.log(`✅ [VERIFY] Usuário encontrado: ${usuario.id} (${usuario.nome})`);
+
+    // Atualizar phone_e164 se necessário (sincronizar com formato novo)
+    if (usuario.phone_e164 !== phoneE164) {
       await supabase
         .from("usuarios")
         .update({ phone_e164: phoneE164 })
         .eq("id", usuario.id);
+      console.log(`📱 [VERIFY] Atualizado phone_e164: ${phoneE164}`);
     }
 
     // Revogar sessões antigas
