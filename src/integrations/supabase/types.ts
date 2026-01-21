@@ -1455,6 +1455,58 @@ export type Database = {
           },
         ]
       }
+      pending_messages: {
+        Row: {
+          created_at: string | null
+          id: string
+          message_id: string
+          message_text: string
+          processed: boolean | null
+          processed_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          message_id: string
+          message_text: string
+          processed?: boolean | null
+          processed_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          message_id?: string
+          message_text?: string
+          processed?: boolean | null
+          processed_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pending_messages_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pending_messages_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "pending_messages_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       pending_selections: {
         Row: {
           awaiting_field: string | null
