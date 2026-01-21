@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 
 interface User {
@@ -12,118 +12,318 @@ interface User {
 }
 
 interface AuthContextType {
+  // User state
   user: User | null;
   loading: boolean;
   isAuthenticated: boolean;
-  logout: () => void;
+  
+  // Plan status
   isTrialExpirado: boolean;
   isPro: boolean;
   isBasico: boolean;
   isTrial: boolean;
+  
+  // OTP state
+  otpSent: boolean;
+  otpLoading: boolean;
+  verifyLoading: boolean;
+  countdown: number;
+  error: string | null;
+  requiresWhatsApp: boolean;
+  whatsappLink: string | null;
+  
+  // Actions
+  sendOTP: (phone: string) => Promise<boolean>;
+  verifyOTP: (phone: string, code: string) => Promise<boolean>;
+  logout: () => void;
+  resetOTP: () => void;
   refreshUser: () => Promise<void>;
+  clearError: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const TOKEN_KEY = 'finax_session_token';
+const REFRESH_TOKEN_KEY = 'finax_refresh_token';
 const USER_KEY = 'finax_user';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  // User state
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  
+  // OTP state
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [requiresWhatsApp, setRequiresWhatsApp] = useState(false);
+  const [whatsappLink, setWhatsappLink] = useState<string | null>(null);
 
-  const refreshUser = async () => {
+  // ========================================================================
+  // 🔄 REFRESH USER - Validar sessão no servidor
+  // ========================================================================
+  const refreshUser = useCallback(async () => {
     const token = localStorage.getItem(TOKEN_KEY);
     
     if (!token) {
+      console.log('⚠️ [AUTH] Nenhum token encontrado');
       setUser(null);
       setLoading(false);
       return;
     }
 
     try {
-      const { data, error } = await supabase.functions.invoke('validate-session', {
+      console.log('🔄 [AUTH] Validando sessão...');
+      const { data, error: invokeError } = await supabase.functions.invoke('validate-session', {
         body: { token },
       });
 
-      if (error) {
-        console.error('❌ Erro ao validar sessão:', error);
-        throw error;
+      if (invokeError) {
+        console.error('❌ [AUTH] Erro na invocação:', invokeError);
+        throw invokeError;
       }
 
       if (!data || !data.valid || !data.user) {
-        console.log('⚠️ Sessão inválida ou expirada');
+        console.log('⚠️ [AUTH] Sessão inválida ou expirada');
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
-        localStorage.removeItem('finax_refresh_token');
+        localStorage.removeItem(REFRESH_TOKEN_KEY);
         setUser(null);
         setLoading(false);
         return;
       }
 
-      // Sessão válida - atualizar dados do usuário
-      console.log('✅ Sessão válida, usuário:', data.user);
+      // Sessão válida
+      console.log('✅ [AUTH] Sessão válida:', data.user.nome);
       localStorage.setItem(USER_KEY, JSON.stringify(data.user));
       setUser(data.user);
-      setLoading(false);
       
     } catch (err) {
-      console.error('❌ Erro ao validar sessão:', err);
+      console.error('❌ [AUTH] Erro ao validar sessão:', err);
+      // Limpar dados corrompidos
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
-      localStorage.removeItem('finax_refresh_token');
+      localStorage.removeItem(REFRESH_TOKEN_KEY);
       setUser(null);
+    } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
+  // ========================================================================
+  // 📱 SEND OTP - Enviar código via WhatsApp
+  // ========================================================================
+  const sendOTP = useCallback(async (phone: string): Promise<boolean> => {
+    setOtpLoading(true);
+    setError(null);
+    setRequiresWhatsApp(false);
+    setWhatsappLink(null);
+    
+    try {
+      console.log('📱 [AUTH] Enviando OTP para:', phone);
+      const { data, error: invokeError } = await supabase.functions.invoke('send-otp', {
+        body: { phone },
+      });
+
+      if (invokeError) {
+        console.error('❌ [AUTH] Erro ao enviar OTP:', invokeError);
+        setError(invokeError.message || 'Erro ao enviar código');
+        return false;
+      }
+
+      // Tratamento especial: fora da janela de 24h
+      if (data?.requiresWhatsApp) {
+        console.log('⚠️ [AUTH] Fora da janela 24h');
+        setRequiresWhatsApp(true);
+        setWhatsappLink(data.whatsappLink || 'https://wa.me/5565981034588?text=oi');
+        setError(data.message || 'Envie um "oi" para o Finax no WhatsApp primeiro');
+        return false;
+      }
+
+      if (data?.error) {
+        setError(data.message || data.error);
+        return false;
+      }
+
+      if (data?.success) {
+        console.log('✅ [AUTH] OTP enviado com sucesso');
+        setOtpSent(true);
+        setCountdown(60);
+        return true;
+      }
+
+      return false;
+      
+    } catch (err: any) {
+      console.error('❌ [AUTH] Erro inesperado:', err);
+      setError(err.message || 'Erro ao enviar código');
+      return false;
+    } finally {
+      setOtpLoading(false);
+    }
+  }, []);
+
+  // ========================================================================
+  // 🔐 VERIFY OTP - Verificar código e criar sessão
+  // ========================================================================
+  const verifyOTP = useCallback(async (phone: string, code: string): Promise<boolean> => {
+    setVerifyLoading(true);
+    setError(null);
+    
+    try {
+      console.log('🔐 [AUTH] Verificando OTP...');
+      const { data, error: invokeError } = await supabase.functions.invoke('verify-otp', {
+        body: { phone, code },
+      });
+
+      if (invokeError) {
+        console.error('❌ [AUTH] Erro ao verificar OTP:', invokeError);
+        setError(invokeError.message || 'Erro ao verificar código');
+        return false;
+      }
+
+      if (data?.error) {
+        setError(data.message || data.error);
+        return false;
+      }
+
+      if (data?.success && data.token && data.user) {
+        console.log('✅ [AUTH] Login bem-sucedido:', data.user.nome);
+        
+        // Salvar sessão
+        localStorage.setItem(TOKEN_KEY, data.token);
+        localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken);
+        localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+        
+        // Atualizar estado
+        setUser(data.user);
+        setOtpSent(false);
+        setCountdown(0);
+        
+        return true;
+      }
+
+      setError('Resposta inesperada do servidor');
+      return false;
+      
+    } catch (err: any) {
+      console.error('❌ [AUTH] Erro inesperado:', err);
+      setError(err.message || 'Erro ao verificar código');
+      return false;
+    } finally {
+      setVerifyLoading(false);
+    }
+  }, []);
+
+  // ========================================================================
+  // 👋 LOGOUT
+  // ========================================================================
+  const logout = useCallback(() => {
+    console.log('👋 [AUTH] Fazendo logout...');
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    setUser(null);
+    setOtpSent(false);
+    setCountdown(0);
+    setError(null);
+    setRequiresWhatsApp(false);
+    setWhatsappLink(null);
+  }, []);
+
+  // ========================================================================
+  // 🔄 RESET OTP - Voltar para tela de telefone
+  // ========================================================================
+  const resetOTP = useCallback(() => {
+    setOtpSent(false);
+    setCountdown(0);
+    setError(null);
+    setRequiresWhatsApp(false);
+    setWhatsappLink(null);
+  }, []);
+
+  // ========================================================================
+  // 🧹 CLEAR ERROR
+  // ========================================================================
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
+  // ========================================================================
+  // ⏱️ COUNTDOWN TIMER
+  // ========================================================================
+  useEffect(() => {
+    if (countdown > 0) {
+      const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [countdown]);
+
+  // ========================================================================
+  // 🚀 CARREGAR SESSÃO AO INICIAR
+  // ========================================================================
   useEffect(() => {
     const loadSession = async () => {
       const token = localStorage.getItem(TOKEN_KEY);
       const savedUser = localStorage.getItem(USER_KEY);
 
       if (!token) {
-        console.log('⚠️ Nenhum token encontrado');
+        console.log('⚠️ [AUTH] Sem token, não autenticado');
         setLoading(false);
         return;
       }
 
-      // Usar usuário salvo TEMPORARIAMENTE para UI rápida
+      // Mostrar UI rápida com dados locais
       if (savedUser) {
         try {
           const parsedUser = JSON.parse(savedUser);
-          console.log('📱 Usuário local carregado:', parsedUser);
+          console.log('📱 [AUTH] Usuário local:', parsedUser.nome);
           setUser(parsedUser);
-        } catch (e) {
-          console.error('❌ Erro ao parsear usuário salvo:', e);
+        } catch {
+          // Ignora erro de parse
         }
       }
 
-      // SEMPRE validar sessão no servidor
+      // Validar no servidor
       await refreshUser();
     };
 
     loadSession();
-  }, []);
+  }, [refreshUser]);
 
-  const logout = () => {
-    console.log('👋 Fazendo logout...');
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    localStorage.removeItem('finax_refresh_token');
-    setUser(null);
-  };
-
+  // ========================================================================
+  // 📦 CONTEXT VALUE
+  // ========================================================================
   const value: AuthContextType = {
+    // User state
     user,
     loading,
     isAuthenticated: !!user,
-    logout,
-    refreshUser,
+    
+    // Plan status
     isTrialExpirado: user?.planoStatus === 'trial_expirado',
     isPro: user?.plano === 'pro',
     isBasico: user?.plano === 'basico',
     isTrial: user?.plano === 'trial' && user?.planoStatus === 'trial_ativo',
+    
+    // OTP state
+    otpSent,
+    otpLoading,
+    verifyLoading,
+    countdown,
+    error,
+    requiresWhatsApp,
+    whatsappLink,
+    
+    // Actions
+    sendOTP,
+    verifyOTP,
+    logout,
+    resetOTP,
+    refreshUser,
+    clearError,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

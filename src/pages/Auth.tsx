@@ -5,8 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, MessageCircle, ArrowLeft, Smartphone, Shield, CheckCircle } from "lucide-react";
-import { useWhatsAppAuth } from "@/hooks/useWhatsAppAuth";
+import { Loader2, MessageCircle, ArrowLeft, Smartphone, Shield, CheckCircle, ExternalLink } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import finaxLogo from "@/assets/finax-logo-transparent.png";
 
 const Auth = () => {
@@ -25,30 +25,35 @@ const Auth = () => {
     otpLoading,
     verifyLoading,
     countdown,
+    requiresWhatsApp,
+    whatsappLink,
     sendOTP,
     verifyOTP,
     resetOTP,
-  } = useWhatsAppAuth();
+    clearError,
+  } = useAuth();
 
   const plan = searchParams.get("plan");
 
   // Redirecionar se já autenticado
   useEffect(() => {
     if (isAuthenticated && !loading) {
+      console.log('🚀 [AUTH PAGE] Usuário autenticado, redirecionando...');
       navigate("/dashboard", { replace: true });
     }
   }, [isAuthenticated, loading, navigate]);
 
-  // Mostrar erro
+  // Mostrar erro via toast
   useEffect(() => {
-    if (error) {
+    if (error && !requiresWhatsApp) {
       toast({
         title: "Erro",
         description: error,
         variant: "destructive",
       });
+      clearError();
     }
-  }, [error, toast]);
+  }, [error, requiresWhatsApp, toast, clearError]);
 
   // Formatar telefone
   const formatPhone = (value: string) => {
@@ -97,10 +102,14 @@ const Auth = () => {
     }
   };
 
+  // Loading inicial
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-slate-400">Verificando sessão...</p>
+        </div>
       </div>
     );
   }
@@ -151,6 +160,27 @@ const Auth = () => {
                 </div>
               </div>
 
+              {/* ⚠️ Aviso de janela 24h */}
+              {requiresWhatsApp && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 space-y-3">
+                  <p className="text-amber-300 text-sm">
+                    {error || "Para receber o código, envie um 'oi' para o Finax no WhatsApp primeiro."}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full border-amber-500/50 text-amber-300 hover:bg-amber-500/20"
+                    onClick={() => window.open(whatsappLink || "https://wa.me/5565981034588?text=oi", "_blank")}
+                  >
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    Abrir WhatsApp
+                  </Button>
+                  <p className="text-xs text-amber-300/60 text-center">
+                    Após enviar, volte aqui e clique em "Enviar código"
+                  </p>
+                </div>
+              )}
+
               <Button
                 type="submit"
                 className="w-full bg-gradient-to-r from-primary to-blue-500 hover:opacity-90"
@@ -161,20 +191,22 @@ const Auth = () => {
                 ) : (
                   <MessageCircle className="mr-2 h-4 w-4" />
                 )}
-                Receber código no WhatsApp
+                {requiresWhatsApp ? "Tentar novamente" : "Receber código no WhatsApp"}
               </Button>
 
               {/* Info box */}
-              <div className="bg-slate-700/30 rounded-lg p-4 space-y-2">
-                <div className="flex items-start gap-2 text-sm text-slate-300">
-                  <Shield className="w-4 h-4 mt-0.5 text-emerald-400" />
-                  <span>Usamos seu número do WhatsApp como identidade única. Sem senha!</span>
+              {!requiresWhatsApp && (
+                <div className="bg-slate-700/30 rounded-lg p-4 space-y-2">
+                  <div className="flex items-start gap-2 text-sm text-slate-300">
+                    <Shield className="w-4 h-4 mt-0.5 text-emerald-400" />
+                    <span>Usamos seu número do WhatsApp como identidade única. Sem senha!</span>
+                  </div>
+                  <div className="flex items-start gap-2 text-sm text-slate-300">
+                    <CheckCircle className="w-4 h-4 mt-0.5 text-emerald-400" />
+                    <span>Código válido por 5 minutos. Máximo 3 tentativas.</span>
+                  </div>
                 </div>
-                <div className="flex items-start gap-2 text-sm text-slate-300">
-                  <CheckCircle className="w-4 h-4 mt-0.5 text-emerald-400" />
-                  <span>Código válido por 5 minutos. Máximo 3 tentativas.</span>
-                </div>
-              </div>
+              )}
 
               {/* Link para começar trial */}
               <div className="text-center pt-4 border-t border-slate-700">
@@ -183,7 +215,7 @@ const Auth = () => {
                   type="button"
                   variant="outline"
                   className="border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10"
-                  onClick={() => window.open("https://wa.me/556581034588?text=Oi", "_blank")}
+                  onClick={() => window.open("https://wa.me/5565981034588?text=Oi", "_blank")}
                 >
                   <MessageCircle className="mr-2 h-4 w-4" />
                   Começar Trial Grátis

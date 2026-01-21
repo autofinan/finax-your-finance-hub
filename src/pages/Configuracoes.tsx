@@ -6,13 +6,13 @@ import { Switch } from '@/components/ui/switch';
 import { useState, useEffect } from 'react';
 import { User, Bell, Shield, Download, Trash2, LogOut, Smartphone, CreditCard, Settings } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { useWhatsAppAuth } from '@/hooks/useWhatsAppAuth';
+import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 
 const Configuracoes = () => {
   const { toast } = useToast();
-  const { user, logout } = useWhatsAppAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
   
   const [nome, setNome] = useState('');
