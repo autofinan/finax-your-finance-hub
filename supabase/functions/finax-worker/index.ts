@@ -1,6 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { classifyDeterministic } from "./decision/classifier.ts";
+import { detectMultipleExpenses, formatExpensesList, calculateTotal } from "./utils/multiple-expenses.ts";
+import { parseRelativeDate, getBrasiliaDate } from "./utils/date-helpers.ts";
+import { queueMessage, shouldQueueMessage, getPendingMessages, markMessageProcessed } from "./utils/message-queue.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v5.1 - ARQUITETURA MODULAR COM DECISION ENGINE + ELITE
@@ -2867,6 +2870,57 @@ async function processarJob(job: any): Promise<void> {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
       
       // ====================================================================
+      // 📦 MÚLTIPLOS GASTOS - Separado ou Junto
+      // ====================================================================
+      if (payload.buttonReplyId === "multi_separado" && activeAction?.intent === "multi_expense") {
+        const detectedExpenses = activeAction.slots.detected_expenses as Array<{amount: number; description: string}>;
+        console.log(`📦 [MULTI] Registrando ${detectedExpenses?.length} gastos separadamente`);
+        
+        if (!detectedExpenses || detectedExpenses.length === 0) {
+          await closeAction(activeAction.id);
+          await sendMessage(payload.phoneNumber, "Ops, perdi os dados. Pode repetir?", payload.messageSource);
+          return;
+        }
+        
+        // Registrar cada gasto separadamente (pedir pagamento para o primeiro)
+        const firstExpense = detectedExpenses[0];
+        await closeAction(activeAction.id);
+        await createAction(userId, "multi_expense_queue", "expense", { 
+          amount: firstExpense.amount,
+          description: firstExpense.description,
+          remaining_expenses: detectedExpenses.slice(1)
+        }, "payment_method", payload.messageId);
+        
+        await sendButtons(
+          payload.phoneNumber,
+          `💸 R$ ${firstExpense.amount.toFixed(2)} - ${firstExpense.description}\n\nComo você pagou?`,
+          SLOT_PROMPTS.payment_method.buttons!,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      if (payload.buttonReplyId === "multi_junto" && activeAction?.intent === "multi_expense") {
+        const total = activeAction.slots.total as number;
+        const originalMessage = activeAction.slots.original_message as string;
+        console.log(`📦 [MULTI] Registrando tudo junto: R$ ${total}`);
+        
+        await closeAction(activeAction.id);
+        await createAction(userId, "expense", "expense", { 
+          amount: total,
+          description: originalMessage?.slice(0, 50) || "Múltiplos itens"
+        }, "payment_method", payload.messageId);
+        
+        await sendButtons(
+          payload.phoneNumber,
+          `💸 R$ ${total.toFixed(2)}\n\nComo você pagou?`,
+          SLOT_PROMPTS.payment_method.buttons!,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ====================================================================
       // 🛡️ GUARD: BOTÃO EXPIRADO (sem contexto ativo)
       // ====================================================================
       // Se recebemos um botão mas não há activeAction, significa que o
@@ -3165,6 +3219,53 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
+    // 📦 DETECÇÃO DE MÚLTIPLOS GASTOS (antes do decision engine)
+    // ========================================================================
+    // Se a mensagem contém múltiplos valores, perguntar ao usuário se quer
+    // registrar separado ou junto, ANTES de classificar.
+    // ========================================================================
+    if (payload.messageType === "text" && !activeAction) {
+      const multipleExpenses = detectMultipleExpenses(conteudoProcessado);
+      
+      if (multipleExpenses.length > 1) {
+        console.log(`📦 [MULTI] Detectados ${multipleExpenses.length} gastos na mensagem`);
+        
+        const lista = formatExpensesList(multipleExpenses);
+        const total = calculateTotal(multipleExpenses);
+        
+        await sendButtons(
+          payload.phoneNumber,
+          `Vi ${multipleExpenses.length} gastos:\n\n${lista}\n\n💰 Total: R$ ${total.toFixed(2)}\n\nComo quer registrar?`,
+          [
+            { id: "multi_separado", title: "📝 Separado" },
+            { id: "multi_junto", title: "📦 Tudo junto" }
+          ],
+          payload.messageSource
+        );
+        
+        // Salvar estado pendente com os gastos detectados
+        await createAction(userId, "multi_expense", "multi_expense", { 
+          detected_expenses: multipleExpenses,
+          total,
+          original_message: conteudoProcessado
+        }, "selection", payload.messageId);
+        
+        return;
+      }
+    }
+    
+    // ========================================================================
+    // 📅 DETECÇÃO DE DATAS RELATIVAS ("ontem", "anteontem", etc.)
+    // ========================================================================
+    let transactionDate: Date | null = null;
+    if (payload.messageType === "text") {
+      transactionDate = parseRelativeDate(conteudoProcessado);
+      if (transactionDate) {
+        console.log(`📅 [DATE] Data relativa detectada: ${transactionDate.toISOString().split('T')[0]}`);
+      }
+    }
+    
+    // ========================================================================
     // 🧠 DECISION ENGINE PRIMEIRO - CLASSIFICAÇÃO UNIFICADA
     // ========================================================================
     // REGRA ABSOLUTA: A IA analisa a mensagem PRIMEIRO, antes de qualquer
@@ -3343,6 +3444,15 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     if (decision.actionType === "expense") {
       const slots = decision.slots;
+      
+      // ========================================================================
+      // 📅 ADICIONAR DATA RELATIVA AOS SLOTS (se detectada)
+      // ========================================================================
+      if (transactionDate) {
+        slots.transaction_date = transactionDate.toISOString();
+        console.log(`📅 [EXPENSE] Data relativa aplicada: ${transactionDate.toISOString().split('T')[0]}`);
+      }
+      
       const missing = getMissingSlots("expense", slots);
       
       // ✅ EXECUÇÃO DIRETA: hasAllRequiredSlots = true
@@ -3356,7 +3466,45 @@ async function processarJob(job: any): Promise<void> {
           .eq("user_id", userId)
           .in("status", ["collecting", "awaiting_input"]);
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        
+        // ========================================================================
+        // 📬 PROCESSAR FILA DE MENSAGENS PENDENTES (após registrar gasto)
+        // ========================================================================
+        const pendingMessages = await getPendingMessages(userId, 3);
+        if (pendingMessages.length > 0) {
+          console.log(`📬 [QUEUE] ${pendingMessages.length} mensagens pendentes`);
+          await sendMessage(payload.phoneNumber, 
+            `📬 Você tem ${pendingMessages.length} gasto${pendingMessages.length > 1 ? 's' : ''} pendente${pendingMessages.length > 1 ? 's' : ''} que anotei!`,
+            payload.messageSource
+          );
+          // Processar a primeira pendente
+          const firstPending = pendingMessages[0];
+          await markMessageProcessed(firstPending.id);
+          // Re-processar (simplificado - apenas notificar)
+        }
+        
         return;
+      }
+      
+      // ========================================================================
+      // 📬 FILA DE MENSAGENS: Se já há ação pendente de expense, enfileirar nova
+      // ========================================================================
+      if (activeAction?.intent === "expense" && activeAction.pending_slot === "payment_method") {
+        // Nova mensagem parece ser novo gasto
+        const hasNewAmount = slots.amount && slots.amount !== activeAction.slots.amount;
+        const hasNewDescription = slots.description && slots.description !== activeAction.slots.description;
+        
+        if (hasNewAmount || hasNewDescription) {
+          console.log(`📬 [QUEUE] Enfileirando novo gasto enquanto aguarda pagamento do anterior`);
+          await queueMessage(userId, conteudoProcessado, payload.messageId);
+          
+          await sendMessage(payload.phoneNumber, 
+            `📝 Anotei! Vou registrar isso assim que terminar o gasto anterior.\n\n` +
+            `💸 R$ ${activeAction.slots.amount?.toFixed(2)}\n\nComo você pagou?`,
+            payload.messageSource
+          );
+          return;
+        }
       }
       
       // ❌ FALTA SLOT OBRIGATÓRIO → perguntar APENAS o que falta

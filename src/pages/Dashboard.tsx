@@ -114,7 +114,7 @@ const Dashboard = () => {
             className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4"
           >
             <div>
-              <p className="text-slate-500 font-medium mb-1">Bem-vindo de volta,</p>
+              <p className="text-slate-500 font-medium mb-1">Bem-vindo de volta{user?.nome ? `, ${user.nome}` : ''}!</p>
               <h1 className="text-4xl font-bold text-white">
                 Comando Central <span className="text-indigo-400">Finax</span>
               </h1>
