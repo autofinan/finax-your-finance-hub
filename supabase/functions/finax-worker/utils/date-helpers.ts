@@ -14,8 +14,9 @@ export function getBrasiliaDate(): Date {
 
 /**
  * Formata data/hora para exibição em português brasileiro
+ * @returns String formatada "DD/MM/YYYY às HH:mm"
  */
-export function formatBrasiliaDateTime(date: Date): { data: string; hora: string; dataISO: string } {
+export function formatBrasiliaDateTime(date: Date): string {
   const formatter = new Intl.DateTimeFormat('pt-BR', {
     timeZone: 'America/Sao_Paulo',
     day: '2-digit',
@@ -34,6 +35,32 @@ export function formatBrasiliaDateTime(date: Date): { data: string; hora: string
   const hour = parts.find(p => p.type === 'hour')?.value || '00';
   const minute = parts.find(p => p.type === 'minute')?.value || '00';
   
+  return `${day}/${month} às ${hour}:${minute}`;
+}
+
+/**
+ * Extrai partes da data formatadas para Brasília
+ */
+export function getBrasiliaDateParts(date?: Date): { data: string; hora: string; dataISO: string } {
+  const d = date || new Date();
+  const formatter = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  
+  const parts = formatter.formatToParts(d);
+  
+  const day = parts.find(p => p.type === 'day')?.value || '01';
+  const month = parts.find(p => p.type === 'month')?.value || '01';
+  const year = parts.find(p => p.type === 'year')?.value || '2024';
+  const hour = parts.find(p => p.type === 'hour')?.value || '00';
+  const minute = parts.find(p => p.type === 'minute')?.value || '00';
+  
   return {
     data: `${day}/${month}/${year}`,
     hora: `${hour}:${minute}`,
@@ -43,11 +70,15 @@ export function formatBrasiliaDateTime(date: Date): { data: string; hora: string
 
 /**
  * Extrai data/hora ISO ajustada para Brasília
+ * @returns Objeto com dateISO e timeString
  */
-export function getBrasiliaISO(date?: Date): string {
+export function getBrasiliaISO(date?: Date): { dateISO: string; timeString: string } {
   const d = date || new Date();
-  const { dataISO } = formatBrasiliaDateTime(d);
-  return dataISO;
+  const result = getBrasiliaDateParts(d);
+  return {
+    dateISO: result.dataISO,
+    timeString: result.hora
+  };
 }
 
 /**

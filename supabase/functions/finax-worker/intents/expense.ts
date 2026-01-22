@@ -15,6 +15,7 @@ import { learnMerchantPattern } from "../memory/patterns.ts";
 import { checkImmediateAlerts } from "../intents/alerts.ts";
 import { getDecisionConfig, recordMetric } from "../governance/config.ts";
 import { categorizeDescription, type CategorizationResult } from "../ai/categorizer.ts";
+import { getBrasiliaDate, getBrasiliaISO, formatBrasiliaDateTime, getPaymentEmoji } from "../utils/date-helpers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -104,8 +105,17 @@ export async function registerExpense(
     console.log(`📍 [EXPENSE] Contexto ativo: ${activeContext.label} (${activeContext.id})`);
   }
   
-  // Registrar transação
-  const now = new Date();
+  // ========================================================================
+  // 🕒 USAR TIMEZONE BRASÍLIA PARA DATA/HORA
+  // ========================================================================
+  // Se o usuário disse "ontem", usar a data passada via slots.transaction_date
+  // Caso contrário, usar a data/hora atual de Brasília
+  // ========================================================================
+  const transactionDate = slots.transaction_date 
+    ? new Date(slots.transaction_date) 
+    : getBrasiliaDate();
+  
+  const { dateISO, timeString } = getBrasiliaISO(transactionDate);
   
   const { data: transaction, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
@@ -113,9 +123,9 @@ export async function registerExpense(
     categoria: category,
     tipo: "saida",
     descricao: slots.description || category,
-    data: now.toISOString(),
-    data_transacao: now.toISOString(),
-    hora_transacao: now.toTimeString().slice(0, 5),
+    data: dateISO,
+    data_transacao: dateISO,
+    hora_transacao: timeString,
     origem: "whatsapp",
     forma_pagamento: slots.payment_method,
     status: "confirmada",
@@ -187,24 +197,16 @@ export async function registerExpense(
     payment_method: slots.payment_method || "unknown"
   });
   
-  // Formatar resposta amigável
-  const formattedDate = now.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-  const formattedTime = now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  
-  const paymentEmojiMap: Record<string, string> = {
-    pix: "📱",
-    debito: "💳",
-    credito: "💳",
-    dinheiro: "💵"
-  };
-  const paymentEmoji = paymentEmojiMap[slots.payment_method || ""] || "💰";
+  // Formatar resposta amigável usando timezone Brasília
+  const formattedDateTime = formatBrasiliaDateTime(transactionDate);
+  const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
   
   const message = `✅ *Gasto registrado!*\n\n` +
     `💸 *-R$ ${slots.amount?.toFixed(2)}*\n` +
     `📂 ${category}\n` +
     (slots.description ? `📝 ${slots.description}\n` : "") +
     `${paymentEmoji} ${slots.payment_method}\n` +
-    `📅 ${formattedDate} às ${formattedTime}\n\n` +
+    `📅 ${formattedDateTime}\n\n` +
     `_Responda "cancelar" se foi engano!_`;
   
   console.log(`✅ [EXPENSE] Registrado: ${transaction.id}`);
