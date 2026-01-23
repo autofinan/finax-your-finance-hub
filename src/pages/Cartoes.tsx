@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useCartoes } from '@/hooks/useCartoes';
 import { useFaturas } from '@/hooks/useFaturas';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,8 +28,9 @@ import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 
 const Cartoes = () => {
-  const { cartoes, loading, addCartao, deleteCartao } = useCartoes();
-  const { faturasEmAberto } = useFaturas();
+  const { user } = useAuth();
+  const { cartoes, loading, addCartao, deleteCartao } = useCartoes(user?.id);
+  const { faturasEmAberto } = useFaturas(user?.id);
   const [formOpen, setFormOpen] = useState(false);
   const [nome, setNome] = useState('');
   const [limiteTotal, setLimiteTotal] = useState('');

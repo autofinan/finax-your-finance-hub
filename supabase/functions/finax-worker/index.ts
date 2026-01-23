@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { classifyDeterministic } from "./decision/classifier.ts";
 import { detectMultipleExpenses, formatExpensesList, calculateTotal } from "./utils/multiple-expenses.ts";
 import { parseRelativeDate, getBrasiliaDate } from "./utils/date-helpers.ts";
-import { queueMessage, shouldQueueMessage, getPendingMessages, markMessageProcessed } from "./utils/message-queue.ts";
+import { queueMessage, markMessageProcessed, countPendingMessages } from "./utils/message-queue.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v5.1 - ARQUITETURA MODULAR COM DECISION ENGINE + ELITE
@@ -3470,17 +3470,14 @@ async function processarJob(job: any): Promise<void> {
         // ========================================================================
         // 📬 PROCESSAR FILA DE MENSAGENS PENDENTES (após registrar gasto)
         // ========================================================================
-        const pendingMessages = await getPendingMessages(userId, 3);
-        if (pendingMessages.length > 0) {
-          console.log(`📬 [QUEUE] ${pendingMessages.length} mensagens pendentes`);
+        const pendingCount = await countPendingMessages(userId);
+        if (pendingCount > 0) {
+          console.log(`📬 [QUEUE] ${pendingCount} mensagens pendentes`);
           await sendMessage(payload.phoneNumber, 
-            `📬 Você tem ${pendingMessages.length} gasto${pendingMessages.length > 1 ? 's' : ''} pendente${pendingMessages.length > 1 ? 's' : ''} que anotei!`,
+            `📬 Você tem ${pendingCount} gasto${pendingCount > 1 ? 's' : ''} pendente${pendingCount > 1 ? 's' : ''} que anotei!`,
             payload.messageSource
           );
-          // Processar a primeira pendente
-          const firstPending = pendingMessages[0];
-          await markMessageProcessed(firstPending.id);
-          // Re-processar (simplificado - apenas notificar)
+          // Mensagens na fila serão processadas automaticamente quando o slot for resolvido
         }
         
         return;

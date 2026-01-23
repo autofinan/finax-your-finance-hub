@@ -107,6 +107,13 @@ export type Database = {
             foreignKeyName: "ai_corrections_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "ai_corrections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -196,6 +203,13 @@ export type Database = {
             foreignKeyName: "alert_feedback_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "alert_feedback_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -256,6 +270,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "bank_connections_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "bank_connections_user_id_fkey"
             columns: ["user_id"]
@@ -324,6 +345,13 @@ export type Database = {
             foreignKeyName: "cancelamentos_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "cancelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -382,6 +410,13 @@ export type Database = {
             foreignKeyName: "cartoes_credito_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "cartoes_credito_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -427,6 +462,13 @@ export type Database = {
           usuario_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "categorias_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "categorias_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -482,6 +524,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "chart_cache_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "chart_cache_user_id_fkey"
             columns: ["user_id"]
@@ -552,6 +601,13 @@ export type Database = {
           valor_pago?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "codigos_ativacao_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "codigos_ativacao_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -644,6 +700,13 @@ export type Database = {
             foreignKeyName: "conversas_ativas_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "conversas_ativas_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -658,6 +721,62 @@ export type Database = {
             foreignKeyName: "conversas_ativas_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
+      conversation_state: {
+        Row: {
+          current_transaction_id: string | null
+          id: string
+          last_message_at: string | null
+          pending_slot: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          current_transaction_id?: string | null
+          id?: string
+          last_message_at?: string | null
+          pending_slot?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          current_transaction_id?: string | null
+          id?: string
+          last_message_at?: string | null
+          pending_slot?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_state_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "conversation_state_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_state_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "conversation_state_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
             referencedRelation: "vw_status_plano"
             referencedColumns: ["usuario_id"]
           },
@@ -771,6 +890,13 @@ export type Database = {
             foreignKeyName: "eventos_brutos_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "eventos_brutos_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -825,6 +951,13 @@ export type Database = {
           valor_total?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "faturas_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "faturas_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -892,6 +1025,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "cartoes_credito"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "faturas_cartao_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
           },
           {
             foreignKeyName: "faturas_cartao_usuario_id_fkey"
@@ -1051,6 +1191,13 @@ export type Database = {
             foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -1121,6 +1268,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "media_analysis"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hipoteses_registro_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
           },
           {
             foreignKeyName: "hipoteses_registro_user_id_fkey"
@@ -1258,6 +1412,13 @@ export type Database = {
             foreignKeyName: "messages_outbox_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "messages_outbox_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -1340,6 +1501,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "vw_active_contexts"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "orcamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
           },
           {
             foreignKeyName: "orcamentos_usuario_id_fkey"
@@ -1436,6 +1604,13 @@ export type Database = {
             foreignKeyName: "parcelamentos_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "parcelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -1463,6 +1638,7 @@ export type Database = {
           message_text: string
           processed: boolean | null
           processed_at: string | null
+          processing: boolean | null
           user_id: string
         }
         Insert: {
@@ -1472,6 +1648,7 @@ export type Database = {
           message_text: string
           processed?: boolean | null
           processed_at?: string | null
+          processing?: boolean | null
           user_id: string
         }
         Update: {
@@ -1481,9 +1658,17 @@ export type Database = {
           message_text?: string
           processed?: boolean | null
           processed_at?: string | null
+          processing?: boolean | null
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "pending_messages_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "pending_messages_user_id_fkey"
             columns: ["user_id"]
@@ -1581,6 +1766,13 @@ export type Database = {
           usuario_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "perfil_cliente_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "perfil_cliente_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -1712,6 +1904,13 @@ export type Database = {
             foreignKeyName: "resumo_mensal_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "resumo_mensal_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -1778,6 +1977,13 @@ export type Database = {
           weekly_checkin_enabled?: boolean | null
         }
         Relationships: [
+          {
+            foreignKeyName: "savings_goals_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "savings_goals_user_id_fkey"
             columns: ["user_id"]
@@ -1879,6 +2085,13 @@ export type Database = {
             foreignKeyName: "shared_reports_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "shared_reports_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -1948,6 +2161,13 @@ export type Database = {
           utility_score?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "spending_alerts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "spending_alerts_user_id_fkey"
             columns: ["user_id"]
@@ -2131,6 +2351,13 @@ export type Database = {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -2194,6 +2421,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "user_contexts_user_id_fkey"
             columns: ["user_id"]
@@ -2274,6 +2508,13 @@ export type Database = {
             foreignKeyName: "user_patterns_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "user_patterns_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -2334,6 +2575,13 @@ export type Database = {
           usuario_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "user_sessions_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "user_sessions_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -2479,6 +2727,20 @@ export type Database = {
       }
     }
     Views: {
+      queue_status: {
+        Row: {
+          current_transaction_id: string | null
+          pending: number | null
+          pending_slot: string | null
+          phone_number: string | null
+          processed_total: number | null
+          processing: number | null
+          state_updated_at: string | null
+          user_id: string | null
+          user_name: string | null
+        }
+        Relationships: []
+      }
       vw_active_contexts: {
         Row: {
           auto_tag: boolean | null
@@ -2526,6 +2788,13 @@ export type Database = {
           user_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "user_contexts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "user_contexts_user_id_fkey"
             columns: ["user_id"]
@@ -2609,6 +2878,13 @@ export type Database = {
             foreignKeyName: "faturas_cartao_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "faturas_cartao_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -2637,6 +2913,13 @@ export type Database = {
           usuario_id: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -2702,6 +2985,13 @@ export type Database = {
             foreignKeyName: "parcelamentos_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "parcelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -2747,6 +3037,13 @@ export type Database = {
           usuario_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "parcelamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "parcelamentos_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -2836,6 +3133,13 @@ export type Database = {
             foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -2869,6 +3173,13 @@ export type Database = {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -2898,6 +3209,13 @@ export type Database = {
           usuario_id: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -3003,6 +3321,13 @@ export type Database = {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -3031,6 +3356,13 @@ export type Database = {
           usuario_id: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
           {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
@@ -3107,6 +3439,13 @@ export type Database = {
             foreignKeyName: "transacoes_usuario_id_fkey"
             columns: ["usuario_id"]
             isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "transacoes_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
             referencedRelation: "usuarios"
             referencedColumns: ["id"]
           },
@@ -3133,6 +3472,7 @@ export type Database = {
         Returns: undefined
       }
       cleanup_expired_sessions: { Args: never; Returns: undefined }
+      cleanup_old_pending_messages: { Args: never; Returns: number }
       feature_permitida: {
         Args: { p_feature: string; p_usuario_id: string }
         Returns: boolean
@@ -3207,6 +3547,10 @@ export type Database = {
       is_service_role: { Args: never; Returns: boolean }
       limpar_conversas_expiradas: { Args: never; Returns: undefined }
       normalize_phone_e164: { Args: { phone: string }; Returns: string }
+      reset_user_conversation_state: {
+        Args: { p_user_id: string }
+        Returns: undefined
+      }
       rpc_criar_parcelamento: {
         Args: {
           p_categoria?: string
