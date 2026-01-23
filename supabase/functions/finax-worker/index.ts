@@ -6,23 +6,24 @@ import { parseRelativeDate, getBrasiliaDate } from "./utils/date-helpers.ts";
 import { queueMessage, markMessageProcessed, countPendingMessages } from "./utils/message-queue.ts";
 
 // ============================================================================
-// 🏭 FINAX WORKER v5.1 - ARQUITETURA MODULAR COM DECISION ENGINE + ELITE
+// 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
 // ============================================================================
 //
-// ARQUITETURA:
-// 1. DECISION ENGINE: Classifica intenção ANTES de qualquer ação
-// 2. CONTEXT MANAGER: Gerencia memória de curto prazo (actions)
-// 3. INTENT HANDLERS: Módulos isolados por domínio (expense, income, card, cancel)
-// 4. UI MESSAGES: Envio padronizado de mensagens
-// 5. SELF-HEALING: Aprendizado com correções do usuário (ELITE)
-// 6. MEMORY LAYER: Memória de longo prazo para padrões (ELITE)
-// 7. PROACTIVE AI: Alertas silenciosos consultados sob demanda (ELITE)
+// NOVA ARQUITETURA (v6.0):
+// 1. FAST-TRACK: Extrai estrutura (números, pagamento) SEM classificar intent
+// 2. IA: Classifica 100% das intenções semânticas (gasto, entrada, recorrente)
+// 3. EXECUTORS: Módulos que APENAS executam ações baseado na IA
+//
+// MUDANÇAS DA v5.x → v6.0:
+// - REMOVIDO: Keywords/heurísticas para classificação (quebrava muito)
+// - REMOVIDO: classifySemanticHeuristic e SEMANTIC_PATTERNS
+// - ADICIONADO: Fast-track estrutural que só extrai slots
+// - MELHORADO: IA agora é fonte única de verdade para intent
 //
 // REGRAS DE OURO:
-// - IA decide intenção, regras validam, fluxos executam
-// - Slot filling NUNCA decide intenção
-// - Contexto ativo é descartado automaticamente ao mudar domínio
-// - Nunca perguntar algo que foi dito explicitamente
+// - IA interpreta linguagem natural (não keywords)
+// - Fast-track apenas acelera extração, não classifica
+// - Código apenas EXECUTA o que a IA decidiu
 // ============================================================================
 
 const corsHeaders = {
@@ -517,13 +518,17 @@ REGRAS:
 }
 
 // ============================================================================
-// 🧠 DECISION ENGINE - ARQUITETURA CORRIGIDA
+// 🧠 DECISION ENGINE v3.0 - IA-FIRST ARCHITECTURE
 // ============================================================================
-// REGRAS DE OURO:
-// 1. Heurística NÃO decide - apenas ESTIMA confiança
-// 2. Se confiança >= 0.90 E slots completos → EXECUTA DIRETO (sem perguntas!)
-// 3. IA é fallback, não muleta
-// 4. Fluxos legados são BLOQUEADOS quando decisão semântica foi tomada
+// NOVA FILOSOFIA:
+// 1. Fast-Track: Extrai estrutura (números, pagamento) SEM classificar intent
+// 2. IA: Classifica 100% das intenções (gasto, entrada, recorrente, consulta)
+// 3. Código: Apenas EXECUTA ações baseado na classificação da IA
+//
+// REGRAS:
+// - Não usar keywords para decidir intent
+// - IA interpreta linguagem natural
+// - Fast-track apenas acelera extração de slots
 // ============================================================================
 
 interface SemanticResult {
@@ -531,566 +536,93 @@ interface SemanticResult {
   confidence: number;
   slots: ExtractedSlots;
   reason: string;
-  canExecuteDirectly: boolean; // NOVO: indica se pode executar sem perguntas
-}
-
-const SEMANTIC_PATTERNS = {
-  // ✏️ EDIT/CORREÇÃO - Prioridade MÁXIMA (antes de tudo)
-  edit: {
-    verbs: ["errado", "errei", "corrigir", "corrige", "corrigi", "era pra ser", "devia ser", "na verdade"],
-    contexts: ["nao foi", "não foi", "foi na verdade", "queria dizer", "me enganei", "errado era", "era debito", "era pix", "era credito", "era dinheiro"],
-    weight: 0.98
-  },
-  // 🚨 QUERY_ALERTS - Alertas proativos (ELITE)
-  query_alerts: {
-    verbs: ["meus alertas", "ver alertas", "alertas", "avisos", "meus avisos"],
-    contexts: ["alertas financeiros", "alertas do finax", "descartar alertas"],
-    weight: 0.96
-  },
-  // 🔄 RECORRENTE - Prioridade ALTA (antes de expense)
-  recurring: {
-    verbs: [],
-    contexts: [
-      "todo mes", "todo mês", "mensal", "mensalmente", 
-      "todo dia", "semanal", "semanalmente", 
-      "anual", "anualmente", "assinatura",
-      "todo começo de mes", "todo começo de mês",
-      "todo fim de mes", "todo fim de mês",
-      "por mes", "por mês", "ao mes", "ao mês",
-      "cada mes", "cada mês", "cobrado mensal",
-      "pago todo", "desconta todo"
-    ],
-    weight: 0.95
-  },
-  // 📍 CONTEXTO TEMPORÁRIO (viagem, evento, obra)
-  set_context: {
-    verbs: [
-      "vou viajar", "viagem para", "fazer uma viagem",
-      "vou fazer uma obra", "comecando obra", "começando obra", 
-      "evento de", "vou para",
-      "entre o dia", "entre dia", "entre os dias",
-      "de hoje ate", "de hoje até", "a partir de",
-      "comecando dia", "começando dia",
-      "do dia", "partir do dia"
-    ],
-    contexts: [
-      "viagem", "férias", "ferias", 
-      "obra", "reforma", "casamento", "evento",
-      "lua de mel", "excursao", "excursão",
-      "congresso", "conferencia", "conferência"
-    ],
-    weight: 0.92
-  },
-  income: {
-    verbs: ["recebi", "recebido", "ganhei", "caiu", "entrou", "entrada de", "me mandaram", "mandaram pra mim", "depositaram", "transferiram"],
-    contexts: ["salario", "salário", "pagamento recebido", "pix recebido"],
-    weight: 0.95
-  },
-  card_event: {
-    verbs: ["limite"],
-    contexts: [],
-    weight: 0.92
-  },
-  expense: {
-    verbs: ["gastei", "comprei", "paguei", "custou"],
-    contexts: [],
-    weight: 0.90
-  },
-  cancel: {
-    verbs: ["cancela", "cancelar", "desfaz", "apaga"],
-    contexts: ["deixa pra la", "esquece", "nao quero"],
-    weight: 0.95
-  },
-  query: {
-    verbs: ["quanto gastei", "resumo", "saldo", "quanto tenho"],
-    contexts: [],
-    weight: 0.92
-  }
-};
-
-function classifySemanticHeuristic(message: string): SemanticResult {
-  const normalized = normalizeText(message);
-  const original = message;
-  
-  // Extrair slots básicos primeiro
-  const slots: ExtractedSlots = {};
-  
-  // 1. EXTRAIR VALOR
-  const valuePatterns = [
-    /r\$\s*([\d.,]+)/i,
-    /([\d.,]+)\s*(?:reais|real)/i,
-    /(?:recebi|gastei|paguei|comprei|caiu|entrada de|limite)\s*([\d.,]+)/i,
-  ];
-  for (const pattern of valuePatterns) {
-    const match = original.match(pattern);
-    if (match) {
-      slots.amount = parseFloat(match[1].replace(",", "."));
-      break;
-    }
-  }
-  // Fallback: qualquer número na mensagem
-  if (!slots.amount) {
-    const numMatch = original.match(/(\d+[.,]?\d*)/);
-    if (numMatch) slots.amount = parseFloat(numMatch[1].replace(",", "."));
-  }
-  
-  // 2. EXTRAIR FONTE/PAGAMENTO
-  if (normalized.includes("pix")) {
-    slots.source = "pix";
-    slots.payment_method = "pix";
-  } else if (normalized.includes("dinheiro")) {
-    slots.source = "dinheiro";
-    slots.payment_method = "dinheiro";
-  } else if (normalized.includes("transferencia") || normalized.includes("transf")) {
-    slots.source = "transferencia";
-  } else if (normalized.includes("debito") || normalized.includes("débito")) {
-    slots.payment_method = "debito";
-  } else if (normalized.includes("credito") || normalized.includes("crédito") || normalized.includes("cartao") || normalized.includes("cartão")) {
-    slots.payment_method = "credito";
-  }
-  
-  // 3. EXTRAIR CARTÃO (para card_event)
-  const banks = ["nubank", "itau", "itaú", "bradesco", "santander", "c6", "inter", "picpay", "next"];
-  for (const bank of banks) {
-    if (normalized.includes(bank)) {
-      slots.card = bank;
-      break;
-    }
-  }
-  if (slots.amount && normalized.includes("limite")) {
-    slots.value = slots.amount;
-  }
-  
-  // 4. EXTRAIR PERIODICIDADE E DIA (para recorrente)
-  if (normalized.includes("todo mes") || normalized.includes("mensal") || normalized.includes("por mes") || normalized.includes("ao mes") || normalized.includes("cada mes")) {
-    slots.periodicity = "monthly";
-  } else if (normalized.includes("semanal") || normalized.includes("por semana")) {
-    slots.periodicity = "weekly";
-  } else if (normalized.includes("anual") || normalized.includes("por ano")) {
-    slots.periodicity = "yearly";
-  }
-  
-  // Extrair dia do mês (ex: "todo dia 10", "dia 5")
-  const dayMatch = original.match(/(?:todo\s*)?dia\s*(\d{1,2})/i);
-  if (dayMatch) {
-    slots.day_of_month = parseInt(dayMatch[1]);
-  }
-  
-  // 5. EXTRAIR DATAS (para set_context) - MELHORADO
-  const datePatterns = [
-    // "de 09/01 até 10/01" ou "de 9/1 a 10/1"
-    /de\s*(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*(?:a|até|ate)\s*(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/i,
-    // "entre o dia 09/01 e 10/01" ou "entre dia 9 e 10"
-    /entre\s*(?:o\s*)?(?:dia\s*)?(\d{1,2}(?:[\/\-]\d{1,2})?(?:[\/\-]\d{2,4})?)\s*(?:e|a|até|ate)\s*(?:dia\s*)?(\d{1,2}(?:[\/\-]\d{1,2})?(?:[\/\-]\d{2,4})?)/i,
-    // "do dia 09 ao 10" 
-    /do\s*dia\s*(\d{1,2}(?:[\/\-]\d{1,2})?)\s*(?:ao?|até|ate)\s*(?:dia\s*)?(\d{1,2}(?:[\/\-]\d{1,2})?)/i,
-    // "de hoje até dia X"
-    /(?:de\s*)?hoje\s*(?:a|até|ate)\s*(?:dia\s*)?(\d{1,2})/i,
-  ];
-  for (const pattern of datePatterns) {
-    const match = original.match(pattern);
-    if (match) {
-      // Normalizar datas (adicionar mês atual se não especificado)
-      const currentMonth = new Date().getMonth() + 1;
-      const currentYear = new Date().getFullYear();
-      
-      let startStr = match[1] || "";
-      let endStr = match[2] || match[1] || "";
-      
-      // Se é só um número (dia), adicionar mês atual
-      if (/^\d{1,2}$/.test(startStr)) {
-        startStr = `${startStr}/${currentMonth}`;
-      }
-      if (/^\d{1,2}$/.test(endStr)) {
-        endStr = `${endStr}/${currentMonth}`;
-      }
-      
-      slots.date_range = { start: startStr, end: endStr };
-      break;
-    }
-  }
-  
-  // 6. EXTRAIR LABEL DO CONTEXTO
-  const contextLabelPatterns = [
-    /viagem\s+(?:para|pra|a)\s+([A-Za-zÀ-ú\s]+?)(?:\s+de|\s+entre|\s+do|\s*$)/i,
-    /vou\s+(?:para|pra|a)\s+([A-Za-zÀ-ú\s]+?)(?:\s+de|\s+entre|\s+do|\s*$)/i,
-    /(?:viagem|evento|obra|reforma)\s+(?:em|no|na)\s+([A-Za-zÀ-ú\s]+)/i,
-  ];
-  for (const pattern of contextLabelPatterns) {
-    const match = original.match(pattern);
-    if (match && match[1]) {
-      slots.label = match[1].trim();
-      break;
-    }
-  }
-  
-  // 7. EXTRAIR DESCRIÇÃO GENÉRICA (para expenses/income não recorrentes)
-  // Exemplo: "gastei 50 no mercado" → description = "mercado"
-  // Exemplo: "recebi 200 do freelance" → description = "freelance"
-  if (!slots.description) {
-    const descPatterns = [
-      /(?:gastei|paguei|comprei)\s+[\d.,]+\s*(?:reais?)?\s*(?:no?|na?|em|de|com)\s+(.+?)(?:\s+(?:no\s+)?(?:pix|debito|credito|dinheiro|cartao)|\s*$)/i,
-      /(?:recebi|caiu|entrou|ganhei)\s+[\d.,]+\s*(?:reais?)?\s*(?:do?|da?|de|com)\s+(.+?)(?:\s*$)/i,
-      /(.+?)\s+[\d.,]+\s*(?:reais?)?(?:\s+(?:pix|debito|credito|dinheiro))?\s*$/i,
-    ];
-    for (const pattern of descPatterns) {
-      const match = original.match(pattern);
-      if (match && match[1]) {
-        const desc = match[1]
-          .replace(/\b(pix|debito|débito|credito|crédito|dinheiro|cartao|cartão|todo|mes|mês)\b/gi, "")
-          .trim();
-        if (desc.length > 1) {
-          slots.description = desc;
-          break;
-        }
-      }
-    }
-  }
-  
-  // ========================================================================
-  // CLASSIFICAÇÃO POR PADRÕES (HEURÍSTICA - NÃO DECISÃO!)
-  // ========================================================================
-  
-  // 🚨 QUERY_ALERTS - Alertas proativos (ELITE)
-  for (const verb of SEMANTIC_PATTERNS.query_alerts.verbs) {
-    if (normalized.includes(verb)) {
-      // Verificar se é descarte
-      const isDismiss = normalized.includes("descartar");
-      return {
-        actionType: "query_alerts" as ActionType,
-        confidence: SEMANTIC_PATTERNS.query_alerts.weight,
-        slots: { dismiss: isDismiss },
-        reason: `Comando de alertas: "${verb}"`,
-        canExecuteDirectly: true
-      };
-    }
-  }
-  
-  // ✏️ EDIT/CORREÇÃO - Prioridade MÁXIMA (antes de qualquer coisa)
-  for (const verb of SEMANTIC_PATTERNS.edit.verbs) {
-    if (normalized.includes(verb)) {
-      // Detectar nova forma de pagamento mencionada
-      let newPaymentMethod: string | undefined;
-      if (normalized.includes("pix")) newPaymentMethod = "pix";
-      else if (normalized.includes("debito") || normalized.includes("débito")) newPaymentMethod = "debito";
-      else if (normalized.includes("credito") || normalized.includes("crédito")) newPaymentMethod = "credito";
-      else if (normalized.includes("dinheiro")) newPaymentMethod = "dinheiro";
-      
-      return {
-        actionType: "edit",
-        confidence: SEMANTIC_PATTERNS.edit.weight,
-        slots: { new_payment_method: newPaymentMethod },
-        reason: `Correção detectada: "${verb}"`,
-        canExecuteDirectly: !!newPaymentMethod // Pode executar direto se mencionou o método correto
-      };
-    }
-  }
-  for (const ctx of SEMANTIC_PATTERNS.edit.contexts) {
-    if (normalized.includes(ctx)) {
-      let newPaymentMethod: string | undefined;
-      if (normalized.includes("pix")) newPaymentMethod = "pix";
-      else if (normalized.includes("debito") || normalized.includes("débito")) newPaymentMethod = "debito";
-      else if (normalized.includes("credito") || normalized.includes("crédito")) newPaymentMethod = "credito";
-      else if (normalized.includes("dinheiro")) newPaymentMethod = "dinheiro";
-      
-      return {
-        actionType: "edit",
-        confidence: SEMANTIC_PATTERNS.edit.weight * 0.95,
-        slots: { new_payment_method: newPaymentMethod },
-        reason: `Contexto de correção: "${ctx}"`,
-        canExecuteDirectly: !!newPaymentMethod
-      };
-    }
-  }
-  
-  // 🔄 RECURRING - Prioridade ALTA (antes de expense)
-  for (const ctx of SEMANTIC_PATTERNS.recurring.contexts) {
-    if (normalized.includes(ctx)) {
-      // EXTRAÇÃO ESPECIAL DE DESCRIÇÃO PARA RECORRENTE
-      // Exemplo: "Netflix todo mês 40 reais" → description = "Netflix"
-      // Exemplo: "Aluguel 1500 todo dia 10" → description = "Aluguel"
-      if (!slots.description) {
-        // Tentar extrair nome do serviço/gasto ANTES do termo de recorrência
-        const recurringTerms = ["todo mes", "todo mês", "mensal", "mensalmente", "todo dia", "semanal", "anual", "assinatura", "por mes", "por mês", "ao mes", "ao mês", "cada mes", "cada mês"];
-        let descMatch: string | null = null;
-        
-        for (const term of recurringTerms) {
-          const termIndex = normalized.indexOf(term);
-          if (termIndex > 0) {
-            // Pegar texto antes do termo
-            const beforeTerm = original.substring(0, termIndex).trim();
-            // Remover valor numérico e palavras de pagamento
-            const cleanDesc = beforeTerm
-              .replace(/r\$\s*[\d.,]+|[\d.,]+\s*reais?/gi, "")
-              .replace(/\b(pix|debito|débito|credito|crédito|dinheiro|cartao|cartão)\b/gi, "")
-              .replace(/[\d.,]+/g, "")
-              .trim();
-            if (cleanDesc.length > 1) {
-              descMatch = cleanDesc;
-              break;
-            }
-          }
-        }
-        
-        // Se não achou antes, tentar achar depois (ex: "todo mês pago Netflix 40")
-        if (!descMatch) {
-          const afterMatch = original.match(/(?:todo\s*m[êe]s|mensal|semanal|anual)\s+(?:pago\s+)?([A-Za-zÀ-ú\s]+?)(?:\s+\d|$)/i);
-          if (afterMatch && afterMatch[1]) {
-            descMatch = afterMatch[1].trim();
-          }
-        }
-        
-        if (descMatch) {
-          slots.description = descMatch;
-        }
-      }
-      
-      const canExecute = !!(slots.amount && slots.description);
-      console.log(`🔄 [HEURISTIC] Recurring detectado: amount=${slots.amount}, description="${slots.description}", canExecute=${canExecute}`);
-      
-      return {
-        actionType: "recurring",
-        confidence: SEMANTIC_PATTERNS.recurring.weight,
-        slots,
-        reason: `Termo de recorrência: "${ctx}"`,
-        canExecuteDirectly: canExecute
-      };
-    }
-  }
-  
-  // 📍 SET_CONTEXT - Viagem/Evento
-  // Detectar menção a datas/períodos junto com palavras de contexto
-  const hasDateRange = !!slots.date_range;
-  const hasContextWord = SEMANTIC_PATTERNS.set_context.contexts.some(ctx => normalized.includes(ctx));
-  
-  // Se tem intervalo de datas E palavra de contexto → é set_context
-  if (hasDateRange && hasContextWord) {
-    if (!slots.label) {
-      // Tentar extrair label das palavras de contexto
-      for (const ctx of SEMANTIC_PATTERNS.set_context.contexts) {
-        if (normalized.includes(ctx)) {
-          slots.label = ctx.charAt(0).toUpperCase() + ctx.slice(1);
-          break;
-        }
-      }
-    }
-    console.log(`📍 [HEURISTIC] set_context detectado com datas: ${JSON.stringify(slots.date_range)}, label="${slots.label}"`);
-    return {
-      actionType: "set_context",
-      confidence: SEMANTIC_PATTERNS.set_context.weight,
-      slots,
-      reason: `Contexto com período: ${slots.label}`,
-      canExecuteDirectly: true // Tem datas = pode criar
-    };
-  }
-  
-  for (const verb of SEMANTIC_PATTERNS.set_context.verbs) {
-    if (normalized.includes(verb)) {
-      return {
-        actionType: "set_context",
-        confidence: SEMANTIC_PATTERNS.set_context.weight,
-        slots,
-        reason: `Criação de contexto: "${verb}"`,
-        canExecuteDirectly: hasDateRange // Pode executar se tem datas
-      };
-    }
-  }
-  
-  for (const ctx of SEMANTIC_PATTERNS.set_context.contexts) {
-    if (normalized.includes(ctx)) {
-      // Verificar se é criação de contexto (vou fazer, vou para, começando, etc)
-      if (normalized.includes("vou") || normalized.includes("comec") || normalized.includes("inicio") || normalized.includes("início") || normalized.includes("fazer") || normalized.includes("entre")) {
-        if (!slots.label) slots.label = ctx.charAt(0).toUpperCase() + ctx.slice(1);
-        return {
-          actionType: "set_context",
-          confidence: SEMANTIC_PATTERNS.set_context.weight * 0.9,
-          slots,
-          reason: `Contexto detectado: "${ctx}"`,
-          canExecuteDirectly: hasDateRange
-        };
-      }
-    }
-  }
-  
-  // 🟢 INCOME - Prioridade ALTA
-  for (const verb of SEMANTIC_PATTERNS.income.verbs) {
-    if (normalized.includes(verb)) {
-      // Verificar se pode executar diretamente (tem amount)
-      const canExecute = !!slots.amount;
-      return {
-        actionType: "income",
-        confidence: SEMANTIC_PATTERNS.income.weight,
-        slots,
-        reason: `Verbo de entrada: "${verb}"`,
-        canExecuteDirectly: canExecute
-      };
-    }
-  }
-  
-  // 🔴 EXPENSE - PRIORIDADE ANTES DE CARD_EVENT (se tem "gastei" é sempre expense)
-  for (const verb of SEMANTIC_PATTERNS.expense.verbs) {
-    if (normalized.includes(verb)) {
-      const canExecute = !!(slots.amount && slots.payment_method);
-      return {
-        actionType: "expense",
-        confidence: SEMANTIC_PATTERNS.expense.weight,
-        slots,
-        reason: `Verbo de gasto: "${verb}" (prioridade sobre limite)`,
-        canExecuteDirectly: canExecute
-      };
-    }
-  }
-  
-  // 🟡 CARD_EVENT - SÓ se NÃO tem verbo de gasto
-  if (normalized.includes("limite") && !normalized.includes("gastei") && !normalized.includes("paguei") && !normalized.includes("comprei")) {
-    const canExecute = !!(slots.card && slots.value);
-    return {
-      actionType: "card_event",
-      confidence: SEMANTIC_PATTERNS.card_event.weight,
-      slots,
-      reason: `Atualização de limite detectada`,
-      canExecuteDirectly: canExecute
-    };
-  }
-  
-  // 🗑️ CANCEL
-  for (const verb of SEMANTIC_PATTERNS.cancel.verbs) {
-    if (normalized.includes(verb)) {
-      return {
-        actionType: "cancel",
-        confidence: SEMANTIC_PATTERNS.cancel.weight,
-        slots,
-        reason: `Cancelamento: "${verb}"`,
-        canExecuteDirectly: true
-      };
-    }
-  }
-  for (const ctx of SEMANTIC_PATTERNS.cancel.contexts) {
-    if (normalized.includes(ctx)) {
-      return {
-        actionType: "cancel",
-        confidence: 0.9,
-        slots,
-        reason: `Contexto de cancelamento: "${ctx}"`,
-        canExecuteDirectly: true
-      };
-    }
-  }
-  
-  // 📊 QUERY
-  for (const verb of SEMANTIC_PATTERNS.query.verbs) {
-    if (normalized.includes(verb)) {
-      return {
-        actionType: "query",
-        confidence: SEMANTIC_PATTERNS.query.weight,
-        slots,
-        reason: `Consulta: "${verb}"`,
-        canExecuteDirectly: true
-      };
-    }
-  }
-  
-  // ❓ UNKNOWN
-  return {
-    actionType: "unknown",
-    confidence: 0.2,
-    slots,
-    reason: "Não classificado por heurística",
-    canExecuteDirectly: false
-  };
+  canExecuteDirectly: boolean;
 }
 
 // ============================================================================
-// 🧠 PROMPT UNIVERSAL FINAX - NÚCLEO COGNITIVO (CONSULTOR FINANCEIRO)
+// 🧠 PROMPT IA-FIRST - CLASSIFICADOR UNIVERSAL DE INTENÇÃO
 // ============================================================================
-const PROMPT_FINAX_UNIVERSAL = `# FINAX - NÚCLEO COGNITIVO FINANCEIRO
+const PROMPT_FINAX_UNIVERSAL = `# FINAX - CLASSIFICADOR INTELIGENTE DE INTENÇÃO FINANCEIRA
 
-Você é Finax, um Consultor Financeiro Conversacional Inteligente.
-Não é um robô de formulários. Você é um analista financeiro pessoal capaz de:
-- Interpretar linguagem natural, gírias e contexto
-- Registrar eventos financeiros
-- Conversar, orientar e analisar situação financeira
-- Manter diálogo fluido MESMO quando dados estão faltando
+Você é o cérebro do Finax, responsável por interpretar QUALQUER mensagem do usuário e classificar a intenção correta. Você entende linguagem natural, gírias, erros de digitação e contexto.
 
-## PRINCÍPIO FUNDAMENTAL (LEI ZERO)
-INTENÇÃO HUMANA VEM ANTES DE QUALQUER EXTRAÇÃO DE DADOS.
-Nunca tente extrair valores antes de entender: "O que o usuário realmente quer fazer agora?"
+## SUA ÚNICA TAREFA
+Analisar a mensagem e retornar um JSON com:
+1. actionType: A intenção do usuário
+2. confidence: Sua certeza (0.0 a 1.0)
+3. slots: Dados extraídos da mensagem
+4. reasoning: Explicação curta
 
-## DOMÍNIOS COGNITIVOS (escolha EXATAMENTE UM)
+## TIPOS DE INTENÇÃO (actionType)
 
-### 1. TRANSACTIONAL (expense, income, recurring)
-Registro financeiro. Extrair dados + registrar.
-- "Gastei 50 no uber" → expense
-- "Netflix todo mês 40" → recurring
-- "Recebi 200" → income
+### expense - Dinheiro SAINDO (gasto pontual)
+Exemplos: "Gastei 50 no uber", "Mercado 180", "50 dentista", "paguei 30 de lanche", "fui no mercado e gastei 200"
+- Palavras-chave: gastei, paguei, comprei, custou, foi, passei
 
-### 2. QUERY
-Consulta de dados: resumo, saldo, gastos por período.
-- "Quanto gastei?" → query
-- "Me mostra meus recorrentes" → query
-- "Qual meu saldo?" → query
+### income - Dinheiro ENTRANDO
+Exemplos: "Recebi 1500", "Caiu 200 de freela", "Entrou salário", "Ganhei 50"
+- Palavras-chave: recebi, caiu, entrou, ganhei, mandaram, depositaram
 
-### 3. CHAT (PRIORIDADE QUANDO NÃO FOR OPERACIONAL)
-Conversa financeira, dúvidas, análises, conselhos, reflexões sobre dinheiro.
-- "Tô gastando demais?" → chat
-- "Como economizar?" → chat  
-- "Vale a pena parcelar?" → chat
-- "O que acha das minhas finanças?" → chat
-- "Tenho dinheiro pra fazer X?" → chat
-- Qualquer pergunta reflexiva sobre dinheiro → chat
-- Comentários sobre situação financeira → chat
+### recurring - Gasto que se REPETE (assinatura/conta fixa)
+PRIORIDADE SOBRE expense se mencionar periodicidade!
+Exemplos: "Netflix 40 todo mês", "Academia 99 mensal", "Spotify 20 por mês", "Aluguel 1500 dia 10"
+- Palavras-chave: todo mês, mensal, semanal, assinatura, por mês, todo dia X
 
-### 4. CONTROL
-Edição/cancelamento: "cancela", "apaga", "muda", "deixa pra lá"
+### query - Consultar informações
+Exemplos: "Quanto gastei esse mês?", "Meu resumo", "Como tô de saldo?", "Gastos de janeiro"
+- Palavras-chave: quanto, resumo, saldo, total, mostrar, listar
 
-### 5. CARD_EVENT
-Atualização de cartão: limite, fatura.
+### cancel - Cancelar/desfazer ação
+Exemplos: "Cancela", "Deixa pra lá", "Esquece", "Apaga isso"
+- Palavras-chave: cancela, desfaz, apaga, esquece, não quero
 
-### 6. SET_CONTEXT
-Período especial: viagem, obra, evento temporário com datas.
+### chat - Conversa/dúvida/conselho financeiro
+Exemplos: "Tô gastando muito?", "Vale a pena parcelar?", "Como economizar?", "O que você acha?"
+- Qualquer pergunta reflexiva sobre finanças
+- NUNCA retorne "unknown" para perguntas - use "chat"
 
-## REGRAS DE CLASSIFICAÇÃO
+### card_event - Atualização de cartão/limite
+Exemplos: "Limite do Nubank 5000", "Atualiza limite Itaú pra 3000"
+- Palavras-chave: limite + nome de banco
 
-### RECURRING (Prioridade Máxima para gastos)
-SE a mensagem menciona periodicidade → É RECURRING, nunca expense!
-- "Netflix todo mês 40" → recurring (amount=40, description="Netflix", periodicity="monthly")
-- "Academia 99 mensal" → recurring (amount=99, description="Academia", periodicity="monthly")
+### set_context - Período especial (viagem, evento)
+Exemplos: "Vou viajar de 10/01 até 15/01", "Começando reforma"
+- Requer datas ou período
 
-### CHAT (Prioridade para perguntas reflexivas)
-SE a mensagem é uma PERGUNTA sobre finanças SEM dados concretos → chat
-SE a mensagem pede OPINIÃO, ANÁLISE ou CONSELHO → chat
-SE não é registro, consulta de dados nem cancelamento → chat
+### control - Saudações simples
+Exemplos: "Oi", "Bom dia", "Ajuda"
 
-NUNCA retorne "unknown" para perguntas sobre dinheiro. Use "chat".
+### edit - Correção de registro anterior
+Exemplos: "Era pix, não débito", "Corrige pra crédito", "Errei, era 50 não 30"
+- Palavras-chave: era, errei, corrige, na verdade
 
-### INCOME
-SE dinheiro está ENTRANDO → income
-- "Recebi 200" → income
+### unknown - ÚLTIMO RECURSO (evite usar!)
+Só use quando realmente não conseguir classificar.
 
-### EXPENSE (Somente quando NÃO é recurring)
-- "Gastei 50 no uber" → expense
-
-## NOMES DOS SLOTS (USE EXATAMENTE ESTES)
-- amount: number (valor em reais)
-- description: string (nome do serviço/produto)
+## SLOTS (extraia quando presentes)
+- amount: número (valor em reais)
+- description: texto (o que foi comprado/recebido)
 - payment_method: "pix" | "debito" | "credito" | "dinheiro"
-- source: "pix" | "dinheiro" | "transferencia"
-- periodicity: "monthly" | "weekly" | "yearly"
-- day_of_month: number (1-31)
-- label: string (nome do evento/viagem)
-- start_date: "DD/MM"
-- end_date: "DD/MM"
-- card: string (nome do banco)
-- value: number (valor do limite)
+- source: "pix" | "dinheiro" | "transferencia" (para income)
+- periodicity: "monthly" | "weekly" | "yearly" (para recurring)
+- card: nome do banco (nubank, itau, etc)
 
-## RESPOSTA
-Responda APENAS JSON válido:
+## EXEMPLOS DE CLASSIFICAÇÃO
+
+"dentista 360" → expense, amount=360, description="Dentista"
+"recebi 200 do freela" → income, amount=200, description="Freela"
+"Netflix todo mês 40" → recurring, amount=40, description="Netflix", periodicity="monthly"
+"quanto gastei essa semana?" → query
+"cancela" → cancel
+"posso gastar 500 em roupa?" → chat (é pergunta reflexiva!)
+"50" (número isolado) → unknown, amount=50 (precisa perguntar se é gasto ou entrada)
+
+## RESPOSTA (JSON OBRIGATÓRIO)
 {
-  "actionType": "recurring|set_context|income|expense|card_event|cancel|query|chat|control|unknown",
+  "actionType": "expense|income|recurring|query|cancel|chat|card_event|set_context|control|edit|unknown",
   "confidence": 0.0-1.0,
-  "slots": { ... },
-  "shouldExecute": true|false,
-  "reasoning": "explicação curta"
+  "slots": { "amount": 50, "description": "Mercado" },
+  "reasoning": "Usuário mencionou valor e local, padrão de gasto"
 }`;
 
 // ============================================================================
@@ -1287,8 +819,9 @@ async function decisionEngine(
   payloadType?: string  // NOVO: tipo do payload (text, interactive, audio, image)
 ): Promise<{ result: SemanticResult; shouldBlockLegacyFlow: boolean }> {
   
-  console.log(`\n🧠 [DECISION ENGINE v2.0 - IA PRIMEIRO] ━━━━━━━━━━━━━━━━`);
+  console.log(`\n🧠 [DECISION ENGINE v6.0 - IA-FIRST] ━━━━━━━━━━━━━━━━`);
   console.log(`📩 Mensagem: "${message.slice(0, 60)}..." | Tipo: ${payloadType || 'unknown'}`);
+  console.log(`📋 Arquitetura: Fast-Track → IA → Execução (sem keywords)`)
   
   // ========================================================================
   // PRIORIDADE ABSOLUTA: NÚMERO ISOLADO → NUNCA chamar IA, perguntar direto
@@ -1441,31 +974,19 @@ async function decisionEngine(
   }
   
   // ========================================================================
-  // FALLBACK: IA incerta → usar heurística para ajudar
+  // IA INCERTA → Usar resultado da IA mesmo assim (sem fallback de keywords)
+  // A IA é a fonte única de verdade para classificação
   // ========================================================================
-  console.log(`⚠️ [IA] Confiança baixa, usando heurística como fallback...`);
+  console.log(`⚠️ [IA] Confiança baixa (${(aiResult.confidence * 100).toFixed(0)}%) → usando resultado da IA mesmo assim`);
   
-  const heuristic = classifySemanticHeuristic(message);
-  console.log(`🏷️ [HEURÍSTICA] ${heuristic.actionType} | Conf: ${(heuristic.confidence * 100).toFixed(0)}%`);
-  
-  // Escolher o melhor resultado entre IA e heurística
-  const bestResult = heuristic.confidence > aiResult.confidence ? heuristic : aiResult;
-  
-  // Mesclar slots: IA tem prioridade sobre heurística
-  const mergedSlots = { ...heuristic.slots, ...aiResult.slots };
-  const mergedMissing = getMissingSlots(bestResult.actionType, mergedSlots);
-  
-  console.log(`🔀 [MERGE] Tipo: ${bestResult.actionType} | Slots: ${JSON.stringify(mergedSlots)} | Faltam: ${mergedMissing.join(", ") || "nenhum"}`);
+  const missing = getMissingSlots(aiResult.actionType, aiResult.slots);
   
   return {
     result: {
-      actionType: bestResult.actionType,
-      confidence: Math.max(aiResult.confidence, heuristic.confidence),
-      slots: mergedSlots,
-      reason: `IA + Heurística: ${bestResult.reason}`,
-      canExecuteDirectly: mergedMissing.length === 0
+      ...aiResult,
+      canExecuteDirectly: missing.length === 0
     },
-    shouldBlockLegacyFlow: bestResult.confidence >= 0.70
+    shouldBlockLegacyFlow: aiResult.confidence >= 0.5
   };
 }
 
