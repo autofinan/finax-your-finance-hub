@@ -1,5 +1,6 @@
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useParcelamentos } from '@/hooks/useParcelamentos';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -26,7 +27,8 @@ import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 
 const Parcelamentos = () => {
-  const { parcelamentos, parcelasAbertas, loading, addParcelamento, deleteParcelamento } = useParcelamentos();
+  const { user } = useAuth();
+  const { parcelamentos, parcelasAbertas, loading, addParcelamento, deleteParcelamento } = useParcelamentos(user?.id);
   const [formOpen, setFormOpen] = useState(false);
   const [descricao, setDescricao] = useState('');
   const [valorTotal, setValorTotal] = useState('');

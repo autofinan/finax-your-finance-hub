@@ -3,6 +3,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { TransactionList } from '@/components/transacoes/TransactionList';
 import { TransactionForm } from '@/components/transacoes/TransactionForm';
 import { useTransacoes } from '@/hooks/useTransacoes';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -17,7 +18,8 @@ import { CATEGORIAS } from '@/types/finance';
 import { motion } from 'framer-motion';
 
 const Transacoes = () => {
-  const { transacoes, loading, addTransacao, deleteTransacao } = useTransacoes();
+  const { user } = useAuth();
+  const { transacoes, loading, addTransacao, deleteTransacao } = useTransacoes(user?.id);
   const [formOpen, setFormOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [filterCategoria, setFilterCategoria] = useState<string>('all');
