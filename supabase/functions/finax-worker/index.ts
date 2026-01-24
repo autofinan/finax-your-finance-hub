@@ -50,7 +50,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -131,6 +131,7 @@ const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[]
   set_context: { required: ["label", "start_date", "end_date"], optional: ["description"] },
   chat: { required: [], optional: [] },
   edit: { required: [], optional: ["transaction_id", "field", "new_value"] }, // Edição/correção rápida
+  goal: { required: ["amount", "description"], optional: ["deadline", "category"] }, // Metas de poupança
   unknown: { required: [], optional: [] },
 };
 
@@ -568,12 +569,22 @@ PRIORIDADE SOBRE expense se mencionar periodicidade!
 Exemplos: "Netflix 40 todo mês", "Academia 99 mensal", "Spotify 20 por mês", "Aluguel 1500 dia 10"
 - Palavras-chave: todo mês, mensal, semanal, assinatura, por mês, todo dia X
 
+### goal - Meta de poupança/economia
+USAR QUANDO mencionar criar meta, guardar dinheiro, juntar, economizar, poupar para algo!
+Exemplos: "Criar meta de 15000 para viagem", "Quero juntar 5000 pra carro", "Guardar para emergência", "Meta de 3000 até dezembro"
+- Palavras-chave: meta, juntar, guardar, economizar, poupar, objetivo + valor
+- NÃO confundir com set_context (viagem) - se tem valor de objetivo, é GOAL!
+
 ### query - Consultar informações
-Exemplos: "Quanto gastei esse mês?", "Meu resumo", "Como tô de saldo?", "Gastos de janeiro"
+Exemplos: "Quanto gastei esse mês?", "Meu resumo", "Como tô de saldo?", "Gastos de janeiro", "Quanto recebi?", "Minhas entradas"
 - Palavras-chave: quanto, resumo, saldo, total, mostrar, listar
 
+### query_alerts - Consultar alertas
+Exemplos: "Meus alertas", "Tem algum aviso?", "Alertas"
+- Palavras-chave: alerta, aviso, notificação
+
 ### cancel - Cancelar/desfazer ação
-Exemplos: "Cancela", "Deixa pra lá", "Esquece", "Apaga isso"
+Exemplos: "Cancela", "Deixa pra lá", "Esquece", "Apaga isso", "Cancela minha assinatura do Spotify"
 - Palavras-chave: cancela, desfaz, apaga, esquece, não quero
 
 ### chat - Conversa/dúvida/conselho financeiro
@@ -585,9 +596,9 @@ Exemplos: "Tô gastando muito?", "Vale a pena parcelar?", "Como economizar?", "O
 Exemplos: "Limite do Nubank 5000", "Atualiza limite Itaú pra 3000"
 - Palavras-chave: limite + nome de banco
 
-### set_context - Período especial (viagem, evento)
+### set_context - Período especial (viagem, evento) SEM valor de objetivo
 Exemplos: "Vou viajar de 10/01 até 15/01", "Começando reforma"
-- Requer datas ou período
+- Requer datas ou período, NÃO confundir com goal
 
 ### control - Saudações simples
 Exemplos: "Oi", "Bom dia", "Ajuda"
@@ -601,11 +612,12 @@ Só use quando realmente não conseguir classificar.
 
 ## SLOTS (extraia quando presentes)
 - amount: número (valor em reais)
-- description: texto (o que foi comprado/recebido)
+- description: texto (o que foi comprado/recebido/meta)
 - payment_method: "pix" | "debito" | "credito" | "dinheiro"
 - source: "pix" | "dinheiro" | "transferencia" (para income)
 - periodicity: "monthly" | "weekly" | "yearly" (para recurring)
 - card: nome do banco (nubank, itau, etc)
+- deadline: data limite (para goal)
 
 ## EXEMPLOS DE CLASSIFICAÇÃO
 
@@ -613,13 +625,18 @@ Só use quando realmente não conseguir classificar.
 "recebi 200 do freela" → income, amount=200, description="Freela"
 "Netflix todo mês 40" → recurring, amount=40, description="Netflix", periodicity="monthly"
 "quanto gastei essa semana?" → query
+"quanto recebi?" → query (inclui entradas!)
+"meus alertas" → query_alerts
+"criar meta de 15000 para viagem europa" → goal, amount=15000, description="Viagem Europa"
+"quero juntar 3000 pro carro" → goal, amount=3000, description="Carro"
 "cancela" → cancel
+"cancela meu spotify" → cancel (cancelar recorrente!)
 "posso gastar 500 em roupa?" → chat (é pergunta reflexiva!)
 "50" (número isolado) → unknown, amount=50 (precisa perguntar se é gasto ou entrada)
 
 ## RESPOSTA (JSON OBRIGATÓRIO)
 {
-  "actionType": "expense|income|recurring|query|cancel|chat|card_event|set_context|control|edit|unknown",
+  "actionType": "expense|income|recurring|goal|query|query_alerts|cancel|chat|card_event|set_context|control|edit|unknown",
   "confidence": 0.0-1.0,
   "slots": { "amount": 50, "description": "Mercado" },
   "reasoning": "Usuário mencionou valor e local, padrão de gasto"
@@ -822,6 +839,55 @@ async function decisionEngine(
   console.log(`\n🧠 [DECISION ENGINE v6.0 - IA-FIRST] ━━━━━━━━━━━━━━━━`);
   console.log(`📩 Mensagem: "${message.slice(0, 60)}..." | Tipo: ${payloadType || 'unknown'}`);
   console.log(`📋 Arquitetura: Fast-Track → IA → Execução (sem keywords)`)
+  
+  // ========================================================================
+  // 🔢 PRIORIDADE MÁXIMA: SELEÇÃO NUMÉRICA (quando há pending_slot = "selection")
+  // ========================================================================
+  // CORREÇÃO CRÍTICA: Antes de interpretar como valor monetário, verificar se
+  // o usuário está respondendo a uma lista de seleção (ex: "Qual cancelar? 1-6")
+  // ========================================================================
+  if (activeAction && activeAction.pending_slot === "selection" && isNumericOnly(message)) {
+    const index = parseInt(message.trim()) - 1; // Usuário escolhe 1-based
+    const options = activeAction.slots.options as string[];
+    
+    console.log(`🔢 [SELEÇÃO] Número "${message}" detectado com pending_slot=selection`);
+    console.log(`🔢 [SELEÇÃO] Options disponíveis: ${options?.length || 0}, índice: ${index}`);
+    
+    if (options && index >= 0 && index < options.length) {
+      const selectedId = options[index];
+      console.log(`✅ [SELEÇÃO] Selecionado item ${index + 1}: ${selectedId}`);
+      
+      // Retornar com informação para processamento posterior
+      return {
+        result: {
+          actionType: "cancel" as ActionType, // Será refinado no processamento
+          confidence: 0.99,
+          slots: { 
+            ...activeAction.slots,
+            selected_id: selectedId,
+            selection_index: index,
+            selection_intent: activeAction.intent
+          },
+          reason: `Seleção numérica: item ${index + 1}`,
+          canExecuteDirectly: true
+        },
+        shouldBlockLegacyFlow: true
+      };
+    } else {
+      // Índice inválido
+      console.log(`❌ [SELEÇÃO] Índice inválido: ${index + 1} (opções: 1-${options?.length || 0})`);
+      return {
+        result: {
+          actionType: "unknown" as ActionType,
+          confidence: 0.3,
+          slots: { error: "invalid_selection", message: `Escolhe um número de 1 a ${options?.length || 0}` },
+          reason: "Seleção inválida",
+          canExecuteDirectly: false
+        },
+        shouldBlockLegacyFlow: true
+      };
+    }
+  }
   
   // ========================================================================
   // PRIORIDADE ABSOLUTA: NÚMERO ISOLADO → NUNCA chamar IA, perguntar direto
@@ -1326,7 +1392,48 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   }
   
   const formaPagamento = slots.payment_method || "outro";
-  const cardId = slots.card_id || null;
+  
+  // ========================================================================
+  // 💳 CORREÇÃO CRÍTICA: BUSCAR CARTÃO POR NOME E OBTER ID
+  // ========================================================================
+  let cardId = slots.card_id || null;
+  let cardName = slots.card || null;
+  
+  // Se é crédito e temos nome do cartão mas não ID, buscar ID
+  if (formaPagamento === "credito" && cardName && !cardId) {
+    console.log(`💳 [EXPENSE] Buscando cartão por nome: "${cardName}"`);
+    
+    const { data: foundCard } = await supabase
+      .from("cartoes_credito")
+      .select("id, nome, limite_disponivel")
+      .eq("usuario_id", userId)
+      .eq("ativo", true)
+      .ilike("nome", `%${cardName}%`)
+      .limit(1)
+      .single();
+    
+    if (foundCard) {
+      cardId = foundCard.id;
+      cardName = foundCard.nome;
+      console.log(`💳 [EXPENSE] Cartão encontrado: ${cardName} (${cardId})`);
+    } else {
+      console.log(`💳 [EXPENSE] Cartão "${cardName}" não encontrado, buscando primeiro cartão ativo...`);
+      // Fallback: usar primeiro cartão ativo
+      const { data: firstCard } = await supabase
+        .from("cartoes_credito")
+        .select("id, nome, limite_disponivel")
+        .eq("usuario_id", userId)
+        .eq("ativo", true)
+        .limit(1)
+        .single();
+      
+      if (firstCard) {
+        cardId = firstCard.id;
+        cardName = firstCard.nome;
+        console.log(`💳 [EXPENSE] Usando cartão padrão: ${cardName} (${cardId})`);
+      }
+    }
+  }
   
   const agora = new Date();
   const { data: tx, error } = await supabase.from("transacoes").insert({
@@ -1338,7 +1445,7 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
     data: agora.toISOString(),
     origem: "whatsapp",
     forma_pagamento: formaPagamento,
-    cartao_id: cardId,
+    cartao_id: cardId,  // Agora sempre será UUID válido ou null
     status: "confirmada"
   }).select("id").single();
   
@@ -1347,7 +1454,9 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
     return { success: false, message: "Algo deu errado 😕\nTenta de novo?" };
   }
   
+  // ========================================================================
   // 💳 ATUALIZAR LIMITE DO CARTÃO SE FOR CRÉDITO
+  // ========================================================================
   let cardInfo = "";
   if (formaPagamento === "credito" && cardId) {
     const { data: card } = await supabase
@@ -1365,10 +1474,10 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
         .eq("id", cardId);
       
       console.log(`💳 [CARD] Limite atualizado: ${card.limite_disponivel} → ${novoLimite}`);
-      cardInfo = `\n💳 ${card.nome || slots.card} (disponível: R$ ${novoLimite.toFixed(2)})`;
+      cardInfo = `\n💳 ${card.nome || cardName} (disponível: R$ ${novoLimite.toFixed(2)})`;
     }
-  } else if (slots.card) {
-    cardInfo = `\n💳 ${slots.card}`;
+  } else if (cardName) {
+    cardInfo = `\n💳 ${cardName}`;
   }
   
   // 📍 INTERCEPTADOR: Vincular a contexto ativo (viagem/evento)
@@ -1388,6 +1497,16 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   // ========================================================================
   const budgetAlert = await checkBudgetAfterExpense(userId, categoria, valor);
   
+  // ========================================================================
+  // 📬 PROCESSAR PRÓXIMA MENSAGEM DA FILA (SE HOUVER)
+  // ========================================================================
+  const pendingCount = await countPendingMessages(userId);
+  let queueInfo = "";
+  if (pendingCount > 0) {
+    queueInfo = `\n\n📬 _Você tem ${pendingCount} gasto(s) pendente(s) que anotei!_`;
+    console.log(`📬 [QUEUE] ${pendingCount} mensagem(ns) pendente(s) para ${userId}`);
+  }
+  
   const dataFormatada = agora.toLocaleDateString("pt-BR");
   const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
   
@@ -1398,6 +1517,10 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   
   if (budgetAlert) {
     message += `\n\n${budgetAlert}`;
+  }
+  
+  if (queueInfo) {
+    message += queueInfo;
   }
   
   return {
@@ -3133,6 +3256,60 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
+    // 🎯 GOAL - Metas de Poupança (savings_goals)
+    // ========================================================================
+    if (decision.actionType === "goal") {
+      const slots = decision.slots;
+      console.log(`🎯 [GOAL] Processando meta: ${JSON.stringify(slots)}`);
+      
+      // Importar funções de goals
+      const { createGoal, listGoals, addToGoal } = await import("./intents/goals.ts");
+      
+      const normalized = normalizeText(conteudoProcessado);
+      
+      // Listar metas
+      if (normalized.includes("minhas metas") || normalized.includes("ver metas") || 
+          (normalized.includes("meta") && !slots.amount)) {
+        const result = await listGoals(userId);
+        await sendMessage(payload.phoneNumber, result, payload.messageSource);
+        return;
+      }
+      
+      // Adicionar à meta existente
+      if (normalized.includes("adiciona") || normalized.includes("guardar") || normalized.includes("deposita")) {
+        if (slots.amount && slots.description) {
+          const result = await addToGoal(userId, slots.description, slots.amount);
+          await sendMessage(payload.phoneNumber, result, payload.messageSource);
+          return;
+        }
+      }
+      
+      // Criar nova meta
+      if (slots.amount && slots.description) {
+        const result = await createGoal({
+          userId,
+          name: slots.description,
+          targetAmount: slots.amount,
+          deadline: slots.deadline ? new Date(slots.deadline) : undefined,
+          category: slots.category
+        });
+        await sendMessage(payload.phoneNumber, result, payload.messageSource);
+        return;
+      }
+      
+      // Falta informação
+      if (!slots.amount) {
+        await sendMessage(payload.phoneNumber, "🎯 Qual o valor da meta?", payload.messageSource);
+        return;
+      }
+      if (!slots.description) {
+        await sendMessage(payload.phoneNumber, "🎯 Qual o nome da meta? (ex: Viagem, Carro, Emergência...)", payload.messageSource);
+        return;
+      }
+      
+      return;
+    
+    // ========================================================================
     // 📍 SET_CONTEXT - Viagens/Eventos
     // ========================================================================
     if (decision.actionType === "set_context") {
@@ -3152,9 +3329,49 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
-    // 🗑️ CANCEL - BUSCA INTELIGENTE DE RECORRENTES
+    // 🗑️ CANCEL - BUSCA INTELIGENTE DE RECORRENTES + HANDLER DE SELEÇÃO
     if (decision.actionType === "cancel") {
       const normalized = normalizeText(conteudoProcessado);
+      
+      // ========================================================================
+      // 🔢 HANDLER DE SELEÇÃO NUMÉRICA (veio do decision engine)
+      // ========================================================================
+      if (decision.slots.selected_id && decision.slots.selection_intent) {
+        const selectedId = decision.slots.selected_id as string;
+        const selectionIntent = decision.slots.selection_intent as string;
+        
+        console.log(`🔢 [CANCEL] Processando seleção: intent=${selectionIntent}, id=${selectedId}`);
+        
+        // Fechar action de seleção
+        if (activeAction) {
+          await closeAction(activeAction.id);
+        }
+        
+        // Executar baseado no intent
+        if (selectionIntent === "cancel_recurring") {
+          const result = await cancelRecurring(userId, selectedId);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+        
+        if (selectionIntent === "cancel" || selectionIntent === "cancel_transaction") {
+          const result = await cancelTransaction(userId, selectedId);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+        
+        // Fallback para outros tipos
+        await sendMessage(payload.phoneNumber, "Ação processada! ✅", payload.messageSource);
+        return;
+      }
+      
+      // ========================================================================
+      // 🔢 HANDLER DE SELEÇÃO INVÁLIDA
+      // ========================================================================
+      if (decision.slots.error === "invalid_selection") {
+        await sendMessage(payload.phoneNumber, decision.slots.message as string || "Escolha inválida 🤔", payload.messageSource);
+        return;
+      }
       
       // Detectar se é cancelamento de recorrente
       const isRecurringCancel = normalized.includes("cancela") && 
@@ -3199,6 +3416,8 @@ async function processarJob(job: any): Promise<void> {
             return;
           }
           const lista = txs.map((t, i) => `${i + 1}. R$ ${t.valor?.toFixed(2)} - ${t.descricao || t.categoria}`).join("\n");
+          await createAction(userId, "cancel_transaction", "cancel", 
+            { options: txs.map(t => t.id) }, "selection", payload.messageId);
           await sendMessage(payload.phoneNumber, `Qual transação cancelar?\n\n${lista}\n\n_Responde com o número_`, payload.messageSource);
           return;
         }
@@ -3235,6 +3454,8 @@ async function processarJob(job: any): Promise<void> {
       }
       
       const lista = txs.map((t, i) => `${i + 1}. R$ ${t.valor?.toFixed(2)} - ${t.descricao || t.categoria}`).join("\n");
+      await createAction(userId, "cancel_transaction", "cancel", 
+        { options: txs.map(t => t.id) }, "selection", payload.messageId);
       await sendMessage(payload.phoneNumber, `Qual transação cancelar?\n\n${lista}\n\n_Responde com o número_`, payload.messageSource);
       return;
     }
@@ -3242,6 +3463,99 @@ async function processarJob(job: any): Promise<void> {
     // 📊 QUERY - COM QUERIES ANALÍTICAS
     if (decision.actionType === "query") {
       const normalized = normalizeText(conteudoProcessado);
+      
+      // ========================================================================
+      // 💰 QUERY DE ENTRADAS (RECEBI) - PRIORIDADE MÁXIMA
+      // ========================================================================
+      if (normalized.includes("recebi") || normalized.includes("entrada") || 
+          normalized.includes("entrou") || normalized.includes("renda") ||
+          normalized.includes("quanto ganhei") || normalized.includes("minhas entradas")) {
+        console.log(`📊 [QUERY] Query de ENTRADAS detectada`);
+        
+        const inicioMes = new Date();
+        inicioMes.setDate(1);
+        inicioMes.setHours(0, 0, 0, 0);
+        
+        const { data: entradas } = await supabase
+          .from("transacoes")
+          .select("valor, descricao, data, forma_pagamento")
+          .eq("usuario_id", userId)
+          .eq("tipo", "entrada")
+          .gte("data", inicioMes.toISOString())
+          .eq("status", "confirmada")
+          .order("data", { ascending: false });
+        
+        if (!entradas?.length) {
+          await sendMessage(payload.phoneNumber, "💰 Nenhuma entrada registrada este mês.\n\n_Manda \"recebi 1500\" pra registrar!_", payload.messageSource);
+          return;
+        }
+        
+        const total = entradas.reduce((sum, e) => sum + Number(e.valor), 0);
+        const lista = entradas.slice(0, 10).map(e => {
+          const dataStr = new Date(e.data).toLocaleDateString("pt-BR");
+          return `💰 R$ ${Number(e.valor).toFixed(2)} - ${e.descricao || "Entrada"} (${dataStr})`;
+        }).join("\n");
+        
+        await sendMessage(payload.phoneNumber, 
+          `💰 *Entradas do Mês*\n\n${lista}\n\n✅ *Total: R$ ${total.toFixed(2)}*`,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ========================================================================
+      // 💳 QUERY POR CARTÃO ESPECÍFICO
+      // ========================================================================
+      const cardMatch = normalized.match(/(?:gastei|quanto)\s+(?:no|na|do|da)\s+(\w+)/);
+      if (cardMatch) {
+        const cardName = cardMatch[1];
+        console.log(`📊 [QUERY] Query de gastos no cartão: "${cardName}"`);
+        
+        // Buscar cartão pelo nome
+        const { data: card } = await supabase
+          .from("cartoes_credito")
+          .select("id, nome, limite_disponivel, limite_total")
+          .eq("usuario_id", userId)
+          .ilike("nome", `%${cardName}%`)
+          .limit(1)
+          .single();
+        
+        if (card) {
+          const inicioMes = new Date();
+          inicioMes.setDate(1);
+          inicioMes.setHours(0, 0, 0, 0);
+          
+          const { data: gastos } = await supabase
+            .from("transacoes")
+            .select("valor, descricao, data")
+            .eq("usuario_id", userId)
+            .eq("cartao_id", card.id)
+            .eq("tipo", "saida")
+            .gte("data", inicioMes.toISOString())
+            .eq("status", "confirmada")
+            .order("data", { ascending: false });
+          
+          if (!gastos?.length) {
+            await sendMessage(payload.phoneNumber, 
+              `💳 *${card.nome}*\n\nNenhum gasto este mês.\n\n🟢 Disponível: R$ ${card.limite_disponivel?.toFixed(2) || "0.00"}`,
+              payload.messageSource
+            );
+            return;
+          }
+          
+          const total = gastos.reduce((sum, g) => sum + Number(g.valor), 0);
+          const lista = gastos.slice(0, 8).map(g => {
+            const dataStr = new Date(g.data).toLocaleDateString("pt-BR");
+            return `💸 R$ ${Number(g.valor).toFixed(2)} - ${g.descricao || "Gasto"} (${dataStr})`;
+          }).join("\n");
+          
+          await sendMessage(payload.phoneNumber, 
+            `💳 *Gastos no ${card.nome}*\n\n${lista}\n\n💸 Total: R$ ${total.toFixed(2)}\n🟢 Disponível: R$ ${card.limite_disponivel?.toFixed(2) || "0.00"}`,
+            payload.messageSource
+          );
+          return;
+        }
+      }
       
       // ========================================================================
       // 📊 GASTOS POR CATEGORIA - Handler específico
