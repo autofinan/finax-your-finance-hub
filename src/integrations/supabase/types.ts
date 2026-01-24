@@ -3467,6 +3467,10 @@ export type Database = {
       }
     }
     Functions: {
+      atualizar_limite_cartao: {
+        Args: { p_cartao_id: string; p_operacao: string; p_valor: number }
+        Returns: undefined
+      }
       atualizar_resumo_mensal: {
         Args: { p_usuario: string }
         Returns: undefined
