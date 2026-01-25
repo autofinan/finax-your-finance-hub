@@ -631,6 +631,77 @@ export type Database = {
           },
         ]
       }
+      contas_pagar: {
+        Row: {
+          ativa: boolean | null
+          created_at: string | null
+          dia_vencimento: number | null
+          id: string
+          lembrar_dias_antes: number | null
+          nome: string
+          tipo: string
+          ultimo_lembrete: string | null
+          updated_at: string | null
+          usuario_id: string
+          valor_estimado: number | null
+        }
+        Insert: {
+          ativa?: boolean | null
+          created_at?: string | null
+          dia_vencimento?: number | null
+          id?: string
+          lembrar_dias_antes?: number | null
+          nome: string
+          tipo?: string
+          ultimo_lembrete?: string | null
+          updated_at?: string | null
+          usuario_id: string
+          valor_estimado?: number | null
+        }
+        Update: {
+          ativa?: boolean | null
+          created_at?: string | null
+          dia_vencimento?: number | null
+          id?: string
+          lembrar_dias_antes?: number | null
+          nome?: string
+          tipo?: string
+          ultimo_lembrete?: string | null
+          updated_at?: string | null
+          usuario_id?: string
+          valor_estimado?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contas_pagar_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "contas_pagar_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contas_pagar_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "contas_pagar_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       conversas_ativas: {
         Row: {
           atualizado_em: string | null
@@ -1564,6 +1635,102 @@ export type Database = {
           used?: boolean
         }
         Relationships: []
+      }
+      pagamentos: {
+        Row: {
+          conta_id: string
+          created_at: string | null
+          data_pagamento: string | null
+          id: string
+          mes_referencia: string
+          observacao: string | null
+          status: string | null
+          transacao_id: string | null
+          usuario_id: string
+          valor_pago: number
+        }
+        Insert: {
+          conta_id: string
+          created_at?: string | null
+          data_pagamento?: string | null
+          id?: string
+          mes_referencia: string
+          observacao?: string | null
+          status?: string | null
+          transacao_id?: string | null
+          usuario_id: string
+          valor_pago: number
+        }
+        Update: {
+          conta_id?: string
+          created_at?: string | null
+          data_pagamento?: string | null
+          id?: string
+          mes_referencia?: string
+          observacao?: string | null
+          status?: string | null
+          transacao_id?: string | null
+          usuario_id?: string
+          valor_pago?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pagamentos_conta_id_fkey"
+            columns: ["conta_id"]
+            isOneToOne: false
+            referencedRelation: "contas_pagar"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pagamentos_conta_id_fkey"
+            columns: ["conta_id"]
+            isOneToOne: false
+            referencedRelation: "vw_contas_a_vencer"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pagamentos_transacao_id_fkey"
+            columns: ["transacao_id"]
+            isOneToOne: false
+            referencedRelation: "transacoes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pagamentos_transacao_id_fkey"
+            columns: ["transacao_id"]
+            isOneToOne: false
+            referencedRelation: "vw_transacoes_mes_atual"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pagamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "pagamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pagamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "pagamentos_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
       }
       parcelamentos: {
         Row: {
@@ -2609,7 +2776,9 @@ export type Database = {
         Row: {
           ativo: boolean | null
           created_at: string | null
+          estado_financeiro: string | null
           id: string
+          interacoes_hoje: number | null
           limite_transacoes_mes: number | null
           nome: string | null
           onboarding_status: string | null
@@ -2617,11 +2786,13 @@ export type Database = {
           phone_e164: string | null
           phone_number: string
           plano: string | null
+          preferencia_saudacao: string | null
           relatorio_mensal_pendente: boolean | null
           relatorio_semanal_pendente: boolean | null
           saldo_mensal: number | null
           trial_fim: string | null
           trial_inicio: string | null
+          ultima_interacao: string | null
           ultimo_relatorio_mensal: string | null
           ultimo_relatorio_semanal: string | null
           ultimo_resumo: string | null
@@ -2630,7 +2801,9 @@ export type Database = {
         Insert: {
           ativo?: boolean | null
           created_at?: string | null
+          estado_financeiro?: string | null
           id?: string
+          interacoes_hoje?: number | null
           limite_transacoes_mes?: number | null
           nome?: string | null
           onboarding_status?: string | null
@@ -2638,11 +2811,13 @@ export type Database = {
           phone_e164?: string | null
           phone_number: string
           plano?: string | null
+          preferencia_saudacao?: string | null
           relatorio_mensal_pendente?: boolean | null
           relatorio_semanal_pendente?: boolean | null
           saldo_mensal?: number | null
           trial_fim?: string | null
           trial_inicio?: string | null
+          ultima_interacao?: string | null
           ultimo_relatorio_mensal?: string | null
           ultimo_relatorio_semanal?: string | null
           ultimo_resumo?: string | null
@@ -2651,7 +2826,9 @@ export type Database = {
         Update: {
           ativo?: boolean | null
           created_at?: string | null
+          estado_financeiro?: string | null
           id?: string
+          interacoes_hoje?: number | null
           limite_transacoes_mes?: number | null
           nome?: string | null
           onboarding_status?: string | null
@@ -2659,11 +2836,13 @@ export type Database = {
           phone_e164?: string | null
           phone_number?: string
           plano?: string | null
+          preferencia_saudacao?: string | null
           relatorio_mensal_pendente?: boolean | null
           relatorio_semanal_pendente?: boolean | null
           saldo_mensal?: number | null
           trial_fim?: string | null
           trial_inicio?: string | null
+          ultima_interacao?: string | null
           ultimo_relatorio_mensal?: string | null
           ultimo_relatorio_semanal?: string | null
           ultimo_resumo?: string | null
@@ -2837,6 +3016,54 @@ export type Database = {
           total: number | null
         }
         Relationships: []
+      }
+      vw_contas_a_vencer: {
+        Row: {
+          ativa: boolean | null
+          created_at: string | null
+          dia_vencimento: number | null
+          dias_ate_vencimento: number | null
+          id: string | null
+          lembrar_dias_antes: number | null
+          nome: string | null
+          phone_number: string | null
+          tipo: string | null
+          ultimo_lembrete: string | null
+          updated_at: string | null
+          usuario_id: string | null
+          usuario_nome: string | null
+          valor_estimado: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contas_pagar_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "contas_pagar_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contas_pagar_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "contas_pagar_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
       }
       vw_dashboard_usuario: {
         Row: {
@@ -3483,10 +3710,27 @@ export type Database = {
       }
       fn_adjust_alert_utility: { Args: never; Returns: undefined }
       fn_analise_consultiva: { Args: { p_usuario_id: string }; Returns: Json }
+      fn_atualizar_interacao: {
+        Args: { p_usuario_id: string }
+        Returns: undefined
+      }
       fn_cleanup_expired_patterns: { Args: never; Returns: undefined }
       fn_cleanup_expired_selections: { Args: never; Returns: undefined }
       fn_close_card_faturas: { Args: never; Returns: undefined }
       fn_close_expired_contexts: { Args: never; Returns: undefined }
+      fn_contas_para_lembrar: {
+        Args: never
+        Returns: {
+          conta_id: string
+          dia_vencimento: number
+          dias_ate_vencimento: number
+          nome: string
+          phone_number: string
+          usuario_id: string
+          usuario_nome: string
+          valor_estimado: number
+        }[]
+      }
       fn_daily_jobs: { Args: never; Returns: undefined }
       fn_disable_decision_version: {
         Args: { p_version: string }

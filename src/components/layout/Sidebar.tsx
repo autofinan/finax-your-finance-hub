@@ -24,6 +24,7 @@ const navItems = [
   { to: '/recorrentes', icon: RefreshCcw, label: 'Recorrentes' },
   { to: '/cartoes', icon: CreditCard, label: 'Cartões' },
   { to: '/faturas', icon: Receipt, label: 'Faturas' },
+  { to: '/contas', icon: Receipt, label: 'Contas a Pagar' },
   { to: '/parcelamentos', icon: Layers, label: 'Parcelamentos' },
   { to: '/relatorios', icon: TrendingUp, label: 'Relatórios' },
   { to: '/chat', icon: MessageCircle, label: 'Fin Chat' },
