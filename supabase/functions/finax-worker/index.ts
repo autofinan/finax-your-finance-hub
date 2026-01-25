@@ -3308,6 +3308,7 @@ async function processarJob(job: any): Promise<void> {
       }
       
       return;
+    }
     
     // ========================================================================
     // 📍 SET_CONTEXT - Viagens/Eventos
@@ -3389,9 +3390,9 @@ async function processarJob(job: any): Promise<void> {
       
       let searchTerm = "";
       for (const pattern of cancelPatterns) {
-        const match = conteudoProcessado.match(pattern);
-        if (match && match[1]) {
-          searchTerm = match[1].trim().split(" ")[0]; // Primeira palavra
+        const matchResult = conteudoProcessado.match(pattern);
+        if (matchResult && matchResult[1]) {
+          searchTerm = matchResult[1].trim().split(" ")[0]; // Primeira palavra
           break;
         }
       }
@@ -3485,13 +3486,13 @@ async function processarJob(job: any): Promise<void> {
           .eq("status", "confirmada")
           .order("data", { ascending: false });
         
-        if (!entradas?.length) {
+        if (!entradas || entradas.length === 0) {
           await sendMessage(payload.phoneNumber, "💰 Nenhuma entrada registrada este mês.\n\n_Manda \"recebi 1500\" pra registrar!_", payload.messageSource);
           return;
         }
         
-        const total = entradas.reduce((sum, e) => sum + Number(e.valor), 0);
-        const lista = entradas.slice(0, 10).map(e => {
+        const total = entradas.reduce((sum: number, e: any) => sum + Number(e.valor), 0);
+        const lista = entradas.slice(0, 10).map((e: any) => {
           const dataStr = new Date(e.data).toLocaleDateString("pt-BR");
           return `💰 R$ ${Number(e.valor).toFixed(2)} - ${e.descricao || "Entrada"} (${dataStr})`;
         }).join("\n");
@@ -3507,7 +3508,7 @@ async function processarJob(job: any): Promise<void> {
       // 💳 QUERY POR CARTÃO ESPECÍFICO
       // ========================================================================
       const cardMatch = normalized.match(/(?:gastei|quanto)\s+(?:no|na|do|da)\s+(\w+)/);
-      if (cardMatch) {
+      if (cardMatch && cardMatch[1]) {
         const cardName = cardMatch[1];
         console.log(`📊 [QUERY] Query de gastos no cartão: "${cardName}"`);
         
@@ -3518,7 +3519,7 @@ async function processarJob(job: any): Promise<void> {
           .eq("usuario_id", userId)
           .ilike("nome", `%${cardName}%`)
           .limit(1)
-          .single();
+          .maybeSingle();
         
         if (card) {
           const inicioMes = new Date();
@@ -3535,22 +3536,22 @@ async function processarJob(job: any): Promise<void> {
             .eq("status", "confirmada")
             .order("data", { ascending: false });
           
-          if (!gastos?.length) {
+          if (!gastos || gastos.length === 0) {
             await sendMessage(payload.phoneNumber, 
-              `💳 *${card.nome}*\n\nNenhum gasto este mês.\n\n🟢 Disponível: R$ ${card.limite_disponivel?.toFixed(2) || "0.00"}`,
+              `💳 *${card.nome}*\n\nNenhum gasto este mês.\n\n🟢 Disponível: R$ ${(card.limite_disponivel ?? 0).toFixed(2)}`,
               payload.messageSource
             );
             return;
           }
           
-          const total = gastos.reduce((sum, g) => sum + Number(g.valor), 0);
-          const lista = gastos.slice(0, 8).map(g => {
+          const total = gastos.reduce((sum: number, g: any) => sum + Number(g.valor), 0);
+          const lista = gastos.slice(0, 8).map((g: any) => {
             const dataStr = new Date(g.data).toLocaleDateString("pt-BR");
             return `💸 R$ ${Number(g.valor).toFixed(2)} - ${g.descricao || "Gasto"} (${dataStr})`;
           }).join("\n");
           
           await sendMessage(payload.phoneNumber, 
-            `💳 *Gastos no ${card.nome}*\n\n${lista}\n\n💸 Total: R$ ${total.toFixed(2)}\n🟢 Disponível: R$ ${card.limite_disponivel?.toFixed(2) || "0.00"}`,
+            `💳 *Gastos no ${card.nome}*\n\n${lista}\n\n💸 Total: R$ ${total.toFixed(2)}\n🟢 Disponível: R$ ${(card.limite_disponivel ?? 0).toFixed(2)}`,
             payload.messageSource
           );
           return;
@@ -3622,19 +3623,20 @@ async function processarJob(job: any): Promise<void> {
         .order("utility_score", { ascending: false })
         .limit(5);
       
-      if (!alerts?.length) {
+      if (!alerts || alerts.length === 0) {
         await sendMessage(payload.phoneNumber, "✨ *Tudo tranquilo!*\n\nNão há nada fora do normal nos seus gastos. Continue assim! 💪", payload.messageSource);
         return;
       }
       
       // Marcar como enviados
+      const alertIds = alerts.map((a: any) => a.id);
       await supabase
         .from("spending_alerts")
         .update({ 
           sent_at: new Date().toISOString(), 
           status: "sent" 
         })
-        .in("id", alerts.map(a => a.id));
+        .in("id", alertIds);
       
       // Formatar resposta
       const severityEmoji: Record<string, string> = {
@@ -3663,13 +3665,13 @@ async function processarJob(job: any): Promise<void> {
     // quando o usuário está no meio de um fluxo de registro.
     // ========================================================================
     if ((decision.actionType === "chat" || decision.actionType === "unknown") &&
-        activeAction && 
+        activeAction !== null && 
         (activeAction.intent === "expense" || activeAction.intent === "income") &&
         activeAction.pending_slot) {
       console.log(`🛡️ [GUARD] Bloqueando chat - action ativa: ${activeAction.intent} aguardando ${activeAction.pending_slot}`);
       
       // Tentar extrair o slot pendente da mensagem atual
-      const pendingSlot = activeAction.pending_slot;
+      const pendingSlot: string = activeAction.pending_slot;
       let slotValue: any = null;
       
       if (pendingSlot === "payment_method") {
@@ -3680,14 +3682,14 @@ async function processarJob(job: any): Promise<void> {
         else if (normalizedGuard.includes("dinheiro")) slotValue = "dinheiro";
       } else if (pendingSlot === "amount") {
         const numMatch = conteudoProcessado.match(/(\d+[.,]?\d*)/);
-        if (numMatch) slotValue = parseFloat(numMatch[1].replace(",", "."));
+        if (numMatch && numMatch[1]) slotValue = parseFloat(numMatch[1].replace(",", "."));
       } else if (pendingSlot === "description") {
         slotValue = conteudoProcessado.trim();
       }
       
       if (slotValue !== null) {
         // Preencher o slot e continuar o fluxo
-        const updatedSlots = { ...activeAction.slots, [pendingSlot]: slotValue };
+        const updatedSlots: Record<string, any> = { ...activeAction.slots, [pendingSlot]: slotValue };
         const actionType = activeAction.intent as ActionType;
         const missing = getMissingSlots(actionType, updatedSlots);
         
@@ -3702,17 +3704,19 @@ async function processarJob(job: any): Promise<void> {
         
         // Ainda falta slot → perguntar próximo
         await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
-        const prompt = SLOT_PROMPTS[missing[0]];
+        const nextSlotKey = missing[0];
+        const prompt = SLOT_PROMPTS[nextSlotKey];
         if (prompt?.useButtons && prompt.buttons) {
           await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
         } else {
-          await sendMessage(payload.phoneNumber, prompt?.text || `Qual o ${missing[0]}?`, payload.messageSource);
+          await sendMessage(payload.phoneNumber, prompt?.text || `Qual o ${nextSlotKey}?`, payload.messageSource);
         }
         return;
       }
       
       // Não conseguiu extrair → re-perguntar
-      const prompt = SLOT_PROMPTS[pendingSlot];
+      const promptKey = pendingSlot;
+      const prompt = SLOT_PROMPTS[promptKey];
       if (prompt?.useButtons && prompt.buttons) {
         await sendButtons(payload.phoneNumber, `Hmm, não entendi 🤔\n\n${prompt.text}`, prompt.buttons, payload.messageSource);
       } else {
@@ -3850,8 +3854,8 @@ async function processarJob(job: any): Promise<void> {
       logDecision({ messageId: payload.messageId, decision: "numeric_fallback", details: { value: numValue } });
       
       // CASO 1: Há contexto ativo esperando amount → preencher slot
-      if (activeAction && activeAction.pending_slot === "amount" && numValue) {
-        const updatedSlots: ExtractedSlots = { ...activeAction.slots, amount: numValue };
+      if (activeAction !== null && activeAction.pending_slot === "amount" && numValue !== null) {
+        const updatedSlots: Record<string, any> = { ...activeAction.slots, amount: numValue };
         const actionType = activeAction.intent === "income" ? "income" : activeAction.intent === "expense" ? "expense" : null;
         
         if (actionType) {
@@ -3867,8 +3871,9 @@ async function processarJob(job: any): Promise<void> {
           }
           
           // Falta slot → perguntar APENAS o próximo obrigatório
-          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
-          const prompt = SLOT_PROMPTS[missing[0]];
+          const nextSlotKey = missing[0];
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: nextSlotKey });
+          const prompt = SLOT_PROMPTS[nextSlotKey];
           if (prompt?.useButtons && prompt.buttons) {
             await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
           } else {
@@ -3920,9 +3925,10 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ❓ UNKNOWN / FALLBACK → TENTAR CHAT (nunca travar!)
-    if (activeAction && activeAction.pending_slot) {
+    if (activeAction !== null && activeAction.pending_slot) {
       // Re-perguntar o slot pendente
-      const prompt = SLOT_PROMPTS[activeAction.pending_slot];
+      const slotKey = activeAction.pending_slot;
+      const prompt = SLOT_PROMPTS[slotKey];
       if (prompt?.useButtons && prompt.buttons) {
         await sendButtons(payload.phoneNumber, `Hmm, não entendi bem 🤔\n\n${prompt.text}`, prompt.buttons, payload.messageSource);
       } else {
