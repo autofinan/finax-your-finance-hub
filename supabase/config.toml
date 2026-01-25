@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.create-checkout]
 verify_jwt = false
+
+[functions.lembrar-contas]
+verify_jwt = false

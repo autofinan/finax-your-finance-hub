@@ -258,3 +258,32 @@ export interface RegistrarTransacaoParams {
   p_descricao: string;
   p_data: string;
 }
+
+// ==================== CONTAS A PAGAR ====================
+
+export interface ContaPagar {
+  id: string;
+  usuario_id: string;
+  nome: string;
+  tipo: 'cartao' | 'fixa' | 'variavel';
+  dia_vencimento: number | null;
+  valor_estimado: number | null;
+  lembrar_dias_antes: number;
+  ativa: boolean;
+  ultimo_lembrete: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Pagamento {
+  id: string;
+  conta_id: string;
+  usuario_id: string;
+  mes_referencia: string;
+  valor_pago: number;
+  data_pagamento: string;
+  status: 'pendente' | 'pago' | 'atrasado';
+  transacao_id: string | null;
+  observacao: string | null;
+  created_at: string;
+}

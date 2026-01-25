@@ -14,6 +14,7 @@ import Configuracoes from "./pages/Configuracoes";
 import Cartoes from "./pages/Cartoes";
 import Faturas from "./pages/Faturas";
 import Parcelamentos from "./pages/Parcelamentos";
+import ContasPagar from "./pages/ContasPagar";
 import Cancelar from "./pages/Cancelar";
 import NotFound from "./pages/NotFound";
 import Auth from "./pages/Auth";
@@ -41,6 +42,7 @@ const App = () => (
             <Route path="/cartoes" element={<ProtectedRoute><Cartoes /></ProtectedRoute>} />
             <Route path="/faturas" element={<ProtectedRoute><Faturas /></ProtectedRoute>} />
             <Route path="/parcelamentos" element={<ProtectedRoute><Parcelamentos /></ProtectedRoute>} />
+            <Route path="/contas" element={<ProtectedRoute><ContasPagar /></ProtectedRoute>} />
             <Route path="/relatorios" element={<ProtectedRoute><Relatorios /></ProtectedRoute>} />
             <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
             <Route path="/configuracoes" element={<ProtectedRoute><Configuracoes /></ProtectedRoute>} />

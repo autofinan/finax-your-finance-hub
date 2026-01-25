@@ -3832,13 +3832,20 @@ async function processarJob(job: any): Promise<void> {
       }
       
       if (normalized.includes("ajuda") || normalized.includes("help")) {
-        await sendMessage(payload.phoneNumber, `*Como usar o Finax* 📊\n\n💸 *Registrar gasto:*\n"Gastei 50 no mercado"\n\n💰 *Registrar entrada:*\n"Recebi 200 de pix"\n\n📊 *Ver resumo:*\n"Quanto gastei?"`, payload.messageSource);
+        await sendMessage(payload.phoneNumber, `*Como usar o Finax* 📊\n\n💸 *Registrar gasto:*\n"Gastei 50 no mercado"\n\n💰 *Registrar entrada:*\n"Recebi 200 de pix"\n\n📊 *Ver resumo:*\n"Quanto gastei?"\n\n📄 *Contas a pagar:*\n"Criar fatura energia dia 15"\n"Paguei energia, deu 180"`, payload.messageSource);
         return;
       }
       
-      // Saudação
-      const primeiroNome = nomeUsuario.split(" ")[0];
-      await sendMessage(payload.phoneNumber, `Oi, ${primeiroNome}! 👋\n\nMe conta um gasto ou pergunta seu resumo.`, payload.messageSource);
+      // Saudação inteligente com variação
+      try {
+        const { gerarSaudacao } = await import("./greetings/smart-greeting.ts");
+        const saudacao = await gerarSaudacao(userId);
+        await sendMessage(payload.phoneNumber, saudacao, payload.messageSource);
+      } catch (err) {
+        // Fallback para saudação simples
+        const primeiroNome = nomeUsuario.split(" ")[0];
+        await sendMessage(payload.phoneNumber, `Oi, ${primeiroNome}! 👋\n\nMe conta um gasto ou pergunta seu resumo.`, payload.messageSource);
+      }
       return;
     }
     
