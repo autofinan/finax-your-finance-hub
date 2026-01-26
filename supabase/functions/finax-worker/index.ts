@@ -50,7 +50,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -124,14 +124,17 @@ const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[]
   expense: { required: ["amount", "payment_method"], optional: ["description", "category", "card", "card_id"] },
   income: { required: ["amount"], optional: ["description", "source"] },
   card_event: { required: ["card", "value"], optional: ["field"] },
+  add_card: { required: ["card_name", "limit"], optional: ["due_day", "closing_day"] },
+  bill: { required: ["bill_name", "due_day"], optional: ["estimated_value"] },
+  pay_bill: { required: ["bill_name", "amount"], optional: [] },
   cancel: { required: [], optional: ["transaction_id"] },
   query: { required: [], optional: [] },
   control: { required: [], optional: [] },
   recurring: { required: ["amount", "description", "payment_method"], optional: ["day_of_month", "category", "periodicity", "card", "card_id"] },
   set_context: { required: ["label", "start_date", "end_date"], optional: ["description"] },
   chat: { required: [], optional: [] },
-  edit: { required: [], optional: ["transaction_id", "field", "new_value"] }, // Edição/correção rápida
-  goal: { required: ["amount", "description"], optional: ["deadline", "category"] }, // Metas de poupança
+  edit: { required: [], optional: ["transaction_id", "field", "new_value"] },
+  goal: { required: ["amount", "description"], optional: ["deadline", "category"] },
   unknown: { required: [], optional: [] },
 };
 
@@ -179,6 +182,12 @@ const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons
     ]
   },
   card: { text: "Qual cartão?" },
+  card_name: { text: "Qual o nome do cartão? (ex: Nubank, Inter, Bradesco...)" },
+  limit: { text: "Qual o limite total? 💰" },
+  due_day: { text: "Qual o dia de vencimento? (1-31)" },
+  closing_day: { text: "Qual o dia de fechamento?" },
+  bill_name: { text: "Qual o nome da conta? (ex: Energia, Internet, Água...)" },
+  estimated_value: { text: "Qual o valor estimado? (opcional)" },
 };
 
 const PAYMENT_ALIASES: Record<string, string> = {
@@ -594,7 +603,29 @@ Exemplos: "Tô gastando muito?", "Vale a pena parcelar?", "Como economizar?", "O
 
 ### card_event - Atualização de cartão/limite
 Exemplos: "Limite do Nubank 5000", "Atualiza limite Itaú pra 3000"
-- Palavras-chave: limite + nome de banco
+- Palavras-chave: limite + nome de banco (SEM "registrar"/"adicionar"/"cadastrar")
+- É para ATUALIZAR limite de cartão já existente
+
+### add_card - Registrar NOVO cartão de crédito
+PRIORIDADE SOBRE card_event se mencionar "registrar", "cadastrar", "adicionar", "novo cartão"!
+Exemplos: "Registrar cartão Nubank limite 5000", "Adicionar cartão Bradesco crédito 3000 vencimento dia 15", "Cadastrar cartão Inter limite 2000", "Meu cartão é Nubank de crédito limite 3000"
+- Palavras-chave: registrar cartão, adicionar cartão, novo cartão, cadastrar cartão, meu cartão + nome do banco + limite
+- OBRIGATÓRIO: nome do cartão E limite
+- Opcional: dia de vencimento
+- NÃO confundir com card_event (atualizar limite de cartão existente)
+
+### bill - Criar fatura/conta a pagar (NÃO é recorrente automático!)
+PRIORIDADE SOBRE recurring quando mencionar conta de utilidades!
+Exemplos: "Minha conta de água vence dia 10", "Criar fatura energia dia 15", "Fatura internet todo dia 20", "Conta de luz vence dia 5"
+- Palavras-chave: conta de, fatura, vence dia, vencimento + (água, luz, energia, internet, telefone, aluguel)
+- É para lembretes de contas variáveis (água, luz, internet)
+- NÃO confundir com recurring (Netflix, Spotify - valor fixo conhecido)
+- Diferença: bill = valor varia todo mês | recurring = valor fixo conhecido
+
+### pay_bill - Pagar fatura/conta existente
+Exemplos: "Paguei a energia, deu 184", "Paguei fatura de água 120", "Paguei a conta de luz, foi 95"
+- Palavras-chave: paguei a fatura, paguei a conta de + nome + valor
+- OBRIGATÓRIO: nome da conta E valor
 
 ### set_context - Período especial (viagem, evento) SEM valor de objetivo
 Exemplos: "Vou viajar de 10/01 até 15/01", "Começando reforma"
@@ -617,6 +648,10 @@ Só use quando realmente não conseguir classificar.
 - source: "pix" | "dinheiro" | "transferencia" (para income)
 - periodicity: "monthly" | "weekly" | "yearly" (para recurring)
 - card: nome do banco (nubank, itau, etc)
+- card_name: nome do cartão (para add_card)
+- limit: limite do cartão (para add_card)
+- due_day: dia de vencimento (para add_card e bill)
+- bill_name: nome da conta (para bill e pay_bill)
 - deadline: data limite (para goal)
 
 ## EXEMPLOS DE CLASSIFICAÇÃO
@@ -633,10 +668,17 @@ Só use quando realmente não conseguir classificar.
 "cancela meu spotify" → cancel (cancelar recorrente!)
 "posso gastar 500 em roupa?" → chat (é pergunta reflexiva!)
 "50" (número isolado) → unknown, amount=50 (precisa perguntar se é gasto ou entrada)
+"Registrar cartão Bradesco limite 2000" → add_card, card_name="Bradesco", limit=2000
+"Meu cartão é Nubank crédito limite 5000 vencimento dia 15" → add_card, card_name="Nubank", limit=5000, due_day=15
+"Adicionar cartão Inter crédito 3000" → add_card, card_name="Inter", limit=3000
+"Limite do Nubank agora é 8000" → card_event, card="Nubank", value=8000
+"Conta de água vence dia 10" → bill, bill_name="Água", due_day=10
+"Criar fatura energia dia 15" → bill, bill_name="Energia", due_day=15
+"Paguei a energia, deu 184" → pay_bill, bill_name="Energia", amount=184
 
 ## RESPOSTA (JSON OBRIGATÓRIO)
 {
-  "actionType": "expense|income|recurring|goal|query|query_alerts|cancel|chat|card_event|set_context|control|edit|unknown",
+  "actionType": "expense|income|recurring|goal|query|query_alerts|cancel|chat|card_event|add_card|bill|pay_bill|set_context|control|edit|unknown",
   "confidence": 0.0-1.0,
   "slots": { "amount": 50, "description": "Mercado" },
   "reasoning": "Usuário mencionou valor e local, padrão de gasto"
@@ -3206,6 +3248,107 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      return;
+    }
+    
+    // ========================================================================
+    // 💳 ADD_CARD - Registrar NOVO cartão de crédito
+    // ========================================================================
+    if (decision.actionType === "add_card") {
+      const slots = decision.slots;
+      const { createCard } = await import("./intents/card.ts");
+      
+      // Normalizar slots (IA pode enviar de várias formas) - usar Record para flexibilidade
+      const normalizedSlots: Record<string, any> = {
+        ...slots,
+        card_name: slots.card_name || slots.card || slots.description,
+        limit: slots.limit || slots.amount || slots.value,
+        due_day: slots.due_day || slots.day_of_month,
+      };
+      
+      const result = await createCard(userId, normalizedSlots as any);
+      
+      // Se criou com sucesso ou erro definitivo
+      if (result.success || !result.missingSlot) {
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      // Se faltou slot, criar action para coletar
+      if (result.missingSlot) {
+        if (activeAction?.intent === "add_card") {
+          await updateAction(activeAction.id, { slots: normalizedSlots, pending_slot: result.missingSlot });
+        } else {
+          await createAction(userId, "add_card", "add_card", normalizedSlots, result.missingSlot, payload.messageId);
+        }
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      }
+      return;
+    }
+    
+    // ========================================================================
+    // 📄 BILL - Criar fatura/conta a pagar
+    // ========================================================================
+    if (decision.actionType === "bill") {
+      const slots = decision.slots;
+      const { createBill } = await import("./intents/bills.ts");
+      
+      const billName = slots.bill_name || slots.description;
+      const dueDay = slots.due_day || slots.day_of_month;
+      const estimatedValue = slots.estimated_value || slots.amount;
+      
+      if (!billName) {
+        await sendMessage(payload.phoneNumber, "Qual o nome da conta? (ex: Energia, Internet, Água...)", payload.messageSource);
+        await createAction(userId, "bill", "bill", slots, "bill_name", payload.messageId);
+        return;
+      }
+      
+      if (!dueDay) {
+        await sendMessage(payload.phoneNumber, `Em qual dia do mês vence a conta de *${billName}*? (1-31)`, payload.messageSource);
+        await createAction(userId, "bill", "bill", { ...slots, bill_name: billName }, "due_day", payload.messageId);
+        return;
+      }
+      
+      const result = await createBill({
+        userId,
+        nome: billName,
+        diaVencimento: Number(dueDay),
+        valorEstimado: estimatedValue ? Number(estimatedValue) : undefined,
+        tipo: "fixa",
+      });
+      
+      await sendMessage(payload.phoneNumber, result, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // 💸 PAY_BILL - Pagar fatura existente
+    // ========================================================================
+    if (decision.actionType === "pay_bill") {
+      const slots = decision.slots;
+      const { payBill } = await import("./intents/bills.ts");
+      
+      const billName = slots.bill_name || slots.description;
+      const amount = slots.amount;
+      
+      if (!billName) {
+        await sendMessage(payload.phoneNumber, "Qual conta você pagou? (ex: Energia, Água, Internet...)", payload.messageSource);
+        return;
+      }
+      
+      if (!amount) {
+        await sendMessage(payload.phoneNumber, `Quanto foi a conta de *${billName}*? 💸`, payload.messageSource);
+        await createAction(userId, "pay_bill", "pay_bill", { ...slots, bill_name: billName }, "amount", payload.messageId);
+        return;
+      }
+      
+      const result = await payBill({
+        userId,
+        contaNome: billName,
+        valorPago: Number(amount),
+      });
+      
+      await sendMessage(payload.phoneNumber, result, payload.messageSource);
       return;
     }
     

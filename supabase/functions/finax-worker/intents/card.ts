@@ -11,6 +11,95 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ============================================================================
+// ➕ CRIAR NOVO CARTÃO
+// ============================================================================
+
+export interface CreateCardResult {
+  success: boolean;
+  message: string;
+  cardId?: string;
+  missingSlot?: string;
+}
+
+export async function createCard(
+  userId: string,
+  slots: ExtractedSlots
+): Promise<CreateCardResult> {
+  console.log(`💳 [CARD] Criando cartão: ${JSON.stringify(slots)}`);
+  
+  // Normalizar slots (IA pode enviar de várias formas)
+  const cardName = slots.card_name || slots.card || slots.description;
+  const limit = slots.limit || slots.amount || slots.value;
+  const dueDay = slots.due_day || slots.day_of_month;
+  const closingDay = slots.closing_day;
+  
+  // Verificar slots obrigatórios
+  if (!cardName) {
+    return { 
+      success: false, 
+      message: "Qual o nome do cartão? (ex: Nubank, Inter, Bradesco...)",
+      missingSlot: "card_name"
+    };
+  }
+  
+  if (!limit) {
+    return { 
+      success: false, 
+      message: `Qual o limite do *${cardName}*? 💰`,
+      missingSlot: "limit"
+    };
+  }
+  
+  // Verificar se já existe cartão com esse nome
+  const existing = await findCard(userId, cardName);
+  if (existing) {
+    return { 
+      success: false, 
+      message: `Você já tem um cartão *${existing.nome}* cadastrado 💳\n\nQuer atualizar o limite? Diga "limite ${existing.nome} ${limit}"`
+    };
+  }
+  
+  // Inserir novo cartão
+  const { data, error } = await supabase
+    .from("cartoes_credito")
+    .insert({
+      usuario_id: userId,
+      nome: cardName,
+      limite_total: limit,
+      limite_disponivel: limit,
+      dia_vencimento: dueDay || null,
+      dia_fechamento: closingDay || null,
+      ativo: true
+    })
+    .select("id, nome, limite_total, dia_vencimento")
+    .single();
+  
+  if (error) {
+    console.error("❌ [CARD] Erro ao criar:", error);
+    return { success: false, message: "Ops, algo deu errado ao criar o cartão 😕" };
+  }
+  
+  // Log para auditoria
+  await supabase.from("finax_logs").insert({
+    user_id: userId,
+    action_type: "criar_cartao",
+    entity_type: "cartao",
+    entity_id: data.id,
+    new_data: { nome: cardName, limite: limit, vencimento: dueDay }
+  });
+  
+  console.log(`✅ [CARD] Cartão criado: ${data.nome} - R$ ${data.limite_total}`);
+  
+  let response = `✅ *Cartão cadastrado!*\n\n`;
+  response += `💳 ${data.nome}\n`;
+  response += `💰 Limite: R$ ${data.limite_total.toFixed(2)}\n`;
+  if (data.dia_vencimento) response += `📅 Vencimento: dia ${data.dia_vencimento}\n`;
+  response += `\n_Agora seus gastos no crédito vão descontar desse limite!_`;
+  
+  return { success: true, message: response, cardId: data.id };
+}
+
+// ============================================================================
 // 📋 LISTAR CARTÕES
 // ============================================================================
 
