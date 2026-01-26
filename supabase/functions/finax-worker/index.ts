@@ -2905,6 +2905,36 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
+    // 🔒 PRIORIDADE ABSOLUTA: CONTEXTO ATIVO (FSM STATE MACHINE)
+    // ========================================================================
+    // REGRA DE OURO: Se há action ativa com pending_slot, interpretar mensagem
+    // COMO RESPOSTA ao slot, NÃO classificar com IA.
+    // ========================================================================
+    if (activeAction && activeAction.pending_slot) {
+      console.log(`🎯 [FSM] Ação ativa: ${activeAction.intent} aguardando ${activeAction.pending_slot}`);
+      
+      const { handleActiveContext } = await import("./fsm/context-handler.ts");
+      
+      const contextResult = await handleActiveContext(
+        userId,
+        activeAction,
+        conteudoProcessado
+      );
+      
+      if (contextResult.handled) {
+        console.log(`✅ [FSM] Contexto tratado: ${contextResult.action || 'slot preenchido'}`);
+        return; // Fluxo tratado pelo FSM, não classificar com IA
+      }
+      
+      // Se não foi tratável como slot (usuário quer mudar de assunto)
+      if (contextResult.shouldCancel) {
+        console.log(`🔄 [FSM] Mudança de assunto detectada, cancelando action`);
+        await cancelAction(userId);
+        // Continuar para classificar nova intenção
+      }
+    }
+    
+    // ========================================================================
     // 📦 DETECÇÃO DE MÚLTIPLOS GASTOS (antes do decision engine)
     // ========================================================================
     // Se a mensagem contém múltiplos valores, perguntar ao usuário se quer
@@ -3144,6 +3174,39 @@ async function processarJob(job: any): Promise<void> {
       // ✅ EXECUÇÃO DIRETA: hasAllRequiredSlots = true
       if (hasAllRequiredSlots("expense", slots)) {
         console.log(`⚡ [EXPENSE] Execução direta: R$ ${slots.amount} via ${slots.payment_method}`);
+        
+        // ========================================================================
+        // 💳 VINCULAR CRÉDITO AO CARTÃO/FATURA (FSM MÓDULO 2)
+        // ========================================================================
+        if (slots.payment_method === "credito" || slots.payment_method === "crédito") {
+          const { resolveCreditCard } = await import("./intents/credit-flow.ts");
+          
+          const creditResult = await resolveCreditCard(userId, slots);
+          
+          if (!creditResult.success) {
+            // Precisa perguntar qual cartão ou não tem cartões
+            if (creditResult.missingSlot === "card") {
+              await createAction(userId, "expense", "expense", slots, "card", payload.messageId);
+              
+              if (creditResult.cardButtons) {
+                await sendButtons(payload.phoneNumber, creditResult.message, creditResult.cardButtons, payload.messageSource);
+              } else {
+                await sendMessage(payload.phoneNumber, creditResult.message, payload.messageSource);
+              }
+              return;
+            }
+            
+            await sendMessage(payload.phoneNumber, creditResult.message, payload.messageSource);
+            return;
+          }
+          
+          // Atualizar slots com cartão/fatura vinculados
+          slots.card_id = creditResult.cardId;
+          slots.fatura_id = creditResult.invoiceId;
+          slots.card = creditResult.cardName;
+          console.log(`💳 [CREDIT] Vinculado: ${creditResult.cardName}, fatura: ${creditResult.invoiceId}`);
+        }
+        
         const actionId = activeAction?.intent === "expense" ? activeAction.id : undefined;
         const result = await registerExpense(userId, slots, actionId);
         // 🔒 Limpar todas as actions pendentes

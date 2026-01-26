@@ -29,7 +29,9 @@ export interface CreditResolutionResult {
   needsCardSelection?: boolean;
   needsCardCreation?: boolean;
   cardOptions?: Array<{ id: string; nome: string }>;
-  message?: string;
+  message: string;
+  missingSlot?: string;
+  cardButtons?: Array<{ id: string; title: string }>;
 }
 
 export interface CardInfo {
@@ -56,7 +58,7 @@ export interface InvoiceInfo {
 
 export async function resolveCreditCard(
   userId: string,
-  slots: ExtractedSlots
+  slots: Record<string, any>
 ): Promise<CreditResolutionResult> {
   console.log(`💳 [CREDIT] Resolvendo cartão para gasto de R$ ${slots.amount}`);
   
@@ -73,7 +75,8 @@ export async function resolveCreditCard(
       needsCardCreation: true,
       message: "Você não tem cartões cadastrados 💳\n\n" +
                "Quer adicionar? Diga:\n" +
-               "👉 *Adicionar cartão Nubank limite 5000*"
+               "👉 *Adicionar cartão Nubank limite 5000*",
+      missingSlot: "card"
     };
   }
   
@@ -112,7 +115,9 @@ export async function resolveCreditCard(
     cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
     message: `💳 Qual cartão?\n\n${cards.map((c, i) => 
       `${i + 1}. ${c.nome} (R$ ${c.limite_disponivel?.toFixed(2)} disponível)`
-    ).join("\n")}`
+    ).join("\n")}`,
+    missingSlot: "card",
+    cardButtons: cards.slice(0, 3).map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) }))
   };
 }
 
@@ -188,7 +193,8 @@ async function processCardSelection(
     cardName: card.nome,
     invoiceId: invoice.id,
     limiteAntes: card.limite_disponivel,
-    limiteDepois: novoLimite
+    limiteDepois: novoLimite,
+    message: ""
   };
 }
 

@@ -6,7 +6,24 @@
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { ActiveAction, ExtractedSlots, SLOT_REQUIREMENTS } from "../decision/types.ts";
+import { ExtractedSlots, SLOT_REQUIREMENTS } from "../decision/types.ts";
+
+// Interface local mais flexível para compatibilidade
+interface ActiveActionLocal {
+  id: string;
+  user_id: string;
+  type: string;
+  intent: string;
+  slots: Record<string, any>;
+  status: string;
+  pending_slot?: string | null;
+  pending_selection_id?: string | null;
+  origin_message_id?: string | null;
+  last_message_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -19,6 +36,8 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 export interface ContextHandlerResult {
   handled: boolean;                    // Se o contexto tratou a mensagem
   shouldContinue: boolean;             // Se deve continuar para IA
+  shouldCancel?: boolean;              // Se deve cancelar action atual
+  action?: string;                     // Ação executada
   filledSlot?: string;                 // Qual slot foi preenchido
   slotValue?: any;                     // Valor do slot
   updatedSlots?: ExtractedSlots;       // Slots atualizados
@@ -34,10 +53,16 @@ export interface ContextHandlerResult {
 
 export async function handleActiveContext(
   userId: string,
-  activeAction: ActiveAction,
+  activeAction: ActiveActionLocal,
   message: string,
-  normalizedMessage: string
+  _phoneNumber?: string // Opcional para compatibilidade
 ): Promise<ContextHandlerResult> {
+  // Normalizar mensagem
+  const normalizedMessage = message.toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+  
   console.log(`🔒 [FSM] Contexto ativo: ${activeAction.intent} | pending_slot: ${activeAction.pending_slot} | status: ${activeAction.status}`);
   
   // ========================================================================
@@ -47,7 +72,9 @@ export async function handleActiveContext(
     return {
       handled: true,
       shouldContinue: false,
+      shouldCancel: true,
       cancelled: true,
+      action: "cancelled",
       message: "👍 Ok, cancelado!"
     };
   }
@@ -56,14 +83,16 @@ export async function handleActiveContext(
   // 2. STATUS: AWAITING_CONFIRMATION → processar sim/não
   // ========================================================================
   if (activeAction.status === "awaiting_confirmation") {
-    return handleConfirmation(normalizedMessage);
+    const result = handleConfirmation(normalizedMessage);
+    return { ...result, action: result.readyToExecute ? "confirmed" : "awaiting" };
   }
   
   // ========================================================================
   // 3. STATUS: COLLECTING → preencher slot pendente
   // ========================================================================
   if (activeAction.pending_slot) {
-    return fillPendingSlot(activeAction, message, normalizedMessage);
+    const result = fillPendingSlot(activeAction, message, normalizedMessage);
+    return { ...result, action: result.filledSlot ? `filled_${result.filledSlot}` : undefined };
   }
   
   // ========================================================================
@@ -72,7 +101,8 @@ export async function handleActiveContext(
   console.log(`🔄 [FSM] Sem slot pendente - possível mudança de assunto`);
   return {
     handled: false,
-    shouldContinue: true
+    shouldContinue: true,
+    shouldCancel: true // Cancelar action atual para permitir novo fluxo
   };
 }
 
@@ -130,7 +160,7 @@ function handleConfirmation(normalized: string): ContextHandlerResult {
 // ============================================================================
 
 function fillPendingSlot(
-  activeAction: ActiveAction,
+  activeAction: ActiveActionLocal,
   rawMessage: string,
   normalized: string
 ): ContextHandlerResult {
