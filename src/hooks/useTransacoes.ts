@@ -2,13 +2,22 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Transacao } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 
-export function useTransacoes(usuarioId?: string) {
+export function useTransacoes(usuarioIdProp?: string) {
   const [transacoes, setTransacoes] = useState<Transacao[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  
+  // Usar hook para buscar usuario_id via auth_id
+  const { usuarioId: resolvedUsuarioId, loading: loadingUsuarioId } = useUsuarioId();
+  
+  // Priorizar prop, depois o resolvido via auth
+  const usuarioId = usuarioIdProp || resolvedUsuarioId;
 
   const fetchTransacoes = async () => {
+    if (loadingUsuarioId) return; // Aguardar resolver usuario_id
+    
     try {
       setLoading(true);
       let query = supabase
@@ -116,8 +125,10 @@ export function useTransacoes(usuarioId?: string) {
   };
 
   useEffect(() => {
-    fetchTransacoes();
-  }, [usuarioId]);
+    if (!loadingUsuarioId) {
+      fetchTransacoes();
+    }
+  }, [usuarioId, loadingUsuarioId]);
 
   return {
     transacoes,
