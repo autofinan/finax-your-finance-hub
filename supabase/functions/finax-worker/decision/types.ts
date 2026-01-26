@@ -13,6 +13,9 @@ export type ActionType =
   | "expense"       // gasto
   | "income"        // entrada
   | "card_event"    // cartão (limite, nome, etc)
+  | "add_card"      // adicionar novo cartão
+  | "bill"          // criar fatura/conta a pagar
+  | "pay_bill"      // pagar fatura
   | "cancel"        // cancelamento
   | "query"         // consulta
   | "query_alerts"  // consulta de alertas proativos
@@ -108,8 +111,9 @@ export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: s
   expense: { required: ["amount", "payment_method"], optional: ["description", "category", "card"] },
   income: { required: ["amount"], optional: ["description", "source"] },
   card_event: { required: ["card", "value"], optional: ["field"] },
-  add_card: { required: ["card_name", "limit", "due_day"], optional: ["closing_day"] },
-  remove_card: { required: ["card"], optional: [] },
+  add_card: { required: ["card_name", "limit"], optional: ["due_day", "closing_day"] },
+  bill: { required: ["bill_name", "due_day"], optional: ["estimated_value"] },
+  pay_bill: { required: ["bill_name", "amount"], optional: [] },
   installment: { required: ["amount", "installments", "description"], optional: ["category", "card"] },
   recurring: { required: ["amount", "description", "recurrence_type"], optional: ["category", "day_of_month"] },
   goal: { required: ["goal_name", "target_amount"], optional: ["deadline", "category"] },
@@ -145,7 +149,7 @@ export const SLOT_PROMPTS: Record<string, {
     ]
   },
   card: { text: "Qual cartão?" },
-  card_name: { text: "Qual o nome do cartão? (Ex: Nubank, C6...)" },
+  card_name: { text: "Qual o nome do cartão? (Ex: Nubank, Inter, Bradesco...)" },
   limit: { text: "Qual o limite total? 💰" },
   due_day: { text: "Qual o dia de vencimento? (1-31)" },
   closing_day: { text: "Qual o dia de fechamento?" },
@@ -157,6 +161,8 @@ export const SLOT_PROMPTS: Record<string, {
   target_amount: { text: "Qual o valor objetivo?" },
   item_description: { text: "O que você quer comprar?" },
   item_value: { text: "Quanto custa?" },
+  bill_name: { text: "Qual o nome da conta? (Ex: Energia, Água, Internet...)" },
+  estimated_value: { text: "Qual o valor estimado? (opcional)" },
 };
 
 // ============================================================================

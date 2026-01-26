@@ -44,16 +44,34 @@ export function normalizeText(text: string): string {
 // ============================================================================
 
 const SEMANTIC_PATTERNS = {
+  // 💳 ADICIONAR CARTÃO - PRIORIDADE MÁXIMA
+  add_card: {
+    verbs: ["registrar cartao", "registrar cartão", "adicionar cartao", "adicionar cartão", "cadastrar cartao", "cadastrar cartão", "novo cartao", "novo cartão", "criar cartao", "criar cartão"],
+    contexts: ["cartao de credito", "cartão de crédito", "meu cartao", "meu cartão"],
+    weight: 0.98
+  },
+  // 📄 FATURA/CONTA A PAGAR - PRIORIDADE ALTA
+  bill: {
+    verbs: ["conta de", "fatura de", "fatura", "vence dia", "vencimento dia", "criar fatura", "nova fatura"],
+    contexts: ["agua", "água", "luz", "energia", "internet", "gas", "gás", "telefone", "aluguel", "condominio", "condomínio"],
+    weight: 0.95
+  },
+  // 💸 PAGAR FATURA
+  pay_bill: {
+    verbs: ["paguei a conta", "paguei a fatura", "paguei energia", "paguei agua", "paguei água", "paguei luz", "paguei internet"],
+    contexts: ["deu", "foi", "ficou"],
+    weight: 0.94
+  },
   // ENTRADA - alta prioridade
   income: {
     verbs: ["recebi", "recebido", "receber", "ganhei", "caiu", "entrou", "entrada", "recebimento"],
     contexts: ["salario", "salário", "pagamento recebido", "pix recebido", "transferencia recebida"],
     weight: 0.95
   },
-  // CARTÃO - alta prioridade
+  // CARTÃO - atualização de limite
   card_event: {
-    verbs: ["limite", "atualiza", "atualizar", "alterou", "aumentou"],
-    contexts: ["nubank", "itau", "itaú", "bradesco", "santander", "c6", "inter", "picpay", "cartao", "cartão"],
+    verbs: ["limite", "atualiza limite", "atualizar limite", "alterou limite", "aumentou limite"],
+    contexts: [],
     weight: 0.9
   },
   // GASTO
