@@ -1,261 +1,319 @@
 
-# Plano de Correção Completa do Finax
 
-## Diagnóstico dos Problemas Identificados
+# Plano de Refinamento do Prompt FINAX v3.0
 
-### Problemas Reportados pelo Usuário
+## Análise Comparativa
 
-| Teste | Problema | Causa Raiz |
-|-------|----------|------------|
-| "Cancelar evento" | Mostra recorrentes em vez de cancelar gasto | IA interpreta "cancelar" como cancelar recorrente |
-| "4" para selecionar | Mostra JSON bruto + pede confirmação | Contexto de seleção não está tratando números corretamente |
-| "Sim" após confirmação | "Não entendi" | Status `awaiting_confirmation` não reconheceu o "sim" |
-| "100 no crédito" | Funciona mas pede confirmação desnecessária | Confirmation Gate ativo |
-| "Comprei roupa 5x de 77" | Interpreta como 2 gastos separados | Regex de `detectMultipleExpenses` conflita com parcelamento |
-| "Roupa 300 em 5x" | Mostra JSON bruto | Contexto de multi_expense ativo, não roteou para installment |
-| "Adicionar cartão Bradesco 2000 limite vence dia 16" | Interpreta como gastos | `detectMultipleExpenses` ativou antes da IA classificar |
+### O que o Prompt Atual (v2) tem e funciona bem:
+| Elemento | Status |
+|----------|--------|
+| Estrutura clara de actionTypes | ✅ |
+| Exemplos práticos | ✅ |
+| Prioridades explícitas (ex: recurring sobre expense) | ✅ |
+| Slots bem definidos | ✅ |
+| Formato JSON obrigatório | ✅ |
 
-### Problemas Estruturais
+### O que o Prompt Novo (v3) adiciona de positivo:
+| Elemento | Benefício |
+|----------|-----------|
+| Filosofia clara "Intérprete, não decisor" | Reduz over-engineering da IA |
+| Níveis de confiança detalhados | Permite unknown honesto |
+| Regras de desambiguação (diferença 30%) | Evita classificações forçadas |
+| Checklist antes de responder | Consistência |
+| Casos especiais (número isolado, múltiplos) | Tratamento específico |
 
-1. **Confirmação Excessiva**: O `confirmation-gate.ts` pede confirmação mesmo para intenções claras
-2. **detectMultipleExpenses Agressivo**: Ativa antes da classificação IA, quebrando parcelamentos e cartões
-3. **Perda de Contexto em Seleções**: Quando usuário responde "4", o sistema mostra JSON ao invés de executar
-4. **Dados do Site Não Vinculados**: Frontend usa `user?.id` (auth.uid) em vez de `usuarioId` do WhatsApp
+### O que FALTA no Prompt v3 (crítico!):
+| Intent | Status | Impacto |
+|--------|--------|---------|
+| `installment` | ❌ Ausente | Parcelamentos não funcionam |
+| `purchase` | ❌ Ausente | Consultor de compras não funciona |
+| `query_alerts` | ❌ Ausente | Alertas não consultáveis |
+| `set_context` | ❌ Ausente | Contextos de viagem quebram |
 
 ---
 
-## Solução Proposta
+## Refinamentos Propostos
 
-### 1. REMOVER Confirmation Gate para Intenções Claras
+### 1. Adicionar Intents Faltantes
 
-**Filosofia**: Só pedir confirmação para imagens e áudios (onde há interpretação). Texto claro executa direto.
-
-**Arquivos afetados**:
-- `supabase/functions/finax-worker/index.ts` (linhas 3244-3273, 3313-3385)
-
-**Mudanças**:
 ```
-ANTES (expense com todos os slots):
-→ requireConfirmation() → awaiting_confirmation → espera "sim"
-
-DEPOIS (expense com todos os slots):
-→ registerExpense() direto → mensagem de sucesso
+### installment - Compra parcelada no crédito
+**O que é:** Usuário comprou algo PARCELADO no cartão
+**Indicadores:** "em Nx", "x vezes", "parcelei", "parcelado"
+**Slots esperados:** amount (TOTAL), installments, description
+**Slots opcionais:** card, category
+**Exemplos claros:**
+✓ "Celular 1200 em 12x"
+✓ "Parcelei roupa 300 em 5x"
+✓ "TV 2000 em 10 vezes no Nubank"
+**Confusões comuns:**
+⚠️ vs expense: Se tem "Nx" ou "vezes" → installment
+⚠️ NÃO calcular parcela! Valor = TOTAL informado
 ```
 
-### 2. PROTEGER detectMultipleExpenses
+```
+### purchase - Consulta sobre compra
+**O que é:** Usuário PERGUNTANDO se deve/pode comprar algo
+**Indicadores:** "vale a pena", "posso comprar", "devo gastar", "consigo?"
+**Slots esperados:** amount (valor do item)
+**Slots opcionais:** description
+**Exemplos claros:**
+✓ "Vale a pena comprar celular de 2000?"
+✓ "Posso gastar 500 em roupa?"
+✓ "Dá pra eu comprar um notebook?"
+**Diferença de chat:** purchase = pergunta sobre compra ESPECÍFICA com valor
+```
 
-**Problema**: Ativa para "1200 em 12x" e "2000 de limite vence dia 16"
+```
+### query_alerts - Consultar alertas configurados
+**O que é:** Ver avisos/alertas financeiros
+**Indicadores:** "alertas", "avisos", "notificações"
+**Exemplos:** "Meus alertas", "Tem algum aviso?"
+```
 
-**Solução**: Adicionar guard que verifica padrões de parcelamento/cartão ANTES de detectar múltiplos gastos.
+```
+### set_context - Período especial (viagem, evento)
+**O que é:** Marcar período especial SEM meta de valor
+**Indicadores:** "vou viajar", "começando", "período de" + datas
+**Diferença de goal:** set_context não tem valor objetivo
+**Exemplos:** "Vou viajar de 10/01 até 15/01"
+```
 
-**Arquivo**: `supabase/functions/finax-worker/index.ts` (linhas 3063-3091)
+### 2. Ajustar Filosofia de Confidence
 
-```typescript
-// NOVO GUARD
-const isInstallmentPattern = /\d+\s*(x|vezes|parcela)/i.test(conteudoProcessado);
-const isCardPattern = /(adicionar|registrar|cadastrar|novo)\s*cart[aã]o/i.test(conteudoProcessado);
+O v3 tem níveis muito granulares (0.95, 0.9, 0.85...). Simplificar para 4 níveis:
 
-if (payload.messageType === "text" && !activeAction && !isInstallmentPattern && !isCardPattern) {
-  const multipleExpenses = detectMultipleExpenses(conteudoProcessado);
-  // ...
+| Nível | Confidence | Quando usar |
+|-------|------------|-------------|
+| Alta | 1.0 - 0.9 | Intenção inequívoca com indicadores claros |
+| Média | 0.89 - 0.7 | Padrão reconhecível, contexto implícito |
+| Baixa | 0.69 - 0.5 | Ambiguidade presente mas há favorito |
+| Unknown | < 0.5 | Retornar `unknown` e deixar backend decidir |
+
+### 3. Manter Prioridades Críticas
+
+O prompt atual tem prioridades que DEVEM ser mantidas:
+
+```
+PRIORIDADES DE CLASSIFICAÇÃO:
+1. recurring > expense (se mencionar periodicidade)
+2. goal > set_context (se mencionar valor objetivo)
+3. bill > recurring (se for conta de utilidades variáveis)
+4. add_card > card_event (se mencionar "registrar/adicionar/cadastrar")
+5. installment > expense (se mencionar "Nx" ou "vezes")
+6. purchase > chat (se for pergunta sobre compra específica com valor)
+```
+
+### 4. Formato de Resposta Alinhado
+
+O código atual espera estes campos no JSON:
+
+```json
+{
+  "actionType": "string",
+  "confidence": "number 0.0-1.0",
+  "slots": { "slot_name": "value" },
+  "reasoning": "string"
 }
 ```
 
-### 3. CORRIGIR Handler de Seleção Numérica
-
-**Problema**: Quando usuário responde "4" em lista de recorrentes, o sistema mostra JSON bruto.
-
-**Causa**: O context-handler não está tratando seleções de lista corretamente.
-
-**Arquivo**: `supabase/functions/finax-worker/fsm/context-handler.ts`
-
-**Mudanças**:
-- Adicionar lógica para `pending_slot === "selection"` que interpreta números como índices de lista
-- Executar ação correspondente (cancelar recorrente selecionado)
-
-### 4. VINCULAR Dados do Site ao WhatsApp
-
-**Problema**: Frontend usa `user?.id` (auth.uid) que não existe na tabela `transacoes`.
-
-**Solução**: Usar `useUsuarioId()` em todas as páginas.
-
-**Arquivos afetados**:
-- `src/pages/Transacoes.tsx` (linha 22)
-- `src/pages/Cartoes.tsx` (linhas 31-33)
-
-```typescript
-// ANTES
-const { user } = useAuth();
-const { transacoes } = useTransacoes(user?.id);
-
-// DEPOIS  
-const { usuarioId } = useUsuarioId();
-const { transacoes } = useTransacoes(usuarioId || undefined);
-```
-
-### 5. ATIVAR Funcionalidades Dormentes
-
-#### 5.1 Sistema de Memória (patterns.ts)
-**Status**: Código existe, mas `learnMerchantPattern` nunca é chamado.
-
-**Solução**: Adicionar chamada após cada transação bem-sucedida em `registerExpense`.
-
-**Arquivo**: `supabase/functions/finax-worker/intents/expense.ts`
-
-```typescript
-// Após registrar transação com sucesso:
-await learnMerchantPattern({
-  userId,
-  description: slots.description,
-  category: slots.category || "outros",
-  paymentMethod: slots.payment_method,
-  transactionId: transaction.id,
-  wasUserCorrected: false
-});
-```
-
-#### 5.2 Sistema de Metas (goals.ts)
-**Status**: Código existe e já está roteado no index.ts (linhas 3713-3762).
-**Ação**: Já funcional! Testar com "criar meta de 5000 para viagem".
-
-#### 5.3 Alertas Proativos (alerts.ts)
-**Status**: Código existe, alertas são salvos mas não consultados.
-
-**Solução**: Ativar chamada de `checkImmediateAlerts` após cada gasto.
-
-**Arquivo**: `supabase/functions/finax-worker/intents/expense.ts`
-
-```typescript
-// Após registrar transação:
-await checkImmediateAlerts(userId, {
-  valor: slots.amount,
-  categoria: slots.category || "outros",
-  descricao: slots.description || ""
-});
-```
-
-#### 5.4 Consultor de Compras (purchase.ts)
-**Status**: Código existe mas não está roteado no index.ts.
-
-**Solução**: Adicionar intent "purchase" ao prompt da IA e roteamento no index.ts.
-
-**Arquivos**:
-- `supabase/functions/finax-worker/index.ts` (prompt + handler)
-- Adicionar bloco para `decision.actionType === "purchase"`
-
-#### 5.5 Análise de Mídia Integrada
-**Status**: `media_analysis` existe mas cria registros isolados.
-
-**Solução**: Quando OCR/transcrição extrai dados, preencher slots da action ativa em vez de criar nova transação.
-
-**Arquivo**: `supabase/functions/finax-worker/index.ts` (seção de imagem/áudio)
+O v3 está alinhado, apenas garantir que o código não espera campos extras.
 
 ---
 
-## Resumo de Arquivos a Modificar
+## Prompt Final Refinado (v3.1)
+
+Combinando filosofia do v3 com intents completos e prioridades do v2:
+
+```typescript
+export const FINAX_PROMPT_V3_1 = `# FINAX - INTERPRETADOR SEMÂNTICO v3.1
+
+## 🎯 SEU PAPEL
+Você é um **intérprete**, não um tomador de decisões.
+- Você INTERPRETA a mensagem e identifica a intenção MAIS PROVÁVEL
+- Você EXTRAI dados estruturados (slots) do texto
+- Você ADMITE DÚVIDA quando não tem certeza (confidence baixo)
+- Você NÃO valida slots nem decide fluxo - isso é do código
+
+## 📚 TIPOS DE INTENÇÃO
+
+### expense - Gasto pontual
+Dinheiro SAINDO em compra única.
+Indicadores: "gastei", "paguei", "comprei", "custou"
+Slots: amount, payment_method, description, category, card
+Exemplos: "Mercado 180", "Uber 30 pix", "Dentista 360 débito"
+
+### income - Entrada de dinheiro
+Dinheiro CHEGANDO.
+Indicadores: "recebi", "caiu", "entrou", "ganhei"
+Slots: amount, source, description
+Exemplos: "Recebi 1500", "Caiu 200 de freela"
+
+### installment - Compra parcelada ⚠️ PRIORIDADE sobre expense se tiver "Nx"
+Compra dividida em parcelas no crédito.
+Indicadores: "em Nx", "x vezes", "parcelei", "parcelado"
+Slots: amount (TOTAL), installments, description, card
+Exemplos: "Celular 1200 em 12x", "Roupa 300 em 5x no Nubank"
+REGRA: Valor informado = TOTAL, não calcular parcela!
+
+### recurring - Gasto fixo mensal ⚠️ PRIORIDADE sobre expense se tiver periodicidade
+Assinatura ou conta de valor FIXO que repete.
+Indicadores: "todo mês", "mensal", "assinatura"
+Slots: amount, description, periodicity, day_of_month
+Exemplos: "Netflix 40 todo mês", "Academia 99 mensal"
+
+### add_card - Cadastrar novo cartão ⚠️ PRIORIDADE sobre card_event
+Registrar cartão que NÃO existe no sistema.
+Indicadores: "registrar", "adicionar", "cadastrar", "novo cartão", "meu cartão é"
+Slots: card_name, limit, due_day, closing_day
+Exemplos: "Registrar cartão Bradesco limite 2000 vence dia 16"
+
+### card_event - Atualizar cartão existente
+Mudar limite de cartão JÁ cadastrado.
+Indicadores: "limite do [banco]" (SEM "registrar/adicionar")
+Slots: card, value
+Exemplos: "Limite do Nubank agora é 8000"
+
+### bill - Conta com vencimento ⚠️ PRIORIDADE sobre recurring para utilidades
+Criar lembrete de conta VARIÁVEL (água, luz, internet).
+Indicadores: "conta de", "vence dia", "fatura"
+Slots: bill_name, due_day
+Exemplos: "Conta de água vence dia 10"
+Diferença: bill = valor varia | recurring = valor fixo
+
+### pay_bill - Pagar conta existente
+Registrar pagamento JÁ feito.
+Indicadores: "paguei a conta de", "foi", "deu"
+Slots: bill_name, amount
+Exemplos: "Paguei energia, deu 184"
+
+### goal - Meta de economia ⚠️ PRIORIDADE sobre set_context se tiver valor
+Guardar dinheiro para objetivo.
+Indicadores: "meta", "juntar", "guardar", "economizar"
+Slots: amount, description, deadline
+Exemplos: "Criar meta de 5000 para viagem"
+
+### purchase - Consulta de compra ⚠️ PRIORIDADE sobre chat se for pergunta com valor
+Perguntar se DEVE comprar algo específico.
+Indicadores: "vale a pena", "posso comprar", "devo gastar"
+Slots: amount, description
+Exemplos: "Vale a pena comprar celular de 2000?"
+
+### query - Consultar informações
+Ver dados, não modificar.
+Indicadores: "quanto", "resumo", "saldo", "total"
+Exemplos: "Quanto gastei esse mês?", "Quanto recebi?"
+
+### query_alerts - Ver alertas
+Indicadores: "alertas", "avisos"
+Exemplos: "Meus alertas"
+
+### cancel - Cancelar algo
+Indicadores: "cancela", "desfaz", "apaga"
+Exemplos: "Cancela", "Apaga isso"
+
+### chat - Conversa/conselho
+Pergunta reflexiva sobre finanças.
+Exemplos: "Tô gastando muito?", "Como economizar?"
+NUNCA retorne unknown para perguntas - use chat!
+
+### set_context - Período especial
+Viagem ou evento SEM valor objetivo.
+Indicadores: datas + "vou viajar", "começando"
+Exemplos: "Vou viajar de 10/01 até 15/01"
+
+### control - Saudações
+Exemplos: "Oi", "Bom dia", "Ajuda"
+
+### edit - Correção rápida
+Indicadores: "era", "errei", "corrige"
+Exemplos: "Era pix, não débito"
+
+### unknown - Último recurso
+Só quando confidence < 0.5.
+Exemplo: "50" (número isolado sem contexto)
+
+## 🎯 NÍVEIS DE CONFIANÇA
+
+| Nível | Quando usar |
+|-------|-------------|
+| 0.9-1.0 | Intenção inequívoca, indicadores claros |
+| 0.7-0.89 | Padrão reconhecível, contexto implícito |
+| 0.5-0.69 | Ambiguidade presente mas há favorito |
+| < 0.5 | Retornar unknown |
+
+## ⚖️ PRIORIDADES (quando há conflito)
+
+1. installment > expense (se tem "Nx" ou "vezes")
+2. recurring > expense (se tem periodicidade)
+3. bill > recurring (se é conta de utilidades)
+4. add_card > card_event (se tem "registrar/adicionar")
+5. goal > set_context (se tem valor objetivo)
+6. purchase > chat (se é pergunta com valor específico)
+
+## 📦 SLOTS (extraia apenas o que está claro)
+
+Valores: amount, limit, value, installments, due_day
+Textos: description, card, card_name, bill_name, source
+Pagamento: payment_method (pix|debito|credito|dinheiro)
+Datas: deadline, periodicity (monthly|weekly|yearly)
+
+## 📤 RESPOSTA (JSON PURO, SEM MARKDOWN)
+
+{
+  "actionType": "expense|income|installment|recurring|add_card|card_event|bill|pay_bill|goal|purchase|query|query_alerts|cancel|chat|set_context|control|edit|unknown",
+  "confidence": 0.0-1.0,
+  "slots": { },
+  "reasoning": "Explicação concisa"
+}
+
+## ✅ CHECKLIST
+
+1. Li a mensagem COMPLETA?
+2. Identifiquei indicadores de intent?
+3. Apliquei prioridades se há conflito?
+4. Extraí APENAS slots claros?
+5. Confidence reflete minha certeza?
+6. Se ambíguo (< 0.5), retornei unknown?
+
+RESPONDA APENAS COM JSON. SEM MARKDOWN. SEM EXPLICAÇÕES ADICIONAIS.`;
+```
+
+---
+
+## Arquivos a Modificar
 
 | Arquivo | Mudança |
 |---------|---------|
-| `finax-worker/index.ts` | Remover confirmação para texto, proteger detectMultipleExpenses, ativar purchase |
-| `finax-worker/fsm/context-handler.ts` | Corrigir handler de seleção numérica |
-| `finax-worker/intents/expense.ts` | Chamar `learnMerchantPattern` e `checkImmediateAlerts` |
-| `src/pages/Transacoes.tsx` | Usar `useUsuarioId()` |
-| `src/pages/Cartoes.tsx` | Usar `useUsuarioId()` |
+| `supabase/functions/finax-worker/index.ts` | Substituir `PROMPT_FINAX_UNIVERSAL` pelo novo prompt v3.1 |
 
 ---
 
-## Testes de Validação
+## Mudanças Específicas no Código
 
-Após implementação, testar os cenários que falharam:
+### Localização do Prompt Atual
+Linhas 557-687 do `index.ts`
 
-| Cenário | Resultado Esperado |
-|---------|-------------------|
-| "Gastei 50 no mercado" + "Débito" | Registra direto sem pedir confirmação |
-| "Roupa 300 em 5x" | Abre fluxo de parcelamento (pede cartão) |
-| "Adicionar cartão Bradesco 2000 limite vence dia 16" | Cria cartão Bradesco com limite 2000 |
-| Selecionar "4" em lista de recorrentes | Cancela o Spotify |
-| "criar meta de 5000 para viagem" | Cria meta |
-| "vale a pena comprar um celular de 2000?" | Análise de compra com contexto financeiro |
+### Validação Necessária
+Confirmar que o código de normalização de slots (`normalizeAISlots`, linhas 692-742) suporta todos os novos slots:
+- ✅ `amount`, `description`, `payment_method`, `source`, `card` - já suportados
+- ✅ `value`, `label`, `start_date`, `end_date`, `day_of_month` - já suportados
+- ⚠️ `installments` - verificar se está sendo normalizado (pode precisar adicionar)
+- ⚠️ `bill_name` - verificar se está sendo normalizado
+- ⚠️ `card_name` - verificar se está sendo normalizado
 
 ---
 
-## Detalhes Técnicos
+## Testes de Validação Pós-Implementação
 
-### Remoção do Confirmation Gate
+| Cenário | Intent Esperado | Confidence |
+|---------|-----------------|------------|
+| "Mercado 180" | expense | 0.9 |
+| "Celular 1200 em 12x" | installment | 0.95 |
+| "Netflix 40 todo mês" | recurring | 0.95 |
+| "Registrar cartão Bradesco 2000 vence 16" | add_card | 1.0 |
+| "Conta de água vence dia 10" | bill | 1.0 |
+| "Vale a pena comprar celular de 2000?" | purchase | 0.9 |
+| "Criar meta 5000 viagem" | goal | 0.95 |
+| "50" | unknown | 0.3 |
 
-No bloco de EXPENSE (linhas ~3300-3385), substituir:
-
-```typescript
-// REMOVER ESTE BLOCO:
-const { requireConfirmation } = await import("./fsm/confirmation-gate.ts");
-const gateResult = await requireConfirmation(...);
-if (gateResult.canExecute) { ... }
-// Precisa confirmar → enviar mensagem de confirmação
-
-// SUBSTITUIR POR EXECUÇÃO DIRETA:
-const result = await registerExpense(userId, slots as any, undefined);
-await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-return;
-```
-
-Mesma mudança para INCOME (linhas ~3239-3273).
-
-### Guard para detectMultipleExpenses
-
-```typescript
-// Antes da linha 3063
-const INSTALLMENT_PATTERN = /\d+\s*(x|vezes|parcelas?)\s*(de\s*\d+)?/i;
-const CARD_PATTERN = /(adicionar|registrar|cadastrar|novo|meu)\s*cart[aã]o/i;
-const BILL_PATTERN = /(conta\s+de|fatura|vence\s+dia)/i;
-
-const shouldSkipMultiDetection = 
-  INSTALLMENT_PATTERN.test(conteudoProcessado) ||
-  CARD_PATTERN.test(conteudoProcessado) ||
-  BILL_PATTERN.test(conteudoProcessado);
-
-if (payload.messageType === "text" && !activeAction && !shouldSkipMultiDetection) {
-  // ... detectMultipleExpenses logic
-}
-```
-
-### Correção do Handler de Seleção
-
-Em `context-handler.ts`, adicionar tratamento para `pending_slot === "selection"`:
-
-```typescript
-case "selection":
-  // Número indica seleção de lista
-  const numMatch = rawMessage.match(/^(\d+)$/);
-  if (numMatch) {
-    const selectedIndex = parseInt(numMatch[1]) - 1; // 1-indexed
-    const options = activeAction.slots.options as string[];
-    if (options && selectedIndex >= 0 && selectedIndex < options.length) {
-      return options[selectedIndex]; // Retorna ID selecionado
-    }
-  }
-  return null;
-```
-
-### Ativação do Purchase Intent
-
-Adicionar ao prompt da IA:
-```
-### purchase - Consulta de compra
-Exemplos: "vale a pena comprar X?", "posso gastar X em Y?", "devo comprar?"
-- Palavras-chave: vale a pena, posso comprar, devo gastar, consigo comprar
-```
-
-Adicionar handler no index.ts:
-```typescript
-if (decision.actionType === "purchase") {
-  const { analyzePurchase } = await import("./intents/purchase.ts");
-  const result = await analyzePurchase({
-    userId,
-    itemDescription: slots.description || "item",
-    itemValue: slots.amount || 0,
-    category: slots.category
-  });
-  await sendMessage(payload.phoneNumber, result, payload.messageSource);
-  return;
-}
-```
