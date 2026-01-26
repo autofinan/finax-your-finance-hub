@@ -21,6 +21,7 @@ export type ActionType =
   | "query_alerts"  // consulta de alertas proativos
   | "control"       // meta-comando (cancelar, deixa pra lá)
   | "recurring"     // gasto recorrente
+  | "installment"   // parcelamento no crédito
   | "set_context"   // definir contexto (viagem, evento)
   | "edit"          // edição/correção rápida
   | "chat"          // conversa livre
