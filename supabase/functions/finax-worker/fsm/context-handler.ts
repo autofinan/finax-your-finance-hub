@@ -169,6 +169,50 @@ function fillPendingSlot(
   
   console.log(`📥 [FSM] Preenchendo slot "${pendingSlot}" para "${intent}"`);
   
+  // ========================================================================
+  // 🔢 CASO ESPECIAL: Seleção de lista (selection)
+  // ========================================================================
+  if (pendingSlot === "selection") {
+    const options = activeAction.slots.options as string[] | undefined;
+    
+    // Verificar se é um número para seleção de lista
+    const numMatch = rawMessage.trim().match(/^(\d+)$/);
+    if (numMatch && options) {
+      const selectedIndex = parseInt(numMatch[1]) - 1; // 1-indexed
+      
+      if (selectedIndex >= 0 && selectedIndex < options.length) {
+        const selectedId = options[selectedIndex];
+        console.log(`✅ [FSM] Seleção numérica: índice ${selectedIndex + 1} → ID ${selectedId}`);
+        
+        return {
+          handled: true,
+          shouldContinue: false,
+          filledSlot: "selection",
+          slotValue: selectedId,
+          updatedSlots: {
+            ...activeAction.slots,
+            selected_id: selectedId,
+            selection_index: selectedIndex
+          },
+          readyToExecute: true // Seleção completa → executar
+        };
+      } else {
+        return {
+          handled: true,
+          shouldContinue: false,
+          message: `Número inválido. Escolha entre 1 e ${options.length} 👆`
+        };
+      }
+    }
+    
+    // Não é número válido para seleção
+    return {
+      handled: true,
+      shouldContinue: false,
+      message: `Responde com o número da opção 👆`
+    };
+  }
+  
   // Tentar extrair valor baseado no tipo de slot
   const extractedValue = extractSlotValue(rawMessage, normalized, pendingSlot);
   
@@ -209,7 +253,7 @@ function fillPendingSlot(
     slotValue: extractedValue,
     updatedSlots,
     readyToConfirm: missingSlots.length === 0,
-    readyToExecute: false // Nunca executa direto, sempre confirma
+    readyToExecute: missingSlots.length === 0 // Executa direto quando completo
   };
 }
 
