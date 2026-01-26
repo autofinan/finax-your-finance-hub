@@ -59,6 +59,20 @@ export interface ExtractedSlots {
   card?: string;
   installments?: number;
   recurrence_type?: "mensal" | "semanal" | "anual";
+  // Novos slots v3.1
+  bill_name?: string;
+  card_name?: string;
+  limit?: number;
+  due_day?: number;
+  closing_day?: number;
+  deadline?: string;
+  periodicity?: string;
+  value?: number;
+  label?: string;
+  start_date?: string;
+  end_date?: string;
+  day_of_month?: number;
+  date_range?: any;
   [key: string]: any;
 }
 
