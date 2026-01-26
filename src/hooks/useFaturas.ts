@@ -2,16 +2,22 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { FaturaCartao, FaturaEmAberto } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 
-export function useFaturas(usuarioId?: string) {
+export function useFaturas(usuarioIdProp?: string) {
   const [faturas, setFaturas] = useState<FaturaCartao[]>([]);
   const [faturasEmAberto, setFaturasEmAberto] = useState<FaturaEmAberto[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  
+  // Usar hook para buscar usuario_id via auth_id
+  const { usuarioId: resolvedUsuarioId, loading: loadingUsuarioId } = useUsuarioId();
+  const usuarioId = usuarioIdProp || resolvedUsuarioId;
 
   const fetchFaturas = async () => {
+    if (loadingUsuarioId) return;
+    
     try {
-      setLoading(true);
       
       // Buscar todas as faturas
       let query = supabase
@@ -93,8 +99,10 @@ export function useFaturas(usuarioId?: string) {
   };
 
   useEffect(() => {
-    fetchFaturas();
-  }, [usuarioId]);
+    if (!loadingUsuarioId) {
+      fetchFaturas();
+    }
+  }, [usuarioId, loadingUsuarioId]);
 
   return {
     faturas,

@@ -2775,6 +2775,7 @@ export type Database = {
       usuarios: {
         Row: {
           ativo: boolean | null
+          auth_id: string | null
           created_at: string | null
           estado_financeiro: string | null
           id: string
@@ -2800,6 +2801,7 @@ export type Database = {
         }
         Insert: {
           ativo?: boolean | null
+          auth_id?: string | null
           created_at?: string | null
           estado_financeiro?: string | null
           id?: string
@@ -2825,6 +2827,7 @@ export type Database = {
         }
         Update: {
           ativo?: boolean | null
+          auth_id?: string | null
           created_at?: string | null
           estado_financeiro?: string | null
           id?: string

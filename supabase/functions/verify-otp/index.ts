@@ -162,8 +162,54 @@ serve(async (req) => {
 
     console.log(`✅ [VERIFY] Usuário encontrado: ${usuario.id} (${usuario.nome})`);
 
-    // Atualizar phone_e164 se necessário (sincronizar com formato novo)
-    if (usuario.phone_e164 !== phoneE164) {
+    // ========================================================================
+    // 🔗 CRIAR/ATUALIZAR AUTH.USER E VINCULAR AUTH_ID
+    // ========================================================================
+    // Isso permite que o site use auth.uid() para filtrar dados do WhatsApp
+    // ========================================================================
+    let authUserId: string | null = null;
+    
+    try {
+      // Verificar se já existe auth.user para este telefone
+      const { data: existingAuthUsers } = await supabase.auth.admin.listUsers();
+      const existingAuthUser = existingAuthUsers?.users?.find(
+        u => u.phone === phoneE164 || u.email === `${phoneE164.replace("+", "")}@finax.app`
+      );
+      
+      if (existingAuthUser) {
+        authUserId = existingAuthUser.id;
+        console.log(`🔗 [VERIFY] Auth user existente: ${authUserId}`);
+      } else {
+        // Criar novo auth.user usando o telefone como identificador
+        const { data: newAuthUser, error: authError } = await supabase.auth.admin.createUser({
+          email: `${phoneE164.replace("+", "")}@finax.app`,
+          phone: phoneE164,
+          email_confirm: true,
+          phone_confirm: true,
+        });
+        
+        if (!authError && newAuthUser?.user) {
+          authUserId = newAuthUser.user.id;
+          console.log(`✅ [VERIFY] Novo auth user criado: ${authUserId}`);
+        } else {
+          console.warn(`⚠️ [VERIFY] Não foi possível criar auth user:`, authError);
+        }
+      }
+      
+      // Atualizar usuarios.auth_id para vincular
+      if (authUserId) {
+        await supabase
+          .from("usuarios")
+          .update({ auth_id: authUserId, phone_e164: phoneE164 })
+          .eq("id", usuario.id);
+        console.log(`🔗 [VERIFY] Vinculado: usuarios.${usuario.id} → auth.${authUserId}`);
+      }
+    } catch (authLinkError) {
+      console.error(`⚠️ [VERIFY] Erro ao vincular auth_id (não-bloqueante):`, authLinkError);
+    }
+
+    // Atualizar phone_e164 se necessário (fallback se auth_id falhou)
+    if (usuario.phone_e164 !== phoneE164 && !authUserId) {
       await supabase
         .from("usuarios")
         .update({ phone_e164: phoneE164 })
