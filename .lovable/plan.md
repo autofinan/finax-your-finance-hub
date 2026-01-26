@@ -1,360 +1,531 @@
 
-# Plano de Correção Definitivo do Finax - Handlers Faltantes
+# Plano de Refatoração Definitivo do Finax - Arquitetura de Estado Forte
 
-## 📋 Diagnóstico Confirmado
+## Diagnóstico Completo
 
-Baseado na análise profunda dos logs, código e banco de dados, identifiquei **3 problemas estruturais críticos** que explicam porque funcionalidades básicas não funcionam:
+Após análise profunda do código, banco de dados e logs, identifiquei **5 problemas estruturais críticos**:
 
-### PROBLEMA 1: Handler de `add_card` NÃO EXISTE
-**Evidência nos logs:**
+### PROBLEMA 1: Estado Conversacional FRACO (70% dos bugs)
 ```
-📊 [DECISION] {"type":"expense","conf":0.95,"slots":{"amount":2000},"canExec":false}
+EVIDÊNCIA no banco:
+- 199 actions no total
+- Muitas com status "collecting" ou "expired" sem conclusão
+- Várias actions duplicadas para o mesmo usuário/intent
 ```
-- Quando você diz "Registre meu cartão Bradesco crédito limite 2000"
-- IA não sabe classificar como `add_card` (não está no prompt!)
-- Sistema classifica como `expense` e trata 2000 como valor de gasto
 
-**Causa Raiz:**
-1. `add_card` está definido em `SLOT_REQUIREMENTS` (types.ts:111)
-2. MAS não está no `PROMPT_FINAX_UNIVERSAL` (index.ts:557-610)
-3. E não existe handler `if (decision.actionType === "add_card")` no index.ts
+**O que acontece:**
+- Usuário diz "Registrar cartão Bradesco limite 2000"
+- IA classifica como `add_card` com slots parciais
+- Sistema pergunta algo (ex: dia vencimento)
+- Usuário responde "15"
+- IA classifica "15" como novo intent (expense/income)
+- O fluxo de add_card é abandonado
 
-### PROBLEMA 2: Handler de `bill` (Faturas/Contas a Pagar) NÃO EXISTE
-**Evidência nos logs:**
+**Causa Raiz:** O Decision Engine não PRIORIZA o contexto ativo. Cada mensagem é classificada isoladamente.
+
+### PROBLEMA 2: Gastos no Crédito SEM Cartão/Fatura (Estrutura Inutilizada)
+```sql
+-- 10+ transações com forma_pagamento='credito' e cartao_id=NULL
+-- 0 registros em faturas_cartao
+-- 3 cartões cadastrados mas NUNCA vinculados a transações
 ```
-📊 [DECISION] {"type":"recurring","slots":{"amount":10,"description":"Conta de água"}}
+
+**O que acontece:**
+- Usuário registra "50 no crédito"
+- Sistema grava na tabela `transacoes` com `forma_pagamento='credito'`
+- MAS não vincula ao cartão (`cartao_id=NULL`)
+- MAS não cria entrada na fatura (`fatura_id=NULL`)
+- MAS não desconta do limite disponível
+
+**Resultado:** Cartões e faturas existem mas são inúteis.
+
+### PROBLEMA 3: Tabelas Não Utilizadas (Desperdício de Arquitetura)
 ```
-- Quando você diz "Minha fatura de água vence dia 10"
-- IA confunde com `recurring` por causa de "todo mês"
-- Sistema trata como gasto recorrente, não como conta a pagar
+TABELA                   REGISTROS   STATUS
+─────────────────────────────────────────────────
+faturas_cartao           0           NÃO USADA (deveria ter faturas mensais)
+orcamentos               0           NÃO USADA (poderia ter limites por categoria)
+savings_goals            0           NÃO USADA (metas existem, handler ok, não testado)
+alert_feedback           0           NÃO USADA (alertas não enviam)
+media_analysis           5           USADA MAS NÃO INTEGRADA (OCR salva mas não alimenta decisões)
+conversas_ativas         0           OBSOLETA (substituída por actions)
+```
 
-**Causa Raiz:**
-1. Funções `createBill` e `payBill` existem em `bills.ts`
-2. MAS `bill` não está como ActionType válido
-3. E não existe handler `if (decision.actionType === "bill")` no index.ts
+### PROBLEMA 4: Fluxos que Começam e Nunca Terminam
+```
+EVIDÊNCIA nas actions:
+- status="collecting" sem pending_slot definido
+- múltiplas actions ativas para o mesmo usuário
+- nenhuma confirmação final antes de salvar
+```
 
-### PROBLEMA 3: Prompt da IA Incompleto
-O `PROMPT_FINAX_UNIVERSAL` não ensina a IA sobre:
-- `add_card` - Registrar cartão de crédito
-- `bill` - Criar fatura/conta a pagar
-- `pay_bill` - Pagar fatura
+**O que deveria acontecer:**
+1. Usuário inicia fluxo
+2. Sistema coleta dados necessários
+3. Sistema CONFIRMA antes de salvar
+4. Sistema VOLTA ao estado neutro
+
+**O que acontece hoje:**
+1. Usuário inicia fluxo
+2. Sistema coleta parcialmente
+3. Qualquer mensagem nova inicia outro fluxo
+4. Estado vira caos
+
+### PROBLEMA 5: Site Desconectado dos Dados WhatsApp
+```
+EVIDÊNCIA:
+- Transacoes.tsx usa useTransacoes hook
+- Hook filtra por usuario_id
+- Dados aparecem SE o usuário está autenticado
+- MAS: usuario_id das transações WhatsApp ≠ auth.uid() do site
+```
+
+**Causa:** O WhatsApp usa `usuarios.id` baseado em phone_number. O site usa `auth.uid()`. Não há vinculação explícita.
 
 ---
 
-## 🔧 SOLUÇÃO: Implementação de Handlers Faltantes
+## Solução: Arquitetura de Estado Forte
 
-### Fase 1: Adicionar ActionTypes Faltantes
+### Princípio Fundamental
+O Finax implementará uma **Máquina de Estados Finitos** onde:
+- Cada usuário tem UM estado ativo por vez
+- Mensagens são interpretadas NO CONTEXTO daquele estado
+- Transições são explícitas (início → coleta → confirmação → execução → neutro)
+- Fluxos não podem ser "esquecidos"
+
+### MÓDULO 1: Priorização de Contexto Ativo
 
 **Arquivo:** `supabase/functions/finax-worker/index.ts`
 
-**1.1 - Atualizar type ActionType (linha 53):**
-```typescript
-type ActionType = 
-  | "expense" | "income" | "card_event" 
-  | "add_card"    // NOVO: Registrar cartão
-  | "bill"        // NOVO: Criar fatura/conta a pagar
-  | "pay_bill"    // NOVO: Pagar fatura
-  | "cancel" | "query" | "query_alerts" | "control" 
-  | "recurring" | "set_context" | "chat" | "edit" | "goal" | "unknown";
-```
-
-**1.2 - Atualizar SLOT_REQUIREMENTS (linha 123):**
-```typescript
-const SLOT_REQUIREMENTS = {
-  // ... existentes ...
-  add_card: { required: ["card_name", "limit"], optional: ["due_day", "closing_day"] },
-  bill: { required: ["bill_name", "due_day"], optional: ["estimated_value"] },
-  pay_bill: { required: ["bill_name", "amount"], optional: [] },
-};
-```
-
-**1.3 - Atualizar SLOT_PROMPTS (linha 158):**
-```typescript
-const SLOT_PROMPTS = {
-  // ... existentes ...
-  card_name: { text: "Qual o nome do cartão? (ex: Nubank, Inter...)" },
-  limit: { text: "Qual o limite total? 💰" },
-  due_day: { text: "Qual o dia de vencimento? (1-31)" },
-  closing_day: { text: "Qual o dia de fechamento?" },
-  bill_name: { text: "Qual o nome da conta? (ex: Energia, Internet...)" },
-  estimated_value: { text: "Qual o valor estimado? (opcional)" },
-};
-```
-
-### Fase 2: Atualizar Prompt da IA
-
-**Arquivo:** `supabase/functions/finax-worker/index.ts` (PROMPT_FINAX_UNIVERSAL ~linha 550-640)
-
-Adicionar novas seções ao prompt:
-
+**Mudança no Decision Engine:**
 ```text
-### add_card - Registrar NOVO cartão de crédito
-Exemplos: "Registrar cartão Nubank limite 5000", "Adicionar cartão Bradesco crédito 3000 vencimento dia 15"
-- Palavras-chave: registrar cartão, adicionar cartão, novo cartão, cadastrar cartão + nome do banco + limite
-- OBRIGATÓRIO: nome do cartão E limite
-- Opcional: dia de vencimento
+ANTES:
+1. Receber mensagem
+2. Classificar com IA
+3. Verificar se tem action ativa
+4. Tentar preencher slot
 
-### bill - Criar fatura/conta a pagar (NÃO é recorrente automático!)
-Exemplos: "Minha conta de água vence dia 10", "Criar fatura energia dia 15", "Fatura internet todo dia 20"
-- Palavras-chave: conta de, fatura, vence dia, vencimento
-- É para lembretes de contas variáveis (água, luz, internet)
-- NÃO confundir com recurring (Netflix, Spotify - valor fixo)
-
-### pay_bill - Pagar fatura/conta existente
-Exemplos: "Paguei a energia, deu 184", "Paguei fatura de água 120"
-- Palavras-chave: paguei a fatura, paguei a conta de + nome + valor
+DEPOIS:
+1. Receber mensagem
+2. VERIFICAR SE TEM ACTION ATIVA
+3. SE TEM: interpretar mensagem COMO RESPOSTA ao slot pendente
+4. SE NÃO TEM: classificar com IA
 ```
 
-### Fase 3: Criar Handler de add_card
+**Regra de Ouro:**
+```
+SE activeAction.pending_slot existe:
+  → Mensagem é resposta para aquele slot
+  → NÃO classificar com IA
+  → APENAS validar e preencher
+```
 
-**Arquivo:** `supabase/functions/finax-worker/intents/card.ts`
+### MÓDULO 2: Fluxo de Cartão de Crédito Completo
 
-Adicionar nova função `createCard`:
+**O que precisa acontecer quando usuário diz "50 no crédito":**
+
+1. Sistema detecta `forma_pagamento = credito`
+2. SE usuário tem 1 cartão → usar automaticamente
+3. SE usuário tem múltiplos cartões → perguntar qual
+4. SE usuário tem 0 cartões → oferecer cadastrar
+5. APÓS vincular ao cartão:
+   - `cartao_id` = cartão selecionado
+   - Buscar/criar fatura do mês atual
+   - `fatura_id` = fatura do mês
+   - Atualizar `limite_disponivel -= valor`
+   - Atualizar `faturas_cartao.valor_total += valor`
+
+**Arquivos a modificar:**
+- `supabase/functions/finax-worker/intents/expense.ts` (vincular cartão/fatura)
+- `supabase/functions/finax-worker/intents/card.ts` (criar função getOrCreateInvoice)
+
+### MÓDULO 3: Sistema de Confirmação Final
+
+**Antes de QUALQUER registro definitivo:**
+```text
+Finax: "Confirmando:
+        💳 Bradesco
+        💰 Limite: R$ 2000
+        📅 Vencimento: dia 15
+        
+        Tudo certo? ✅"
+```
+
+**Usuário responde:**
+- "Sim" / "Confirma" → Salvar e fechar action
+- "Não" / "Cancela" → Cancelar action
+- Qualquer outra coisa → Perguntar novamente
+
+**Implementação:**
+- Novo status de action: `awaiting_confirmation`
+- Novo handler para processar confirmações
+
+### MÓDULO 4: Vinculação Site ↔ WhatsApp
+
+**Problema:** `auth.uid()` ≠ `usuarios.id`
+
+**Solução:** Criar coluna `auth_id` na tabela `usuarios` e popular no login OTP.
+
+**Fluxo:**
+1. Usuário faz login com telefone no site
+2. Sistema busca `usuarios` por `phone_number`
+3. Atualiza `usuarios.auth_id = auth.uid()`
+4. Hooks do site usam `auth_id` para filtrar
+
+**Arquivos:**
+- Criar migração para adicionar `auth_id` em `usuarios`
+- Atualizar `verify-otp/index.ts` para preencher `auth_id`
+- Atualizar todos os hooks (`useTransacoes`, `useCartoes`, etc.)
+
+### MÓDULO 5: Ciclo de Vida de Faturas
+
+**Automações necessárias:**
+
+1. **Criar fatura do mês automaticamente:**
+   - Quando: primeiro gasto no crédito do mês OU dia de abertura
+   - Status inicial: `aberta`
+
+2. **Fechar fatura no dia de fechamento:**
+   - CRON diário verifica cartões onde `dia_fechamento = hoje`
+   - Muda status para `fechada`
+   - Valor total fica congelado
+
+3. **Alertar sobre vencimento:**
+   - 7, 3, 1 dia antes do `dia_vencimento`
+   - Enviar mensagem via WhatsApp
+
+4. **Marcar como paga:**
+   - Usuário: "Paguei a fatura do Nubank"
+   - Sistema: atualiza `status = 'paga'`, restaura limite
+
+**Arquivos:**
+- `supabase/functions/ciclo-fatura/index.ts` (nova função CRON)
+- Atualizar `supabase/config.toml` com schedule
+
+---
+
+## Resumo de Mudanças
+
+### Arquivos Novos
+| Arquivo | Propósito |
+|---------|-----------|
+| `supabase/migrations/xxx_auth_id_usuarios.sql` | Adicionar auth_id |
+| `supabase/functions/ciclo-fatura/index.ts` | CRON para ciclo de faturas |
+
+### Arquivos Modificados
+| Arquivo | Mudança |
+|---------|---------|
+| `finax-worker/index.ts` | Priorizar contexto ativo sobre IA |
+| `finax-worker/intents/expense.ts` | Vincular cartão e fatura em gastos crédito |
+| `finax-worker/intents/card.ts` | getOrCreateInvoice, updateCardLimit com fatura |
+| `verify-otp/index.ts` | Popular auth_id no login |
+| `src/hooks/useTransacoes.ts` | Filtrar por auth_id vinculado |
+| `src/hooks/useCartoes.ts` | Filtrar por auth_id vinculado |
+| `src/hooks/useFaturas.ts` | Buscar faturas_cartao reais |
+
+---
+
+## Priorização de Implementação
+
+| Fase | Descrição | Impacto | Tempo |
+|------|-----------|---------|-------|
+| **1** | Priorizar contexto ativo (MÓDULO 1) | Corrige 70% dos bugs | 45 min |
+| **2** | Vincular crédito a cartão/fatura (MÓDULO 2) | Dá sentido aos cartões | 60 min |
+| **3** | Confirmação antes de salvar (MÓDULO 3) | Elimina registros incorretos | 30 min |
+| **4** | Vincular site ↔ WhatsApp (MÓDULO 4) | Site mostra dados reais | 45 min |
+| **5** | Ciclo de faturas automático (MÓDULO 5) | Automatiza cartões | 60 min |
+
+**Total estimado:** ~4 horas de implementação focada
+
+---
+
+## Resultado Esperado
+
+### Antes (Hoje)
+| Comando | Resultado |
+|---------|-----------|
+| "Registrar cartão Bradesco limite 2000" | "R$ 2000 - gasto ou entrada?" |
+| "Conta de água vence dia 10" | "R$ 10/mês como você paga?" |
+| "50 no crédito" | Registra sem vincular cartão |
+| Site: ver transações | Não mostra dados do WhatsApp |
+
+### Depois (Com Correções)
+| Comando | Resultado |
+|---------|-----------|
+| "Registrar cartão Bradesco limite 2000" | "Qual o dia de vencimento?" → "15" → "✅ Cartão cadastrado!" |
+| "Conta de água vence dia 10" | "✅ Fatura criada! Vou te lembrar." |
+| "50 no crédito" | "Qual cartão?" → "Nubank" → "✅ R$ 50 no Nubank. Limite: R$ 1950" |
+| Site: ver transações | Mostra todas as transações do WhatsApp |
+
+---
+
+## Seção Técnica: Detalhe da Implementação
+
+### Módulo 1: Priorização de Contexto
+
+Inserir no início do processamento (~linha 2955 do index.ts):
 
 ```typescript
-export interface CreateCardResult {
-  success: boolean;
-  message: string;
-  cardId?: string;
+// ========================================================================
+// 🔒 PRIORIDADE ABSOLUTA: CONTEXTO ATIVO
+// ========================================================================
+if (activeAction && activeAction.pending_slot) {
+  console.log(`🎯 [CONTEXT-FIRST] Ação ativa: ${activeAction.intent} aguardando ${activeAction.pending_slot}`);
+  
+  // Interpretar mensagem como resposta ao slot pendente
+  const response = await handlePendingSlot(
+    userId,
+    activeAction,
+    conteudoProcessado,
+    payload
+  );
+  
+  if (response.handled) {
+    return; // Fluxo tratado pelo contexto, não classificar com IA
+  }
+  
+  // Se não foi tratável como slot, usuário quer mudar de assunto
+  // Cancelar action atual e prosseguir
+  console.log(`🔄 [CONTEXT-FIRST] Mudança de assunto detectada`);
+  await closeAction(activeAction.id);
 }
+```
 
-export async function createCard(
-  userId: string,
-  slots: ExtractedSlots
-): Promise<CreateCardResult> {
-  console.log(`💳 [CARD] Criando cartão: ${JSON.stringify(slots)}`);
+### Módulo 2: Vincular Crédito
+
+Em `registerExpense`, após determinar `payment_method === "credito"`:
+
+```typescript
+if (slots.payment_method === "credito") {
+  // Buscar cartões do usuário
+  const cards = await listCardsForUser(userId);
   
-  const cardName = slots.card_name || slots.card || slots.description;
-  const limit = slots.limit || slots.amount || slots.value;
-  const dueDay = slots.due_day || slots.day_of_month;
-  const closingDay = slots.closing_day;
-  
-  if (!cardName) {
-    return { success: false, message: "Qual o nome do cartão? (ex: Nubank, Inter...)" };
-  }
-  
-  if (!limit) {
-    return { success: false, message: `Qual o limite do ${cardName}? 💰` };
-  }
-  
-  // Verificar se já existe
-  const existing = await findCard(userId, cardName);
-  if (existing) {
+  if (cards.length === 0) {
     return { 
       success: false, 
-      message: `Você já tem um cartão ${existing.nome} cadastrado 💳\n\nQuer atualizar o limite?` 
+      message: "Você não tem cartões cadastrados 💳\n\nQuer adicionar? Diga: \"Adicionar cartão [nome] limite [valor]\"" 
     };
   }
   
-  // Inserir
-  const { data, error } = await supabase
-    .from("cartoes_credito")
-    .insert({
-      usuario_id: userId,
-      nome: cardName,
-      limite_total: limit,
-      limite_disponivel: limit,
-      dia_vencimento: dueDay,
-      dia_fechamento: closingDay,
-      ativo: true
-    })
-    .select("id, nome, limite_total, dia_vencimento")
+  let selectedCard;
+  if (cards.length === 1) {
+    selectedCard = cards[0];
+  } else if (slots.card_id) {
+    selectedCard = cards.find(c => c.id === slots.card_id);
+  } else if (slots.card) {
+    selectedCard = await findCard(userId, slots.card);
+  }
+  
+  if (!selectedCard) {
+    // Perguntar qual cartão (retornar para slot collection)
+    return {
+      success: false,
+      missingSlot: "card",
+      message: `💳 Qual cartão?\n\n${cards.map((c, i) => `${i + 1}. ${c.nome}`).join("\n")}`
+    };
+  }
+  
+  // Buscar/criar fatura do mês
+  const invoice = await getOrCreateInvoice(userId, selectedCard.id);
+  
+  // Atualizar transação
+  slots.cartao_id = selectedCard.id;
+  slots.fatura_id = invoice.id;
+  
+  // Atualizar limite disponível
+  await updateCardLimit(selectedCard.id, selectedCard.limite_disponivel - slots.amount);
+  
+  // Atualizar valor da fatura
+  await updateInvoiceTotal(invoice.id, invoice.valor_total + slots.amount);
+}
+```
+
+### Módulo 4: Auth ID
+
+Migração SQL:
+```sql
+ALTER TABLE usuarios ADD COLUMN auth_id uuid REFERENCES auth.users(id);
+CREATE UNIQUE INDEX idx_usuarios_auth_id ON usuarios(auth_id);
+```
+
+Em `verify-otp/index.ts`:
+```typescript
+// Após validar OTP e criar sessão...
+const { data: usuario } = await supabase
+  .from("usuarios")
+  .select("id")
+  .eq("phone_number", phoneE164)
+  .single();
+
+if (usuario) {
+  await supabase
+    .from("usuarios")
+    .update({ auth_id: session.user.id })
+    .eq("id", usuario.id);
+}
+```
+
+Em hooks do site:
+```typescript
+// useTransacoes.ts
+const fetchTransacoes = async () => {
+  // Buscar usuario_id pelo auth_id
+  const { data: usuario } = await supabase
+    .from("usuarios")
+    .select("id")
+    .eq("auth_id", user?.id)
     .single();
+    
+  if (!usuario) return;
   
-  if (error) {
-    console.error("❌ [CARD] Erro ao criar:", error);
-    return { success: false, message: "Ops, algo deu errado 😕" };
-  }
-  
-  // Log
-  await supabase.from("finax_logs").insert({
-    user_id: userId,
-    action_type: "criar_cartao",
-    entity_type: "cartao",
-    entity_id: data.id,
-    new_data: { nome: cardName, limite: limit, vencimento: dueDay }
-  });
-  
-  let response = `✅ *Cartão cadastrado!*\n\n`;
-  response += `💳 ${data.nome}\n`;
-  response += `💰 Limite: R$ ${data.limite_total.toFixed(2)}\n`;
-  if (data.dia_vencimento) response += `📅 Vencimento: dia ${data.dia_vencimento}\n`;
-  response += `\n_Agora seus gastos no crédito vão descontar desse limite!_`;
-  
-  return { success: true, message: response, cardId: data.id };
-}
-```
-
-### Fase 4: Criar Handler no index.ts para add_card
-
-**Arquivo:** `supabase/functions/finax-worker/index.ts` (após handler de card_event ~linha 3210)
-
-```typescript
-// ========================================================================
-// 💳 ADD_CARD - Registrar NOVO cartão de crédito
-// ========================================================================
-if (decision.actionType === "add_card") {
-  const slots = decision.slots;
-  const { createCard } = await import("./intents/card.ts");
-  
-  // Normalizar slots (IA pode enviar card, card_name ou description)
-  const normalizedSlots = {
-    ...slots,
-    card_name: slots.card_name || slots.card || slots.description,
-    limit: slots.limit || slots.amount || slots.value,
-    due_day: slots.due_day || slots.day_of_month,
-  };
-  
-  const result = await createCard(userId, normalizedSlots);
-  await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-  
-  // Se faltou slot, criar action para coletar
-  if (!result.success && !result.cardId) {
-    const missing = getMissingSlots("add_card", normalizedSlots);
-    if (missing.length > 0) {
-      await createAction(userId, "add_card", "add_card", normalizedSlots, missing[0], payload.messageId);
-    }
-  }
-  return;
-}
-```
-
-### Fase 5: Criar Handler no index.ts para bill e pay_bill
-
-**Arquivo:** `supabase/functions/finax-worker/index.ts` (após handler de add_card)
-
-```typescript
-// ========================================================================
-// 📄 BILL - Criar fatura/conta a pagar
-// ========================================================================
-if (decision.actionType === "bill") {
-  const slots = decision.slots;
-  const { createBill } = await import("./intents/bills.ts");
-  
-  const billName = slots.bill_name || slots.description;
-  const dueDay = slots.due_day || slots.day_of_month;
-  const estimatedValue = slots.estimated_value || slots.amount;
-  
-  if (!billName) {
-    await sendMessage(payload.phoneNumber, "Qual o nome da conta? (ex: Energia, Internet, Água...)", payload.messageSource);
-    await createAction(userId, "bill", "bill", slots, "bill_name", payload.messageId);
-    return;
-  }
-  
-  if (!dueDay) {
-    await sendMessage(payload.phoneNumber, `Em qual dia do mês vence a conta de *${billName}*?`, payload.messageSource);
-    await createAction(userId, "bill", "bill", { ...slots, bill_name: billName }, "due_day", payload.messageId);
-    return;
-  }
-  
-  const result = await createBill({
-    userId,
-    nome: billName,
-    diaVencimento: dueDay,
-    valorEstimado: estimatedValue,
-    tipo: "fixa",
-  });
-  
-  await sendMessage(payload.phoneNumber, result, payload.messageSource);
-  return;
-}
-
-// ========================================================================
-// 💸 PAY_BILL - Pagar fatura existente
-// ========================================================================
-if (decision.actionType === "pay_bill") {
-  const slots = decision.slots;
-  const { payBill } = await import("./intents/bills.ts");
-  
-  const billName = slots.bill_name || slots.description;
-  const amount = slots.amount;
-  
-  if (!billName || !amount) {
-    await sendMessage(payload.phoneNumber, "Qual conta você pagou e quanto foi?", payload.messageSource);
-    return;
-  }
-  
-  const result = await payBill({
-    userId,
-    contaNome: billName,
-    valorPago: amount,
-  });
-  
-  await sendMessage(payload.phoneNumber, result, payload.messageSource);
-  return;
-}
-```
-
-### Fase 6: Atualizar Classificador Semântico
-
-**Arquivo:** `supabase/functions/finax-worker/decision/engine.ts` (SEMANTIC_PATTERNS ~linha 46)
-
-Adicionar novos padrões:
-
-```typescript
-const SEMANTIC_PATTERNS = {
-  // ... existentes ...
-  
-  // ADICIONAR CARTÃO - alta prioridade
-  add_card: {
-    verbs: ["registrar", "adicionar", "cadastrar", "novo cartão", "criar cartão"],
-    contexts: ["cartão", "cartao", "limite", "nubank", "itau", "bradesco", "inter", "c6"],
-    weight: 0.95
-  },
-  
-  // FATURA/CONTA A PAGAR - alta prioridade
-  bill: {
-    verbs: ["conta de", "fatura", "vence dia", "vencimento"],
-    contexts: ["água", "luz", "energia", "internet", "gas", "gás", "telefone", "aluguel"],
-    weight: 0.92
-  },
-  
-  // PAGAR FATURA
-  pay_bill: {
-    verbs: ["paguei a conta", "paguei a fatura", "paguei energia", "paguei água"],
-    contexts: ["deu", "foi", "ficou"],
-    weight: 0.9
-  },
+  const { data } = await supabase
+    .from("transacoes")
+    .select("*")
+    .eq("usuario_id", usuario.id);
 };
 ```
 
----
+PRINCÍPIO FUNDAMENTAL
 
-## 📊 Resumo das Mudanças
+O Finax operará sob uma Máquina de Estados Finitos (FSM) por usuário.
 
-| Arquivo | Mudanças |
-|---------|----------|
-| `index.ts` | + ActionType `add_card`, `bill`, `pay_bill` |
-| `index.ts` | + SLOT_REQUIREMENTS para novos types |
-| `index.ts` | + SLOT_PROMPTS para novos slots |
-| `index.ts` | + PROMPT_FINAX_UNIVERSAL com novas intenções |
-| `index.ts` | + Handler `add_card` (~20 linhas) |
-| `index.ts` | + Handler `bill` (~30 linhas) |
-| `index.ts` | + Handler `pay_bill` (~20 linhas) |
-| `card.ts` | + função `createCard` (~60 linhas) |
-| `engine.ts` | + SEMANTIC_PATTERNS para novos types |
+Regras de Ouro
 
----
+Cada usuário possui NO MÁXIMO 1 action ativa
 
-## ✅ Resultado Esperado Após Correções
+Toda mensagem é interpretada no contexto do estado atual
 
-| Comando | Antes (Quebrado) | Depois (Correto) |
-|---------|------------------|------------------|
-| "Registrar cartão Bradesco limite 2000" | "R$ 2000 - gasto ou entrada?" | "✅ Cartão cadastrado! Bradesco, Limite: R$ 2000" |
-| "Minha conta de água vence dia 10" | "R$ 10/mês como você paga?" | "✅ Fatura criada! Água, vence dia 10" |
-| "Paguei a energia, deu 184" | "Como você pagou?" | "✅ Pagamento registrado! Energia R$ 184" |
-| "Adicionar cartão Inter crédito 5000 vencimento 15" | Confusão total | "✅ Cartão cadastrado! Inter, Limite R$ 5000, Venc: 15" |
+Nenhum dado financeiro é salvo sem confirmação explícita
 
----
+Nenhuma action pode “sumir” sem fechamento
 
-## ⏱️ Estimativa
+MODELO CANÔNICO DE ACTION (FSM)
+Estados possíveis (action.status)
+idle                (nenhuma action ativa)
+collecting          (coletando slots)
+awaiting_confirmation (resumo apresentado, aguardando sim/não)
+executing           (registro no banco)
+completed           (finalizada com sucesso)
+cancelled           (cancelada pelo usuário)
+expired             (timeout)
 
-| Fase | Tempo |
-|------|-------|
-| Fase 1: ActionTypes e Slots | 10 min |
-| Fase 2: Prompt da IA | 10 min |
-| Fase 3: createCard | 15 min |
-| Fase 4: Handler add_card | 10 min |
-| Fase 5: Handlers bill/pay_bill | 15 min |
-| Fase 6: SEMANTIC_PATTERNS | 10 min |
-| **Total** | **~70 min** |
+Campos obrigatórios
+id
+user_id
+intent
+status
+pending_slot
+slots (jsonb)
+started_at
+updated_at
+
+MÓDULO 1 — PRIORIDADE ABSOLUTA AO CONTEXTO ATIVO
+Fluxo de processamento (OBRIGATÓRIO)
+1. Receber mensagem
+2. Buscar action ativa do usuário
+3. SE action.status IN (collecting, awaiting_confirmation):
+     → tratar mensagem COMO resposta
+     → NÃO chamar IA
+4. SE NÃO houver action ativa:
+     → classificar intenção com IA
+
+Regra Crítica
+
+IA NUNCA roda enquanto houver pending_slot.
+
+MÓDULO 2 — SISTEMA DE CONFIRMAÇÃO FINAL (OBRIGATÓRIO)
+
+Antes de salvar QUALQUER coisa:
+
+Resumo claro
+↓
+Estado: awaiting_confirmation
+↓
+Usuário responde:
+  - "sim" → executar
+  - "não" / "cancelar" → cancelar
+  - outro → repetir pergunta
+
+
+Nenhuma exceção.
+
+MÓDULO 3 — CRÉDITO REAL (CARTÃO + FATURA + LIMITE)
+Ao detectar pagamento = crédito
+
+Resolver cartão:
+
+0 cartões → oferecer cadastro
+
+1 cartão → selecionar automaticamente
+
+1 cartões → perguntar qual
+
+Resolver fatura:
+
+Buscar fatura aberta do mês
+
+Se não existir → criar
+
+Registrar impacto:
+
+Associar transação ao cartão
+
+Associar à fatura
+
+Reduzir limite disponível
+
+Atualizar total da fatura
+
+MÓDULO 3.1 — CRÉDITO PARCELADO (OBRIGATÓRIO)
+Exemplo: “1200 em 12x no crédito”
+
+Criar transação mãe
+
+Gerar parcelas (installments)
+
+Cada parcela:
+
+vinculada à fatura do mês correto
+
+status independente
+
+Limite é reduzido pelo TOTAL no ato
+
+Faturas futuras já “sabem” das parcelas
+
+Sem isso, o sistema quebra no médio prazo.
+
+MÓDULO 4 — CICLO DE VIDA DAS FATURAS (AUTOMÁTICO)
+Estados de fatura
+aberta → fechada → paga | atrasada
+
+Automação CRON
+
+Criar fatura no primeiro uso do mês
+
+Fechar no dia_fechamento
+
+Alertar 7/3/1 dias antes do vencimento
+
+Restaurar limite ao pagar
+
+MÓDULO 5 — VINCULAÇÃO SITE ↔ WHATSAPP
+Solução oficial
+
+usuarios.auth_id
+
+Preenchido no login OTP
+
+Frontend filtra sempre via auth_id → usuarios.id
+
+Sem isso, o site nunca será confiável.
+
+MÓDULO 6 — MEDIA ANALYSIS INTEGRADA
+
+OCR e áudio:
+
+NÃO registram dados
+
+Alimentam slots da action
+
+Sempre passam por confirmação
