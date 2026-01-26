@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.lembrar-contas]
 verify_jwt = false
+
+[functions.ciclo-fatura]
+verify_jwt = false
