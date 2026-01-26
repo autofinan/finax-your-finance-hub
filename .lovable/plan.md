@@ -1,549 +1,360 @@
 
-# Plano Completo de Correção do Finax - Análise Profunda
+# Plano de Correção Definitivo do Finax - Handlers Faltantes
 
-## Diagnóstico Baseado em Logs, Banco de Dados e Código
+## 📋 Diagnóstico Confirmado
 
-### Evidências Encontradas no Banco de Dados
+Baseado na análise profunda dos logs, código e banco de dados, identifiquei **3 problemas estruturais críticos** que explicam porque funcionalidades básicas não funcionam:
 
-**1. Transações sem `cartao_id` mesmo sendo crédito:**
+### PROBLEMA 1: Handler de `add_card` NÃO EXISTE
+**Evidência nos logs:**
 ```
-Todas as 10 transações de crédito têm cartao_id = NULL
-- açaí: R$ 13 (credito) → cartao_id: NULL
-- Jantar: R$ 150 (credito) → cartao_id: NULL  
-- Gasolina: R$ 50 (credito) → cartao_id: NULL
+📊 [DECISION] {"type":"expense","conf":0.95,"slots":{"amount":2000},"canExec":false}
 ```
+- Quando você diz "Registre meu cartão Bradesco crédito limite 2000"
+- IA não sabe classificar como `add_card` (não está no prompt!)
+- Sistema classifica como `expense` e trata 2000 como valor de gasto
 
-**2. Limites de cartão não são descontados:**
-```
-Cartão Nubank: limite_total = 6400, limite_disponivel = 6400
-(Mesmo com gastos registrados no crédito, limite permanece intacto)
-```
+**Causa Raiz:**
+1. `add_card` está definido em `SLOT_REQUIREMENTS` (types.ts:111)
+2. MAS não está no `PROMPT_FINAX_UNIVERSAL` (index.ts:557-610)
+3. E não existe handler `if (decision.actionType === "add_card")` no index.ts
 
-**3. Actions de seleção numérica ficam canceladas:**
+### PROBLEMA 2: Handler de `bill` (Faturas/Contas a Pagar) NÃO EXISTE
+**Evidência nos logs:**
 ```
-action_type: "cancel_recurring"
-pending_slot: "selection"
-slots: {options: [array de IDs]}
-status: "cancelled"
-→ Quando usuário respondeu "4", foi interpretado como R$ 4.00
+📊 [DECISION] {"type":"recurring","slots":{"amount":10,"description":"Conta de água"}}
 ```
+- Quando você diz "Minha fatura de água vence dia 10"
+- IA confunde com `recurring` por causa de "todo mês"
+- Sistema trata como gasto recorrente, não como conta a pagar
 
-**4. Mensagens pendentes nunca processadas:**
-```
-4 mensagens em pending_messages com processed = false
-- "Refri 10" (22/01 e 23/01)
-- "Compra 77" (22/01 e 23/01)
-```
+**Causa Raiz:**
+1. Funções `createBill` e `payBill` existem em `bills.ts`
+2. MAS `bill` não está como ActionType válido
+3. E não existe handler `if (decision.actionType === "bill")` no index.ts
 
-**5. Tabelas completamente vazias (não utilizadas):**
-```
-- savings_goals: 0 registros (meta de poupança não salva)
-- spending_alerts: 0 registros (alertas não são gerados)
-- user_patterns: 0 registros (padrões não são aprendidos)
-```
+### PROBLEMA 3: Prompt da IA Incompleto
+O `PROMPT_FINAX_UNIVERSAL` não ensina a IA sobre:
+- `add_card` - Registrar cartão de crédito
+- `bill` - Criar fatura/conta a pagar
+- `pay_bill` - Pagar fatura
 
 ---
 
-## PROBLEMA RAIZ #1: Seleção Numérica Quebrada (CRÍTICO)
+## 🔧 SOLUÇÃO: Implementação de Handlers Faltantes
 
-**Localização:** `index.ts` linhas 828-866
+### Fase 1: Adicionar ActionTypes Faltantes
 
-**Fluxo Atual (QUEBRADO):**
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+
+**1.1 - Atualizar type ActionType (linha 53):**
+```typescript
+type ActionType = 
+  | "expense" | "income" | "card_event" 
+  | "add_card"    // NOVO: Registrar cartão
+  | "bill"        // NOVO: Criar fatura/conta a pagar
+  | "pay_bill"    // NOVO: Pagar fatura
+  | "cancel" | "query" | "query_alerts" | "control" 
+  | "recurring" | "set_context" | "chat" | "edit" | "goal" | "unknown";
 ```
-Usuário: "4" (para cancelar Spotify)
-     ↓
-isNumericOnly("4") = true
-     ↓
-Não verifica se há activeAction com pending_slot = "selection"
-     ↓
-Cria action "numero_isolado" com amount: 4
-     ↓
-Pergunta: "R$ 4.00 - gasto ou entrada?"
+
+**1.2 - Atualizar SLOT_REQUIREMENTS (linha 123):**
+```typescript
+const SLOT_REQUIREMENTS = {
+  // ... existentes ...
+  add_card: { required: ["card_name", "limit"], optional: ["due_day", "closing_day"] },
+  bill: { required: ["bill_name", "due_day"], optional: ["estimated_value"] },
+  pay_bill: { required: ["bill_name", "amount"], optional: [] },
+};
 ```
 
-**Correção Necessária:**
-Adicionar verificação de seleção ANTES do tratamento de número isolado:
+**1.3 - Atualizar SLOT_PROMPTS (linha 158):**
+```typescript
+const SLOT_PROMPTS = {
+  // ... existentes ...
+  card_name: { text: "Qual o nome do cartão? (ex: Nubank, Inter...)" },
+  limit: { text: "Qual o limite total? 💰" },
+  due_day: { text: "Qual o dia de vencimento? (1-31)" },
+  closing_day: { text: "Qual o dia de fechamento?" },
+  bill_name: { text: "Qual o nome da conta? (ex: Energia, Internet...)" },
+  estimated_value: { text: "Qual o valor estimado? (opcional)" },
+};
+```
+
+### Fase 2: Atualizar Prompt da IA
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts` (PROMPT_FINAX_UNIVERSAL ~linha 550-640)
+
+Adicionar novas seções ao prompt:
+
+```text
+### add_card - Registrar NOVO cartão de crédito
+Exemplos: "Registrar cartão Nubank limite 5000", "Adicionar cartão Bradesco crédito 3000 vencimento dia 15"
+- Palavras-chave: registrar cartão, adicionar cartão, novo cartão, cadastrar cartão + nome do banco + limite
+- OBRIGATÓRIO: nome do cartão E limite
+- Opcional: dia de vencimento
+
+### bill - Criar fatura/conta a pagar (NÃO é recorrente automático!)
+Exemplos: "Minha conta de água vence dia 10", "Criar fatura energia dia 15", "Fatura internet todo dia 20"
+- Palavras-chave: conta de, fatura, vence dia, vencimento
+- É para lembretes de contas variáveis (água, luz, internet)
+- NÃO confundir com recurring (Netflix, Spotify - valor fixo)
+
+### pay_bill - Pagar fatura/conta existente
+Exemplos: "Paguei a energia, deu 184", "Paguei fatura de água 120"
+- Palavras-chave: paguei a fatura, paguei a conta de + nome + valor
+```
+
+### Fase 3: Criar Handler de add_card
+
+**Arquivo:** `supabase/functions/finax-worker/intents/card.ts`
+
+Adicionar nova função `createCard`:
 
 ```typescript
-// NOVO BLOCO (linha ~828, ANTES do isNumericOnly)
-if (activeAction?.pending_slot === "selection" && isNumericOnly(message)) {
-  const index = parseInt(message.trim()) - 1;
-  const options = activeAction.slots.options as string[];
+export interface CreateCardResult {
+  success: boolean;
+  message: string;
+  cardId?: string;
+}
+
+export async function createCard(
+  userId: string,
+  slots: ExtractedSlots
+): Promise<CreateCardResult> {
+  console.log(`💳 [CARD] Criando cartão: ${JSON.stringify(slots)}`);
   
-  if (options && index >= 0 && index < options.length) {
-    const selectedId = options[index];
-    
-    // Roteamento por tipo de action
-    switch (activeAction.intent) {
-      case "cancel_recurring":
-        const result = await cancelRecurringById(userId, selectedId);
-        await closeAction(activeAction.id);
-        return { result, shouldBlockLegacyFlow: true };
-        
-      case "cancel":
-        const txResult = await cancelTransactionById(userId, selectedId);
-        await closeAction(activeAction.id);
-        return { result: txResult, shouldBlockLegacyFlow: true };
-        
-      case "edit":
-        // Preencher transaction_id e continuar edição
-        break;
+  const cardName = slots.card_name || slots.card || slots.description;
+  const limit = slots.limit || slots.amount || slots.value;
+  const dueDay = slots.due_day || slots.day_of_month;
+  const closingDay = slots.closing_day;
+  
+  if (!cardName) {
+    return { success: false, message: "Qual o nome do cartão? (ex: Nubank, Inter...)" };
+  }
+  
+  if (!limit) {
+    return { success: false, message: `Qual o limite do ${cardName}? 💰` };
+  }
+  
+  // Verificar se já existe
+  const existing = await findCard(userId, cardName);
+  if (existing) {
+    return { 
+      success: false, 
+      message: `Você já tem um cartão ${existing.nome} cadastrado 💳\n\nQuer atualizar o limite?` 
+    };
+  }
+  
+  // Inserir
+  const { data, error } = await supabase
+    .from("cartoes_credito")
+    .insert({
+      usuario_id: userId,
+      nome: cardName,
+      limite_total: limit,
+      limite_disponivel: limit,
+      dia_vencimento: dueDay,
+      dia_fechamento: closingDay,
+      ativo: true
+    })
+    .select("id, nome, limite_total, dia_vencimento")
+    .single();
+  
+  if (error) {
+    console.error("❌ [CARD] Erro ao criar:", error);
+    return { success: false, message: "Ops, algo deu errado 😕" };
+  }
+  
+  // Log
+  await supabase.from("finax_logs").insert({
+    user_id: userId,
+    action_type: "criar_cartao",
+    entity_type: "cartao",
+    entity_id: data.id,
+    new_data: { nome: cardName, limite: limit, vencimento: dueDay }
+  });
+  
+  let response = `✅ *Cartão cadastrado!*\n\n`;
+  response += `💳 ${data.nome}\n`;
+  response += `💰 Limite: R$ ${data.limite_total.toFixed(2)}\n`;
+  if (data.dia_vencimento) response += `📅 Vencimento: dia ${data.dia_vencimento}\n`;
+  response += `\n_Agora seus gastos no crédito vão descontar desse limite!_`;
+  
+  return { success: true, message: response, cardId: data.id };
+}
+```
+
+### Fase 4: Criar Handler no index.ts para add_card
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts` (após handler de card_event ~linha 3210)
+
+```typescript
+// ========================================================================
+// 💳 ADD_CARD - Registrar NOVO cartão de crédito
+// ========================================================================
+if (decision.actionType === "add_card") {
+  const slots = decision.slots;
+  const { createCard } = await import("./intents/card.ts");
+  
+  // Normalizar slots (IA pode enviar card, card_name ou description)
+  const normalizedSlots = {
+    ...slots,
+    card_name: slots.card_name || slots.card || slots.description,
+    limit: slots.limit || slots.amount || slots.value,
+    due_day: slots.due_day || slots.day_of_month,
+  };
+  
+  const result = await createCard(userId, normalizedSlots);
+  await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+  
+  // Se faltou slot, criar action para coletar
+  if (!result.success && !result.cardId) {
+    const missing = getMissingSlots("add_card", normalizedSlots);
+    if (missing.length > 0) {
+      await createAction(userId, "add_card", "add_card", normalizedSlots, missing[0], payload.messageId);
     }
   }
+  return;
 }
 ```
 
-TBM PRECISAMOS ENTENDER QUE ESSE NUMERO ISOLADO VAI DEPENDER DO CONTEXTO. SE ENVIAMOS ALGO PARA ELE SELECIONAR COM BASE EM NUMERO, E A RESPOSTA FOR EM NUMERO, SABEMOS QUE É SOBRE O QUE PEDIMOS. AGORA SE FOR DO NADA, APENAS NUMERO, PODE SER GASTO OU ENTRADA, TUDO VAI DEPENDER DO CONTEXTO, POR ISSO QUE NAO PODEMOS PERDER CONTEXTO ASSIM, TEMOS QUE SABER O QUE ESTAMOS FAZENDO EM CADA MOMENTO. 
----
+### Fase 5: Criar Handler no index.ts para bill e pay_bill
 
-## PROBLEMA RAIZ #2: Gastos no Crédito Não Vinculam ao Cartão
-
-**Localização:** `intents/expense.ts` linha 133
-
-**Código Atual:**
-```typescript
-id_cartao: slots.card || null,  // slots.card contém NOME, não ID!
-```
-
-**Problema:**
-- Quando usuário diz "credito nubank", o slot `card` recebe "nubank" (texto)
-- A inserção tenta salvar "nubank" no campo `id_cartao` que espera UUID
-- Resultado: cartao_id fica NULL, limite não é descontado
-
-**Correção Necessária:**
-```typescript
-// 1. Buscar ID do cartão pelo nome antes de inserir
-let cardId = null;
-if (slots.payment_method === "credito" && slots.card) {
-  const { data: cartao } = await supabase
-    .from("cartoes_credito")
-    .select("id")
-    .eq("usuario_id", userId)
-    .ilike("nome", `%${slots.card}%`)
-    .eq("ativo", true)
-    .limit(1)
-    .single();
-  
-  cardId = cartao?.id || null;
-}
-
-// 2. Na inserção:
-cartao_id: cardId,
-
-// 3. Atualizar limite após inserção:
-if (cardId && slots.payment_method === "credito") {
-  await supabase.rpc("atualizar_limite_cartao", {
-    p_cartao_id: cardId,
-    p_valor: slots.amount,
-    p_operacao: "deduzir"
-  });
-}
-```
-
-**Também precisa criar trigger/RPC:**
-```sql
-CREATE OR REPLACE FUNCTION atualizar_limite_cartao(
-  p_cartao_id UUID,
-  p_valor NUMERIC,
-  p_operacao TEXT -- 'deduzir' ou 'restaurar'
-) RETURNS VOID AS $$
-BEGIN
-  IF p_operacao = 'deduzir' THEN
-    UPDATE cartoes_credito 
-    SET limite_disponivel = limite_disponivel - p_valor
-    WHERE id = p_cartao_id;
-  ELSE
-    UPDATE cartoes_credito 
-    SET limite_disponivel = limite_disponivel + p_valor
-    WHERE id = p_cartao_id;
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-```
-
----
-
-## PROBLEMA RAIZ #3: Cancelamento por Nome Não Funciona
-
-**Localização:** `index.ts` linhas 3156-3270
-
-**Código Atual:**
-Quando usuário diz "cancela spotify", o sistema:
-1. Busca recorrentes por nome
-2. Se encontra, mostra lista com números
-3. Espera resposta numérica
-4. **MAS:** resposta numérica é interceptada pelo handler de número isolado
-
-**Correção Completa:**
+**Arquivo:** `supabase/functions/finax-worker/index.ts` (após handler de add_card)
 
 ```typescript
-// 1. Adicionar busca fuzzy por nome no handler cancel_recurring
-if (normalized.includes("spotify") || normalized.includes("netflix") || ...) {
-  const searchTerm = extractSearchTerm(normalized);
-  
-  const { data: recorrentes } = await supabase
-    .from("gastos_recorrentes")
-    .select("*")
-    .eq("usuario_id", userId)
-    .eq("ativo", true)
-    .ilike("descricao", `%${searchTerm}%`);
-  
-  if (recorrentes?.length === 1) {
-    // Apenas 1 resultado → cancelar direto
-    await cancelRecurringById(userId, recorrentes[0].id);
-    return successMessage;
-  }
-  
-  if (recorrentes?.length > 1) {
-    // Múltiplos → criar seleção
-    // ... código existente, MAS com pending_slot: "selection"
-  }
-}
-
-// 2. Criar função cancelRecurringById
-async function cancelRecurringById(userId: string, id: string): Promise<string> {
-  const { data: recorrente } = await supabase
-    .from("gastos_recorrentes")
-    .select("*")
-    .eq("id", id)
-    .eq("usuario_id", userId)
-    .single();
-  
-  if (!recorrente) return "Não encontrei esse recorrente 🤔";
-  
-  await supabase
-    .from("gastos_recorrentes")
-    .update({ ativo: false })
-    .eq("id", id);
-  
-  return `✅ *${recorrente.descricao}* cancelado!\n\nR$ ${recorrente.valor_parcela}/mês não será mais cobrado.`;
-}
-```
-
----
-
-## PROBLEMA RAIZ #4: Query "Quanto recebi" Retorna Gastos
-
-**Localização:** `index.ts` handler de query (linha ~3243)
-
-**Código Atual:**
-O handler de query não diferencia entre "recebi" (entradas) e "gastei" (saídas)
-
-**Correção:**
-```typescript
-// Dentro do handler de query, ANTES de getExpensesByCategory
-
-if (decision.actionType === "query") {
-  const normalized = normalizeText(conteudoProcessado);
-  
-  // 1. QUERY DE ENTRADAS (recebi, entrada, renda)
-  if (normalized.includes("recebi") || normalized.includes("entrada") || 
-      normalized.includes("entrou") || normalized.includes("renda") ||
-      normalized.includes("quanto ganhei")) {
-    const result = await getIncomeDetails(userId);
-    await sendMessage(payload.phoneNumber, result, payload.messageSource);
-    return;
-  }
-  
-  // 2. QUERY POR CARTÃO ESPECÍFICO
-  const cardMatch = normalized.match(/(?:gastei|quanto)\s+(?:no|na|do|da)\s+(\w+)/);
-  if (cardMatch) {
-    const cardName = cardMatch[1];
-    const result = await getExpensesByCard(userId, cardName);
-    await sendMessage(payload.phoneNumber, result, payload.messageSource);
-    return;
-  }
-  
-  // ... resto do handler
-}
-
-// Nova função getIncomeDetails
-async function getIncomeDetails(userId: string): Promise<string> {
-  const inicioMes = new Date();
-  inicioMes.setDate(1);
-  inicioMes.setHours(0, 0, 0, 0);
-  
-  const { data: entradas } = await supabase
-    .from("transacoes")
-    .select("valor, descricao, data, forma_pagamento")
-    .eq("usuario_id", userId)
-    .eq("tipo", "entrada")
-    .gte("data", inicioMes.toISOString())
-    .eq("status", "confirmada")
-    .order("data", { ascending: false });
-  
-  if (!entradas?.length) {
-    return "Nenhuma entrada registrada este mês 💰";
-  }
-  
-  const total = entradas.reduce((sum, e) => sum + Number(e.valor), 0);
-  const lista = entradas.slice(0, 10).map(e => 
-    `💰 R$ ${Number(e.valor).toFixed(2)} - ${e.descricao || "Entrada"}`
-  ).join("\n");
-  
-  return `💰 *Entradas do Mês*\n\n${lista}\n\n✅ *Total: R$ ${total.toFixed(2)}*`;
-}
-```
-
----
-
-## PROBLEMA RAIZ #5: Metas de Poupança Não Salvam
-
-**Evidência:** Tabela `savings_goals` tem 0 registros
-
-**Problema:** Quando usuário diz "criar meta de 15000 para viagem":
-- IA classifica como `set_context` (viagem)
-- Cria um contexto temporário em vez de meta de poupança
-
-**Correção:**
-
-```typescript
-// 1. Adicionar novo ActionType
-type ActionType = "expense" | "income" | "goal" | ... // adicionar "goal"
-
-// 2. Atualizar PROMPT_FINAX_UNIVERSAL
-### goal - Criar meta de poupança/guardar dinheiro
-Exemplos: "Criar meta de 3000 para viagem", "Quero juntar 5000", "Guardar para emergência"
-- Palavras-chave: meta, juntar, guardar, economizar, poupar + valor
-
-// 3. Criar handler de goal
-if (decision.actionType === "goal") {
+// ========================================================================
+// 📄 BILL - Criar fatura/conta a pagar
+// ========================================================================
+if (decision.actionType === "bill") {
   const slots = decision.slots;
+  const { createBill } = await import("./intents/bills.ts");
   
-  const result = await createSavingsGoal(userId, {
-    name: slots.description || "Meta",
-    target_amount: slots.amount || 0,
-    deadline: slots.deadline || null
+  const billName = slots.bill_name || slots.description;
+  const dueDay = slots.due_day || slots.day_of_month;
+  const estimatedValue = slots.estimated_value || slots.amount;
+  
+  if (!billName) {
+    await sendMessage(payload.phoneNumber, "Qual o nome da conta? (ex: Energia, Internet, Água...)", payload.messageSource);
+    await createAction(userId, "bill", "bill", slots, "bill_name", payload.messageId);
+    return;
+  }
+  
+  if (!dueDay) {
+    await sendMessage(payload.phoneNumber, `Em qual dia do mês vence a conta de *${billName}*?`, payload.messageSource);
+    await createAction(userId, "bill", "bill", { ...slots, bill_name: billName }, "due_day", payload.messageId);
+    return;
+  }
+  
+  const result = await createBill({
+    userId,
+    nome: billName,
+    diaVencimento: dueDay,
+    valorEstimado: estimatedValue,
+    tipo: "fixa",
   });
   
-  await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+  await sendMessage(payload.phoneNumber, result, payload.messageSource);
   return;
 }
 
-// 4. Função createSavingsGoal
-async function createSavingsGoal(userId: string, params: {
-  name: string;
-  target_amount: number;
-  deadline?: string;
-}): Promise<{ success: boolean; message: string }> {
-  const { data, error } = await supabase
-    .from("savings_goals")
-    .insert({
-      user_id: userId,
-      name: params.name,
-      target_amount: params.target_amount,
-      current_amount: 0,
-      deadline: params.deadline,
-      status: "active"
-    })
-    .select("id")
-    .single();
+// ========================================================================
+// 💸 PAY_BILL - Pagar fatura existente
+// ========================================================================
+if (decision.actionType === "pay_bill") {
+  const slots = decision.slots;
+  const { payBill } = await import("./intents/bills.ts");
   
-  if (error) return { success: false, message: "Erro ao criar meta" };
+  const billName = slots.bill_name || slots.description;
+  const amount = slots.amount;
   
-  // Calcular sugestão mensal
-  const mesesRestantes = params.deadline 
-    ? Math.ceil((new Date(params.deadline).getTime() - Date.now()) / (30 * 24 * 60 * 60 * 1000))
-    : 12;
-  const sugestaoMensal = params.target_amount / mesesRestantes;
-  
-  return {
-    success: true,
-    message: `🎯 *Meta criada!*\n\n` +
-      `📌 ${params.name}\n` +
-      `💰 Objetivo: R$ ${params.target_amount.toFixed(2)}\n` +
-      `📅 ${mesesRestantes} meses\n\n` +
-      `💡 Sugestão: guardar R$ ${sugestaoMensal.toFixed(2)}/mês\n\n` +
-      `_Diga "guardar 500 na meta" para contribuir!_`
-  };
-}
-```
-
----
-
-## PROBLEMA RAIZ #6: Mensagens Pendentes Não Processadas
-
-**Evidência:** 4 registros em `pending_messages` com `processed = false`
-
-**Problema:** A fila de mensagens é criada mas nunca consumida
-
-**Correção:**
-
-```typescript
-// Após registrar gasto com sucesso (linha ~3004):
-const pendingCount = await countPendingMessages(userId);
-if (pendingCount > 0) {
-  // Processar próxima mensagem da fila
-  const nextMessage = await getNextPendingMessage(userId);
-  
-  if (nextMessage) {
-    await markMessageProcessed(nextMessage.id);
-    
-    // Reprocessar como novo job
-    await supabase.from("webhook_jobs").insert({
-      user_id: userId,
-      message_id: nextMessage.message_id,
-      payload: {
-        phoneNumber: payload.phoneNumber,
-        messageText: nextMessage.message_text,
-        messageType: "text",
-        messageSource: payload.messageSource
-      },
-      status: "pending"
-    });
-    
-    await sendMessage(payload.phoneNumber, 
-      `📝 Processando próximo gasto da fila...`, 
-      payload.messageSource
-    );
-  }
-}
-
-// Novas funções em message-queue.ts
-export async function getNextPendingMessage(userId: string) {
-  const { data } = await supabase
-    .from("pending_messages")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("processed", false)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .single();
-  
-  return data;
-}
-```
-
----
-
-## PROBLEMA RAIZ #7: Query "Meus alertas" Retorna Resumo
-
-**Evidência:** Tabela `spending_alerts` tem 0 registros
-
-**Problema:** 
-1. Não há handler específico para "meus alertas"
-2. O cron job `analyze-spending` não está populando a tabela
-
-**Correção:**
-
-```typescript
-// 1. Detectar query de alertas antes das outras queries
-if (normalized.includes("meus alertas") || normalized.includes("alerta")) {
-  // Handler já existe na linha 3298, mas precisa gerar alertas primeiro
-  
-  // Gerar alertas sob demanda se tabela vazia
-  const { count } = await supabase
-    .from("spending_alerts")
-    .select("*", { count: "exact" })
-    .eq("user_id", userId)
-    .is("sent_at", null);
-  
-  if (count === 0) {
-    // Chamar função de análise
-    await generateAlertsForUser(userId);
+  if (!billName || !amount) {
+    await sendMessage(payload.phoneNumber, "Qual conta você pagou e quanto foi?", payload.messageSource);
+    return;
   }
   
-  // ... código existente
+  const result = await payBill({
+    userId,
+    contaNome: billName,
+    valorPago: amount,
+  });
+  
+  await sendMessage(payload.phoneNumber, result, payload.messageSource);
+  return;
 }
+```
 
-// 2. Função generateAlertsForUser (importar de alerts.ts)
-async function generateAlertsForUser(userId: string) {
-  const { detectCategorySpike, detectMissedRecurring, detectGoalRisk } = await import("./intents/alerts.ts");
+### Fase 6: Atualizar Classificador Semântico
+
+**Arquivo:** `supabase/functions/finax-worker/decision/engine.ts` (SEMANTIC_PATTERNS ~linha 46)
+
+Adicionar novos padrões:
+
+```typescript
+const SEMANTIC_PATTERNS = {
+  // ... existentes ...
   
-  const spikeAlert = await detectCategorySpike(userId);
-  const missedAlerts = await detectMissedRecurring(userId);
-  const goalAlert = await detectGoalRisk(userId);
+  // ADICIONAR CARTÃO - alta prioridade
+  add_card: {
+    verbs: ["registrar", "adicionar", "cadastrar", "novo cartão", "criar cartão"],
+    contexts: ["cartão", "cartao", "limite", "nubank", "itau", "bradesco", "inter", "c6"],
+    weight: 0.95
+  },
   
-  // Alertas já são salvos nas funções detect*
-}
+  // FATURA/CONTA A PAGAR - alta prioridade
+  bill: {
+    verbs: ["conta de", "fatura", "vence dia", "vencimento"],
+    contexts: ["água", "luz", "energia", "internet", "gas", "gás", "telefone", "aluguel"],
+    weight: 0.92
+  },
+  
+  // PAGAR FATURA
+  pay_bill: {
+    verbs: ["paguei a conta", "paguei a fatura", "paguei energia", "paguei água"],
+    contexts: ["deu", "foi", "ficou"],
+    weight: 0.9
+  },
+};
 ```
 
 ---
 
-## CORREÇÕES ADICIONAIS IDENTIFICADAS
-
-### A. Recorrentes não vinculam ao cartão
-Mesmo problema do gasto: `slots.card` contém nome, não ID.
-
-### B. Cancelamento de transação por arraste (reply)
-O fluxo de reply não está implementado corretamente.
-
-### C. Edição de transação antiga
-Limite de 2 minutos é muito restritivo. Permitir edição por ID.
-
----
-
-## Arquivos a Modificar
+## 📊 Resumo das Mudanças
 
 | Arquivo | Mudanças |
 |---------|----------|
-| `supabase/functions/finax-worker/index.ts` | Handler de seleção numérica, query de entradas, goal handler, processamento de fila |
-| `supabase/functions/finax-worker/intents/expense.ts` | Vincular cartao_id corretamente, atualizar limite |
-| `supabase/functions/finax-worker/intents/cancel.ts` | Cancelar recorrente por nome/ID |
-| `supabase/functions/finax-worker/intents/query.ts` | Adicionar getIncomeDetails, getExpensesByCard |
-| `supabase/functions/finax-worker/intents/goals.ts` | Ativar e conectar ao handler |
-| `supabase/functions/finax-worker/utils/message-queue.ts` | getNextPendingMessage |
-| `supabase/functions/finax-worker/decision/types.ts` | Adicionar ActionType "goal" |
+| `index.ts` | + ActionType `add_card`, `bill`, `pay_bill` |
+| `index.ts` | + SLOT_REQUIREMENTS para novos types |
+| `index.ts` | + SLOT_PROMPTS para novos slots |
+| `index.ts` | + PROMPT_FINAX_UNIVERSAL com novas intenções |
+| `index.ts` | + Handler `add_card` (~20 linhas) |
+| `index.ts` | + Handler `bill` (~30 linhas) |
+| `index.ts` | + Handler `pay_bill` (~20 linhas) |
+| `card.ts` | + função `createCard` (~60 linhas) |
+| `engine.ts` | + SEMANTIC_PATTERNS para novos types |
 
 ---
 
-## Ordem de Implementação (por prioridade)
+## ✅ Resultado Esperado Após Correções
 
-### Fase 1: Correções Críticas (Bloqueadoras)
-1. **Seleção numérica** - Impede cancelamentos e edições
-2. **Vincular cartão a gastos** - Dados incorretos no banco
-3. **Atualizar limite do cartão** - Feature core não funciona
-
-### Fase 2: Fluxos Quebrados
-4. **Query de entradas** - "Quanto recebi?" retorna gastos
-5. **Query por cartão** - "Quanto gastei no nubank?" falha
-6. **Cancelar recorrente por nome** - "Cancela Spotify" não funciona
-
-### Fase 3: Features Não Utilizadas
-7. **Metas de poupança** - Ativar savings_goals
-8. **Alertas inteligentes** - Popular spending_alerts
-9. **Processamento de fila** - Consumir pending_messages
-
-### Fase 4: Robustez
-10. **Cancelar transação por ID** - Permitir edição de antigos
-11. **Padrões de merchant** - Popular user_patterns
-12. **Orçamentos via chat** - Ativar tabela orcamentos
+| Comando | Antes (Quebrado) | Depois (Correto) |
+|---------|------------------|------------------|
+| "Registrar cartão Bradesco limite 2000" | "R$ 2000 - gasto ou entrada?" | "✅ Cartão cadastrado! Bradesco, Limite: R$ 2000" |
+| "Minha conta de água vence dia 10" | "R$ 10/mês como você paga?" | "✅ Fatura criada! Água, vence dia 10" |
+| "Paguei a energia, deu 184" | "Como você pagou?" | "✅ Pagamento registrado! Energia R$ 184" |
+| "Adicionar cartão Inter crédito 5000 vencimento 15" | Confusão total | "✅ Cartão cadastrado! Inter, Limite R$ 5000, Venc: 15" |
 
 ---
 
-## Estimativa Total
+## ⏱️ Estimativa
 
-| Fase | Itens | Tempo |
-|------|-------|-------|
-| 1 | 3 correções | 45 min |
-| 2 | 3 fluxos | 30 min |
-| 3 | 3 features | 45 min |
-| 4 | 3 robustez | 30 min |
-
-**Total: ~2h30 de implementação**
-
----
-
-## Resultado Esperado Após Correções
-
-| Comando | Antes | Depois |
-|---------|-------|--------|
-| "4" (seleção) | R$ 4.00 gasto/entrada? | Seleciona item 4 da lista |
-| "Quanto recebi?" | Gastos por categoria | Entradas detalhadas |
-| "Quanto gastei no nubank?" | Qual valor mensal? | Gastos do cartão Nubank |
-| "Jantar 150 crédito nubank" | cartao_id: NULL | cartao_id: UUID do nubank |
-| "Criar meta de 3000" | Cria contexto/viagem | Salva em savings_goals |
-| "Meus alertas" | Resumo do mês | Alertas personalizados |
-| "Cancela Spotify" | Lista + falha | Cancela direto ou lista |
-| "Compra 77" na fila | Fica pendente | Processado automaticamente |
-
-📊 TABELAS NÃO UTILIZADAS - Oportunidades
-Tabela	Registros	Propósito Original	Ação Sugerida
-savings_goals	0	Metas de poupança	Implementar handler completo
-spending_alerts	0	Alertas inteligentes	Ativar cron job + handler
-user_patterns	0	Padrões de merchant	Conectar ao auto-aprendizado
-alert_feedback	0	Feedback de alertas	Usar para calibrar alertas
-orcamentos	0	Orçamentos por categoria	Implementar criação via chat
-semantic_categories	134	Cache de categorização	JÁ EM USO ✅
-
-ARRUMAR ISSO. 
+| Fase | Tempo |
+|------|-------|
+| Fase 1: ActionTypes e Slots | 10 min |
+| Fase 2: Prompt da IA | 10 min |
+| Fase 3: createCard | 15 min |
+| Fase 4: Handler add_card | 10 min |
+| Fase 5: Handlers bill/pay_bill | 15 min |
+| Fase 6: SEMANTIC_PATTERNS | 10 min |
+| **Total** | **~70 min** |
