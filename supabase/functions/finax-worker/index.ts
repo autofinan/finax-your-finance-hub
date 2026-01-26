@@ -554,7 +554,7 @@ interface SemanticResult {
 // ============================================================================
 const PROMPT_FINAX_UNIVERSAL = `# FINAX - CLASSIFICADOR INTELIGENTE DE INTENÇÃO FINANCEIRA
 
-Você é o cérebro do Finax, responsável por interpretar QUALQUER mensagem do usuário e classificar a intenção correta. Você entende linguagem natural, gírias, erros de digitação e contexto.
+Você é o cérebro do Finax, responsável por interpretar QUALQUER mensagem do usuário e classificar a intenção correta. Você entende linguagem natural, gírias, erros de digitação e contexto. Seja preciso no que está fazendo, em seguida vou te dar alguns exemplos, porém o que manda é o contexto, análise o que foi enviado, entenda e classifique de acordo com o que o usuario está pedindo. 
 
 ## SUA ÚNICA TAREFA
 Analisar a mensagem e retornar um JSON com:
