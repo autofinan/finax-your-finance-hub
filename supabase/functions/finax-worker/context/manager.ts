@@ -66,6 +66,29 @@ export async function createAction(
   messageId?: string | null,
   pendingSelectionId?: string | null
 ): Promise<ActiveAction> {
+  // ========================================================================
+  // 🔒 ACTION LOCK: GARANTIR APENAS 1 ACTION ATIVA POR USUÁRIO
+  // ========================================================================
+  // REGRA ABSOLUTA: Antes de criar nova action, fechar TODAS as anteriores.
+  // Isso previne "actions zumbis" e conflitos de contexto.
+  // ========================================================================
+  
+  const { data: closedActions } = await supabase
+    .from("actions")
+    .update({ status: "superseded", updated_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .in("status", ["collecting", "awaiting_input", "pending_selection", "awaiting_confirmation"])
+    .select("id");
+  
+  const closedCount = closedActions?.length || 0;
+  if (closedCount && closedCount > 0) {
+    console.log(`🔒 [LOCK] ${closedCount} actions anteriores fechadas (superseded)`);
+  }
+  
+  // ========================================================================
+  // CRIAR NOVA ACTION (ÚNICA ATIVA)
+  // ========================================================================
+  
   const actionHash = `action_${userId.slice(0, 8)}_${Date.now()}`;
   const expiresAt = new Date(Date.now() + ACTION_TTL_MINUTES * 60 * 1000).toISOString();
   
@@ -94,7 +117,7 @@ export async function createAction(
     throw error;
   }
   
-  console.log(`✨ [CONTEXT] Action criada: ${type} | ${intent}`);
+  console.log(`✨ [CONTEXT] Action criada (ÚNICA): ${type} | ${intent}`);
   
   return {
     id: newAction.id,
@@ -102,7 +125,7 @@ export async function createAction(
     type,
     intent,
     slots,
-    status: "collecting",
+    status: pendingSelectionId ? "pending_selection" : "collecting",
     pending_slot: pendingSlot || undefined,
     pending_selection_id: pendingSelectionId || undefined,
     origin_message_id: messageId || undefined,

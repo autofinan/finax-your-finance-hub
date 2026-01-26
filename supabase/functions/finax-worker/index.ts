@@ -50,7 +50,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "installment" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -131,6 +131,7 @@ const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[]
   query: { required: [], optional: [] },
   control: { required: [], optional: [] },
   recurring: { required: ["amount", "description", "payment_method"], optional: ["day_of_month", "category", "periodicity", "card", "card_id"] },
+  installment: { required: ["amount", "installments"], optional: ["description", "card", "card_id", "category"] },
   set_context: { required: ["label", "start_date", "end_date"], optional: ["description"] },
   chat: { required: [], optional: [] },
   edit: { required: [], optional: ["transaction_id", "field", "new_value"] },
@@ -2907,11 +2908,13 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     // 🔒 PRIORIDADE ABSOLUTA: CONTEXTO ATIVO (FSM STATE MACHINE)
     // ========================================================================
-    // REGRA DE OURO: Se há action ativa com pending_slot, interpretar mensagem
-    // COMO RESPOSTA ao slot, NÃO classificar com IA.
+    // REGRA DE OURO v7.0: Action ativa tem prioridade TOTAL.
+    // Isso inclui:
+    // - pending_slot: aguardando slot específico
+    // - awaiting_confirmation: aguardando sim/não/cancelar
     // ========================================================================
-    if (activeAction && activeAction.pending_slot) {
-      console.log(`🎯 [FSM] Ação ativa: ${activeAction.intent} aguardando ${activeAction.pending_slot}`);
+    if (activeAction && (activeAction.pending_slot || activeAction.status === "awaiting_confirmation")) {
+      console.log(`🔒 [FSM] Ação ativa: ${activeAction.intent} | status: ${activeAction.status} | pending_slot: ${activeAction.pending_slot}`);
       
       const { handleActiveContext } = await import("./fsm/context-handler.ts");
       
@@ -2921,12 +2924,129 @@ async function processarJob(job: any): Promise<void> {
         conteudoProcessado
       );
       
-      if (contextResult.handled) {
-        console.log(`✅ [FSM] Contexto tratado: ${contextResult.action || 'slot preenchido'}`);
-        return; // Fluxo tratado pelo FSM, não classificar com IA
+      // ========================================================================
+      // CASO 1: CONFIRMAÇÃO RECEBIDA → EXECUTAR
+      // ========================================================================
+      if (contextResult.readyToExecute && activeAction.status === "awaiting_confirmation") {
+        console.log(`✅ [FSM] Confirmação recebida - executando ${activeAction.intent}`);
+        
+        const slots = activeAction.slots as ExtractedSlots;
+        let result: { message: string; success?: boolean };
+        
+        switch (activeAction.intent) {
+          case "expense":
+            result = await registerExpense(userId, slots, activeAction.id);
+            break;
+          case "income":
+            result = await registerIncome(userId, slots, activeAction.id);
+            break;
+          case "recurring":
+            result = await registerRecurring(userId, slots, activeAction.id);
+            break;
+          case "installment":
+            const { registerInstallment } = await import("./intents/installment.ts");
+            result = await registerInstallment(userId, slots as any, activeAction.id);
+            break;
+          case "add_card":
+            const { createCard } = await import("./intents/card.ts");
+            result = await createCard(userId, slots as any);
+            break;
+          case "bill": {
+            const { createBill } = await import("./intents/bills.ts");
+            const billResult = await createBill({
+              userId,
+              nome: slots.bill_name || slots.description || "Conta",
+              diaVencimento: Number(slots.due_day || 1),
+              valorEstimado: slots.estimated_value ? Number(slots.estimated_value) : undefined,
+              tipo: "fixa"
+            });
+            result = { message: billResult, success: true };
+            break;
+          }
+          case "pay_bill": {
+            const { payBill } = await import("./intents/bills.ts");
+            const payResult = await payBill({
+              userId,
+              contaNome: slots.bill_name || slots.description || "Conta",
+              valorPago: Number(slots.amount)
+            });
+            result = { message: payResult, success: true };
+            break;
+          }
+          default:
+            result = { message: "✅ Feito!", success: true };
+        }
+        
+        // Limpar actions
+        await supabase.from("actions")
+          .update({ status: "done" })
+          .eq("user_id", userId)
+          .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+        
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
       }
       
-      // Se não foi tratável como slot (usuário quer mudar de assunto)
+      // ========================================================================
+      // CASO 2: CANCELAMENTO
+      // ========================================================================
+      if (contextResult.cancelled) {
+        await cancelAction(userId);
+        await sendMessage(payload.phoneNumber, contextResult.message || "👍 Cancelado!", payload.messageSource);
+        return;
+      }
+      
+      // ========================================================================
+      // CASO 3: SLOT PREENCHIDO → VERIFICAR SE PRONTO PARA CONFIRMAR
+      // ========================================================================
+      if (contextResult.handled && contextResult.filledSlot) {
+        console.log(`✅ [FSM] Slot preenchido: ${contextResult.filledSlot} = ${contextResult.slotValue}`);
+        
+        // Atualizar action com novos slots
+        await updateAction(activeAction.id, { 
+          slots: contextResult.updatedSlots,
+          pending_slot: null
+        });
+        
+        // Se pronto para confirmar → pedir confirmação
+        if (contextResult.readyToConfirm) {
+          const { generateConfirmationMessage, setActionAwaitingConfirmation } = await import("./fsm/context-handler.ts");
+          
+          await setActionAwaitingConfirmation(activeAction.id, contextResult.updatedSlots!);
+          
+          const confirmMsg = generateConfirmationMessage(activeAction.intent, contextResult.updatedSlots!);
+          await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
+          return;
+        }
+        
+        // Ainda falta slot → perguntar próximo
+        const { getNextMissingSlot, getSlotPrompt } = await import("./fsm/context-handler.ts");
+        const nextMissing = getNextMissingSlot(activeAction.intent, contextResult.updatedSlots!);
+        
+        if (nextMissing) {
+          await updateAction(activeAction.id, { pending_slot: nextMissing });
+          const prompt = getSlotPrompt(nextMissing);
+          
+          if (prompt.buttons) {
+            await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+          } else {
+            await sendMessage(payload.phoneNumber, prompt.text, payload.messageSource);
+          }
+          return;
+        }
+      }
+      
+      // ========================================================================
+      // CASO 4: HANDLED MAS SEM SLOT PREENCHIDO (erro de entrada)
+      // ========================================================================
+      if (contextResult.handled && contextResult.message) {
+        await sendMessage(payload.phoneNumber, contextResult.message, payload.messageSource);
+        return;
+      }
+      
+      // ========================================================================
+      // CASO 5: MUDANÇA DE ASSUNTO → CANCELAR E CONTINUAR
+      // ========================================================================
       if (contextResult.shouldCancel) {
         console.log(`🔄 [FSM] Mudança de assunto detectada, cancelando action`);
         await cancelAction(userId);
@@ -3120,17 +3240,36 @@ async function processarJob(job: any): Promise<void> {
       const slots = decision.slots;
       const missing = getMissingSlots("income", slots);
       
-      // ✅ EXECUÇÃO DIRETA: hasAllRequiredSlots = true
+      // ✅ TODOS OS SLOTS → PEDIR CONFIRMAÇÃO (nunca executa direto)
       if (hasAllRequiredSlots("income", slots)) {
-        console.log(`⚡ [INCOME] Execução direta: R$ ${slots.amount}`);
-        const actionId = activeAction?.intent === "income" ? activeAction.id : undefined;
-        const result = await registerIncome(userId, slots, actionId);
-        // 🔒 Limpar todas as actions pendentes
-        await supabase.from("actions")
-          .update({ status: "done" })
-          .eq("user_id", userId)
-          .in("status", ["collecting", "awaiting_input"]);
-        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        console.log(`🔒 [INCOME] Slots completos - solicitando confirmação`);
+        
+        // Importar módulos de confirmação
+        const { requireConfirmation } = await import("./fsm/confirmation-gate.ts");
+        const { generateConfirmationMessage } = await import("./fsm/context-handler.ts");
+        
+        const gateResult = await requireConfirmation(
+          userId,
+          "income",
+          slots as any,
+          activeAction as any,
+          payload.messageId
+        );
+        
+        if (gateResult.canExecute) {
+          // Já confirmado anteriormente → executar
+          const result = await registerIncome(userId, slots as any, gateResult.actionId);
+          await supabase.from("actions")
+            .update({ status: "done" })
+            .eq("user_id", userId)
+            .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+        
+        // Precisa confirmar → enviar mensagem de confirmação
+        const confirmMsg = generateConfirmationMessage("income", slots as any);
+        await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
         return;
       }
       
@@ -3171,12 +3310,12 @@ async function processarJob(job: any): Promise<void> {
       
       const missing = getMissingSlots("expense", slots);
       
-      // ✅ EXECUÇÃO DIRETA: hasAllRequiredSlots = true
+      // ✅ TODOS OS SLOTS → PEDIR CONFIRMAÇÃO (nunca executa direto)
       if (hasAllRequiredSlots("expense", slots)) {
-        console.log(`⚡ [EXPENSE] Execução direta: R$ ${slots.amount} via ${slots.payment_method}`);
+        console.log(`🔒 [EXPENSE] Slots completos - solicitando confirmação`);
         
         // ========================================================================
-        // 💳 VINCULAR CRÉDITO AO CARTÃO/FATURA (FSM MÓDULO 2)
+        // 💳 VINCULAR CRÉDITO AO CARTÃO/FATURA (FSM MÓDULO 2) - ANTES DA CONFIRMAÇÃO
         // ========================================================================
         if (slots.payment_method === "credito" || slots.payment_method === "crédito") {
           const { resolveCreditCard } = await import("./intents/credit-flow.ts");
@@ -3207,28 +3346,42 @@ async function processarJob(job: any): Promise<void> {
           console.log(`💳 [CREDIT] Vinculado: ${creditResult.cardName}, fatura: ${creditResult.invoiceId}`);
         }
         
-        const actionId = activeAction?.intent === "expense" ? activeAction.id : undefined;
-        const result = await registerExpense(userId, slots, actionId);
-        // 🔒 Limpar todas as actions pendentes
-        await supabase.from("actions")
-          .update({ status: "done" })
-          .eq("user_id", userId)
-          .in("status", ["collecting", "awaiting_input"]);
-        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        // Importar módulos de confirmação
+        const { requireConfirmation } = await import("./fsm/confirmation-gate.ts");
+        const { generateConfirmationMessage } = await import("./fsm/context-handler.ts");
         
-        // ========================================================================
-        // 📬 PROCESSAR FILA DE MENSAGENS PENDENTES (após registrar gasto)
-        // ========================================================================
-        const pendingCount = await countPendingMessages(userId);
-        if (pendingCount > 0) {
-          console.log(`📬 [QUEUE] ${pendingCount} mensagens pendentes`);
-          await sendMessage(payload.phoneNumber, 
-            `📬 Você tem ${pendingCount} gasto${pendingCount > 1 ? 's' : ''} pendente${pendingCount > 1 ? 's' : ''} que anotei!`,
-            payload.messageSource
-          );
-          // Mensagens na fila serão processadas automaticamente quando o slot for resolvido
+        const gateResult = await requireConfirmation(
+          userId,
+          "expense",
+          slots as any,
+          activeAction as any,
+          payload.messageId
+        );
+        
+        if (gateResult.canExecute) {
+          // Já confirmado anteriormente → executar
+          const result = await registerExpense(userId, slots as any, gateResult.actionId);
+          await supabase.from("actions")
+            .update({ status: "done" })
+            .eq("user_id", userId)
+            .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          
+          // Processar fila de mensagens pendentes
+          const pendingCount = await countPendingMessages(userId);
+          if (pendingCount > 0) {
+            console.log(`📬 [QUEUE] ${pendingCount} mensagens pendentes`);
+            await sendMessage(payload.phoneNumber, 
+              `📬 Você tem ${pendingCount} gasto${pendingCount > 1 ? 's' : ''} pendente${pendingCount > 1 ? 's' : ''} que anotei!`,
+              payload.messageSource
+            );
+          }
+          return;
         }
         
+        // Precisa confirmar → enviar mensagem de confirmação
+        const confirmMsg = generateConfirmationMessage("expense", slots as any);
+        await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
         return;
       }
       
@@ -3455,6 +3608,99 @@ async function processarJob(job: any): Promise<void> {
           ], 
           payload.messageSource
         );
+      } else {
+        await sendMessage(payload.phoneNumber, `Qual o ${nextMissing}?`, payload.messageSource);
+      }
+      return;
+    }
+    
+    // ========================================================================
+    // 📦 INSTALLMENT - Parcelamento no Crédito (NOVO!)
+    // ========================================================================
+    if (decision.actionType === "installment") {
+      const slots = decision.slots;
+      console.log(`📦 [INSTALLMENT] Processando: ${JSON.stringify(slots)}`);
+      
+      const { registerInstallment, getMissingInstallmentSlots, hasAllRequiredInstallmentSlots } = 
+        await import("./intents/installment.ts");
+      
+      // ✅ TODOS OS SLOTS → PEDIR CONFIRMAÇÃO
+      if (hasAllRequiredInstallmentSlots(slots as any)) {
+        console.log(`🔒 [INSTALLMENT] Slots completos - solicitando confirmação`);
+        
+        const { requireConfirmation } = await import("./fsm/confirmation-gate.ts");
+        const { generateConfirmationMessage } = await import("./fsm/context-handler.ts");
+        
+        const gateResult = await requireConfirmation(
+          userId,
+          "installment",
+          slots as any,
+          activeAction as any,
+          payload.messageId
+        );
+        
+        if (gateResult.canExecute) {
+          // Já confirmado anteriormente → executar
+          const result = await registerInstallment(userId, slots as any, gateResult.actionId);
+          await supabase.from("actions")
+            .update({ status: "done" })
+            .eq("user_id", userId)
+            .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+        
+        // Precisa confirmar → enviar mensagem de confirmação
+        // Mensagem customizada para parcelamento
+        const valorParcela = (slots.amount || 0) / (slots.installments || 1);
+        const confirmMsg = `*Confirmar parcelamento:*\n\n` +
+          `📦 ${slots.description || "Compra"}\n` +
+          `💰 R$ ${(slots.amount || 0).toFixed(2)} em *${slots.installments}x* de R$ ${valorParcela.toFixed(2)}\n` +
+          (slots.card ? `💳 ${slots.card}\n` : "") +
+          `\n✅ *Tudo certo?*`;
+        
+        await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
+        return;
+      }
+      
+      // ❌ FALTA SLOT OBRIGATÓRIO
+      const missingSlots = getMissingInstallmentSlots(slots as any);
+      const nextMissing = missingSlots[0];
+      
+      if (activeAction?.intent === "installment") {
+        await updateAction(activeAction.id, { slots, pending_slot: nextMissing });
+      } else {
+        await createAction(userId, "installment", "installment", slots, nextMissing, payload.messageId);
+      }
+      
+      // Perguntas específicas
+      if (nextMissing === "amount") {
+        await sendMessage(payload.phoneNumber, "Qual o valor total da compra? 💰", payload.messageSource);
+      } else if (nextMissing === "installments") {
+        const prefix = slots.amount ? `💰 R$ ${slots.amount.toFixed(2)}\n\n` : "";
+        await sendMessage(payload.phoneNumber, `${prefix}Em quantas vezes? (ex: 3x, 12x)`, payload.messageSource);
+      } else if (nextMissing === "description") {
+        await sendMessage(payload.phoneNumber, "O que você comprou?", payload.messageSource);
+      } else if (nextMissing === "card") {
+        const { listUserCards } = await import("./intents/credit-flow.ts");
+        const cards = await listUserCards(userId);
+        
+        if (cards.length === 0) {
+          await sendMessage(payload.phoneNumber, 
+            "Você não tem cartões cadastrados 💳\n\nAdicione um: *Adicionar cartão Nubank limite 5000*", 
+            payload.messageSource
+          );
+        } else {
+          const cardButtons = cards.slice(0, 3).map(c => ({ 
+            id: `card_${c.id}`, 
+            title: (c.nome || "Cartão").slice(0, 20) 
+          }));
+          await sendButtons(payload.phoneNumber, 
+            "💳 Qual cartão?", 
+            cardButtons, 
+            payload.messageSource
+          );
+        }
       } else {
         await sendMessage(payload.phoneNumber, `Qual o ${nextMissing}?`, payload.messageSource);
       }
