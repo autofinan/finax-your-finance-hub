@@ -80,13 +80,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: { token },
       });
 
-      if (invokeError) {
-        console.error('❌ [AUTH] Erro na invocação:', invokeError);
-        throw invokeError;
-      }
-
-      if (!data || !data.valid || !data.user) {
-        console.log('⚠️ [AUTH] Sessão inválida ou expirada');
+      // Tratar 401 como sessão inválida (não é erro, é esperado)
+      if (invokeError || !data || !data.valid || !data.user) {
+        console.log('⚠️ [AUTH] Sessão inválida ou expirada, limpando dados locais...');
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
