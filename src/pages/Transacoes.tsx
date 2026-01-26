@@ -3,8 +3,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { TransactionList } from '@/components/transacoes/TransactionList';
 import { TransactionForm } from '@/components/transacoes/TransactionForm';
 import { useTransacoes } from '@/hooks/useTransacoes';
-import { useAuth } from '@/contexts/AuthContext';
-import { Button } from '@/components/ui/button';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -18,8 +17,9 @@ import { CATEGORIAS } from '@/types/finance';
 import { motion } from 'framer-motion';
 
 const Transacoes = () => {
-  const { user } = useAuth();
-  const { transacoes, loading, addTransacao, deleteTransacao } = useTransacoes(user?.id);
+  // Usar usuarioId do WhatsApp (não auth.uid)
+  const { usuarioId } = useUsuarioId();
+  const { transacoes, loading, addTransacao, deleteTransacao } = useTransacoes(usuarioId || undefined);
   const [formOpen, setFormOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [filterCategoria, setFilterCategoria] = useState<string>('all');

@@ -50,7 +50,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "installment" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "installment" | "purchase" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -136,6 +136,7 @@ const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[]
   chat: { required: [], optional: [] },
   edit: { required: [], optional: ["transaction_id", "field", "new_value"] },
   goal: { required: ["amount", "description"], optional: ["deadline", "category"] },
+  purchase: { required: ["amount"], optional: ["description", "category"] },
   unknown: { required: [], optional: [] },
 };
 
@@ -3060,7 +3061,19 @@ async function processarJob(job: any): Promise<void> {
     // Se a mensagem contém múltiplos valores, perguntar ao usuário se quer
     // registrar separado ou junto, ANTES de classificar.
     // ========================================================================
-    if (payload.messageType === "text" && !activeAction) {
+    // ========================================================================
+    // 🛡️ GUARDS: Proteger parcelamentos, cartões e contas de detectMultipleExpenses
+    // ========================================================================
+    const INSTALLMENT_PATTERN = /\d+\s*(x|vezes|parcelas?)\s*(de\s*\d+)?/i;
+    const CARD_PATTERN = /(adicionar|registrar|cadastrar|novo|meu)\s*cart[aã]o/i;
+    const BILL_PATTERN = /(conta\s+de|fatura|vence\s+dia|vencimento)/i;
+    
+    const shouldSkipMultiDetection = 
+      INSTALLMENT_PATTERN.test(conteudoProcessado) ||
+      CARD_PATTERN.test(conteudoProcessado) ||
+      BILL_PATTERN.test(conteudoProcessado);
+    
+    if (payload.messageType === "text" && !activeAction && !shouldSkipMultiDetection) {
       const multipleExpenses = detectMultipleExpenses(conteudoProcessado);
       
       if (multipleExpenses.length > 1) {
@@ -3240,36 +3253,16 @@ async function processarJob(job: any): Promise<void> {
       const slots = decision.slots;
       const missing = getMissingSlots("income", slots);
       
-      // ✅ TODOS OS SLOTS → PEDIR CONFIRMAÇÃO (nunca executa direto)
+      // ✅ TODOS OS SLOTS → EXECUTAR DIRETO (texto claro não precisa confirmação)
       if (hasAllRequiredSlots("income", slots)) {
-        console.log(`🔒 [INCOME] Slots completos - solicitando confirmação`);
+        console.log(`💰 [INCOME] Slots completos - executando direto (sem confirmação para texto)`);
         
-        // Importar módulos de confirmação
-        const { requireConfirmation } = await import("./fsm/confirmation-gate.ts");
-        const { generateConfirmationMessage } = await import("./fsm/context-handler.ts");
-        
-        const gateResult = await requireConfirmation(
-          userId,
-          "income",
-          slots as any,
-          activeAction as any,
-          payload.messageId
-        );
-        
-        if (gateResult.canExecute) {
-          // Já confirmado anteriormente → executar
-          const result = await registerIncome(userId, slots as any, gateResult.actionId);
-          await supabase.from("actions")
-            .update({ status: "done" })
-            .eq("user_id", userId)
-            .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
-          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-          return;
-        }
-        
-        // Precisa confirmar → enviar mensagem de confirmação
-        const confirmMsg = generateConfirmationMessage("income", slots as any);
-        await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
+        const result = await registerIncome(userId, slots as any, undefined);
+        await supabase.from("actions")
+          .update({ status: "done" })
+          .eq("user_id", userId)
+          .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         return;
       }
       
@@ -3310,12 +3303,12 @@ async function processarJob(job: any): Promise<void> {
       
       const missing = getMissingSlots("expense", slots);
       
-      // ✅ TODOS OS SLOTS → PEDIR CONFIRMAÇÃO (nunca executa direto)
+      // ✅ TODOS OS SLOTS → EXECUTAR DIRETO (texto claro não precisa confirmação)
       if (hasAllRequiredSlots("expense", slots)) {
-        console.log(`🔒 [EXPENSE] Slots completos - solicitando confirmação`);
+        console.log(`💸 [EXPENSE] Slots completos - executando direto (sem confirmação para texto)`);
         
         // ========================================================================
-        // 💳 VINCULAR CRÉDITO AO CARTÃO/FATURA (FSM MÓDULO 2) - ANTES DA CONFIRMAÇÃO
+        // 💳 VINCULAR CRÉDITO AO CARTÃO/FATURA (FSM MÓDULO 2)
         // ========================================================================
         if (slots.payment_method === "credito" || slots.payment_method === "crédito") {
           const { resolveCreditCard } = await import("./intents/credit-flow.ts");
@@ -3346,42 +3339,23 @@ async function processarJob(job: any): Promise<void> {
           console.log(`💳 [CREDIT] Vinculado: ${creditResult.cardName}, fatura: ${creditResult.invoiceId}`);
         }
         
-        // Importar módulos de confirmação
-        const { requireConfirmation } = await import("./fsm/confirmation-gate.ts");
-        const { generateConfirmationMessage } = await import("./fsm/context-handler.ts");
+        // Executar diretamente
+        const result = await registerExpense(userId, slots as any, undefined);
+        await supabase.from("actions")
+          .update({ status: "done" })
+          .eq("user_id", userId)
+          .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         
-        const gateResult = await requireConfirmation(
-          userId,
-          "expense",
-          slots as any,
-          activeAction as any,
-          payload.messageId
-        );
-        
-        if (gateResult.canExecute) {
-          // Já confirmado anteriormente → executar
-          const result = await registerExpense(userId, slots as any, gateResult.actionId);
-          await supabase.from("actions")
-            .update({ status: "done" })
-            .eq("user_id", userId)
-            .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
-          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-          
-          // Processar fila de mensagens pendentes
-          const pendingCount = await countPendingMessages(userId);
-          if (pendingCount > 0) {
-            console.log(`📬 [QUEUE] ${pendingCount} mensagens pendentes`);
-            await sendMessage(payload.phoneNumber, 
-              `📬 Você tem ${pendingCount} gasto${pendingCount > 1 ? 's' : ''} pendente${pendingCount > 1 ? 's' : ''} que anotei!`,
-              payload.messageSource
-            );
-          }
-          return;
+        // Processar fila de mensagens pendentes
+        const pendingCount = await countPendingMessages(userId);
+        if (pendingCount > 0) {
+          console.log(`📬 [QUEUE] ${pendingCount} mensagens pendentes`);
+          await sendMessage(payload.phoneNumber, 
+            `📬 Você tem ${pendingCount} gasto${pendingCount > 1 ? 's' : ''} pendente${pendingCount > 1 ? 's' : ''} que anotei!`,
+            payload.messageSource
+          );
         }
-        
-        // Precisa confirmar → enviar mensagem de confirmação
-        const confirmMsg = generateConfirmationMessage("expense", slots as any);
-        await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
         return;
       }
       
@@ -3763,7 +3737,23 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
-    // 📍 SET_CONTEXT - Viagens/Eventos
+    // 🛒 PURCHASE - Consultor de Compras
+    // ========================================================================
+    if (decision.actionType === "purchase") {
+      const slots = decision.slots;
+      console.log(`🛒 [PURCHASE] Analisando compra: ${JSON.stringify(slots)}`);
+      
+      const { analyzePurchase } = await import("./intents/purchase.ts");
+      const result = await analyzePurchase({
+        userId,
+        itemDescription: slots.description || "item",
+        itemValue: slots.amount || 0,
+        category: slots.category
+      });
+      await sendMessage(payload.phoneNumber, result, payload.messageSource);
+      return;
+    }
+    
     // ========================================================================
     if (decision.actionType === "set_context") {
       const slots = decision.slots;
