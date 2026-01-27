@@ -217,6 +217,25 @@ function normalizeText(text: string): string {
     .trim();
 }
 
+// v3.2: Detecta query_scope a partir do texto normalizado
+function detectQueryScope(normalized: string): string {
+  if (normalized.includes("cartao") || normalized.includes("cartoes") || normalized.includes("limite")) return "cards";
+  if (normalized.includes("pendente") || normalized.includes("pendentes")) return "pending";
+  if (normalized.includes("categoria") || normalized.includes("categorias")) return "category";
+  if (normalized.includes("recebi") || normalized.includes("entrada") || normalized.includes("entrou")) return "income";
+  if (normalized.includes("recorrente") || normalized.includes("assinatura")) return "recurring";
+  if (normalized.includes("gastei") || normalized.includes("gasto")) return "expenses";
+  return "summary";
+}
+
+// v3.2: Detecta time_range a partir do texto normalizado
+function detectTimeRange(normalized: string): string {
+  if (normalized.includes("hoje")) return "today";
+  if (normalized.includes("semana") || normalized.includes("semanal")) return "week";
+  if (normalized.includes("mes") || normalized.includes("mensal")) return "month";
+  return "month";
+}
+
 function isNumericOnly(text: string): boolean {
   // REGEX ESTRITA: A string ORIGINAL deve conter APENAS números/vírgula/ponto
   // "50" → true | "50,00" → true | "50.00" → true
@@ -552,9 +571,9 @@ interface SemanticResult {
 }
 
 // ============================================================================
-// 🧠 FINAX PROMPT v3.1 - INTERPRETADOR SEMÂNTICO
+// 🧠 FINAX PROMPT v3.2 - INTERPRETADOR SEMÂNTICO
 // ============================================================================
-const PROMPT_FINAX_UNIVERSAL = `# FINAX - INTERPRETADOR SEMÂNTICO v3.1
+const PROMPT_FINAX_UNIVERSAL = `# FINAX - INTERPRETADOR SEMÂNTICO v3.2
 
 ## 🎯 SEU PAPEL
 Você é um **intérprete**, não um tomador de decisões.
@@ -629,26 +648,49 @@ Exemplos: "Vale a pena comprar celular de 2000?"
 
 ### query - Consultar informações
 Ver dados, não modificar.
-Indicadores: "quanto", "resumo", "saldo", "total"
-Exemplos: "Quanto gastei esse mês?", "Quanto recebi?"
+Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões", "pendentes"
+Slots: query_scope, time_range
+- query_scope: summary | cards | expenses | income | pending | recurring | category
+- time_range: today | week | month | custom
+Exemplos: 
+  - "Quanto gastei esse mês?" → query_scope: expenses, time_range: month
+  - "Meus cartões" → query_scope: cards
+  - "Quais cartões tenho?" → query_scope: cards
+  - "Gastos pendentes" → query_scope: pending
+  - "Gastos da semana" → query_scope: expenses, time_range: week
+  - "Quanto gastei hoje?" → query_scope: expenses, time_range: today
+  - "Resumo" → query_scope: summary
 
 ### query_alerts - Ver alertas
 Indicadores: "alertas", "avisos"
 Exemplos: "Meus alertas"
 
 ### cancel - Cancelar algo
-Indicadores: "cancela", "desfaz", "apaga"
-Exemplos: "Cancela", "Apaga isso"
+Indicadores: "cancela", "desfaz", "apaga", "remove", "para de", "pausa"
+Slots: cancel_target, target_name
+- cancel_target: transaction | recurring | goal | context
+- target_name: nome do item (Netflix, viagem, etc.)
+Exemplos:
+  - "Cancela minha Netflix" → cancel_target: recurring, target_name: Netflix
+  - "Pausa meta viagem" → cancel_target: goal, target_name: viagem
+  - "Cancela esse gasto" → cancel_target: transaction
+  - "Terminei a viagem" → cancel_target: context, target_name: viagem
 
 ### chat - Conversa/conselho
 Pergunta reflexiva sobre finanças.
-Exemplos: "Tô gastando muito?", "Como economizar?"
+Exemplos: "Tô gastando muito?", "Como economizar?", "Analise meus gastos"
 NUNCA retorne unknown para perguntas - use chat!
 
 ### set_context - Período especial
-Viagem ou evento SEM valor objetivo.
-Indicadores: datas + "vou viajar", "começando"
-Exemplos: "Vou viajar de 10/01 até 15/01"
+Viagem ou evento COM ciclo de vida.
+Indicadores: 
+  - Iniciar: "vou viajar", "começando", "início" + datas
+  - Encerrar: "terminei", "voltei", "acabou", "fim da"
+Slots: label, start_date, end_date, action (start|end)
+Exemplos: 
+  - "Vou viajar de 10/01 até 15/01" → action: start
+  - "Terminei a viagem" → action: end, label: viagem
+  - "Voltei da viagem" → action: end, label: viagem
 
 ### control - Saudações
 Exemplos: "Oi", "Bom dia", "Ajuda"
@@ -685,6 +727,10 @@ Valores: amount, limit, value, installments, due_day, closing_day
 Textos: description, card, card_name, bill_name, source, category
 Pagamento: payment_method (pix|debito|credito|dinheiro)
 Datas: deadline, periodicity (monthly|weekly|yearly), day_of_month
+Query: query_scope (summary|cards|expenses|income|pending|recurring|category)
+Tempo: time_range (today|week|month|custom) - SEPARADO de query_scope!
+Cancel: cancel_target (transaction|recurring|goal|context), target_name
+Context: action (start|end)
 
 ## 📤 RESPOSTA (JSON PURO, SEM MARKDOWN)
 
@@ -797,6 +843,13 @@ function normalizeAISlots(slots: Record<string, any>): ExtractedSlots {
   if (slots.dia_fechamento && !normalized.closing_day) {
     normalized.closing_day = Number(slots.dia_fechamento);
   }
+  
+  // v3.2: Novos slots para query, cancel e context
+  if (slots.query_scope) normalized.query_scope = String(slots.query_scope).toLowerCase();
+  if (slots.time_range) normalized.time_range = String(slots.time_range).toLowerCase();
+  if (slots.cancel_target) normalized.cancel_target = String(slots.cancel_target).toLowerCase();
+  if (slots.target_name) normalized.target_name = String(slots.target_name);
+  if (slots.action) normalized.action = String(slots.action).toLowerCase();
   
   return normalized;
 }
@@ -3963,58 +4016,154 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
-    // 📊 QUERY - COM QUERIES ANALÍTICAS
+    // 📊 QUERY - COM QUERIES ANALÍTICAS (v3.2: ROTEAMENTO POR SCOPE)
     if (decision.actionType === "query") {
       const normalized = normalizeText(conteudoProcessado);
       
       // ========================================================================
-      // 💰 QUERY DE ENTRADAS (RECEBI) - PRIORIDADE MÁXIMA
+      // v3.2: ROTEAMENTO PRIORITÁRIO POR query_scope DA IA
       // ========================================================================
+      const queryScope = decision.slots.query_scope || detectQueryScope(normalized);
+      const timeRange = decision.slots.time_range || detectTimeRange(normalized);
+      
+      console.log(`📊 [QUERY] Scope: ${queryScope}, TimeRange: ${timeRange}`);
+      
+      // Importar funções de query
+      const { getWeeklyExpenses, getTodayExpenses, listPendingExpenses, getExpensesByCategory, getMonthlySummary } = await import("./intents/query.ts");
+      
+      switch (queryScope) {
+        case "cards":
+          console.log(`📊 [QUERY] Roteando para: CARDS`);
+          const cardsResult = await queryCardLimits(userId);
+          await sendMessage(payload.phoneNumber, cardsResult, payload.messageSource);
+          return;
+        
+        case "pending":
+          console.log(`📊 [QUERY] Roteando para: PENDING`);
+          const pendingResult = await listPendingExpenses(userId);
+          await sendMessage(payload.phoneNumber, pendingResult, payload.messageSource);
+          return;
+        
+        case "expenses":
+          if (timeRange === "week") {
+            console.log(`📊 [QUERY] Roteando para: EXPENSES WEEK`);
+            const weekResult = await getWeeklyExpenses(userId);
+            await sendMessage(payload.phoneNumber, weekResult, payload.messageSource);
+            return;
+          }
+          if (timeRange === "today") {
+            console.log(`📊 [QUERY] Roteando para: EXPENSES TODAY`);
+            const todayResult = await getTodayExpenses(userId);
+            await sendMessage(payload.phoneNumber, todayResult, payload.messageSource);
+            return;
+          }
+          // Default: continua para checar categorias ou resumo
+          break;
+        
+        case "income":
+          console.log(`📊 [QUERY] Roteando para: INCOME`);
+          const inicioMes = new Date();
+          inicioMes.setDate(1);
+          inicioMes.setHours(0, 0, 0, 0);
+          
+          const { data: entradas } = await supabase
+            .from("transacoes")
+            .select("valor, descricao, data, forma_pagamento")
+            .eq("usuario_id", userId)
+            .eq("tipo", "entrada")
+            .gte("data", inicioMes.toISOString())
+            .eq("status", "confirmada")
+            .order("data", { ascending: false });
+          
+          if (!entradas || entradas.length === 0) {
+            await sendMessage(payload.phoneNumber, "💰 Nenhuma entrada registrada este mês.\n\n_Manda \"recebi 1500\" pra registrar!_", payload.messageSource);
+            return;
+          }
+          
+          const totalEntradas = entradas.reduce((sum: number, e: any) => sum + Number(e.valor), 0);
+          const listaEntradas = entradas.slice(0, 10).map((e: any) => {
+            const dataStr = new Date(e.data).toLocaleDateString("pt-BR");
+            return `💰 R$ ${Number(e.valor).toFixed(2)} - ${e.descricao || "Entrada"} (${dataStr})`;
+          }).join("\n");
+          
+          await sendMessage(payload.phoneNumber, 
+            `💰 *Entradas do Mês*\n\n${listaEntradas}\n\n✅ *Total: R$ ${totalEntradas.toFixed(2)}*`,
+            payload.messageSource
+          );
+          return;
+        
+        case "category":
+          console.log(`📊 [QUERY] Roteando para: CATEGORY`);
+          const catResult = await getExpensesByCategory(userId);
+          await sendMessage(payload.phoneNumber, catResult, payload.messageSource);
+          return;
+        
+        case "recurring":
+          console.log(`📊 [QUERY] Roteando para: RECURRING`);
+          const recorrentes = await listActiveRecurrings(userId);
+          if (recorrentes.length === 0) {
+            await sendMessage(payload.phoneNumber, "Você não tem gastos recorrentes ativos 📋", payload.messageSource);
+            return;
+          }
+          const listaRec = recorrentes.map((r: any) => 
+            `🔄 ${r.descricao} - R$ ${Number(r.valor_parcela).toFixed(2)}/mês`
+          ).join("\n");
+          await sendMessage(payload.phoneNumber, `🔄 *Seus Recorrentes*\n\n${listaRec}`, payload.messageSource);
+          return;
+        
+        case "summary":
+        default:
+          // Continua para fallback checks
+          break;
+      }
+      
+      // ========================================================================
+      // FALLBACK: Detecção por keywords (para compatibilidade)
+      // ========================================================================
+      
+      // Query de ENTRADAS
       if (normalized.includes("recebi") || normalized.includes("entrada") || 
           normalized.includes("entrou") || normalized.includes("renda") ||
           normalized.includes("quanto ganhei") || normalized.includes("minhas entradas")) {
-        console.log(`📊 [QUERY] Query de ENTRADAS detectada`);
+        console.log(`📊 [QUERY] Query de ENTRADAS detectada (fallback)`);
         
-        const inicioMes = new Date();
-        inicioMes.setDate(1);
-        inicioMes.setHours(0, 0, 0, 0);
+        const inicioMes2 = new Date();
+        inicioMes2.setDate(1);
+        inicioMes2.setHours(0, 0, 0, 0);
         
-        const { data: entradas } = await supabase
+        const { data: entradas2 } = await supabase
           .from("transacoes")
           .select("valor, descricao, data, forma_pagamento")
           .eq("usuario_id", userId)
           .eq("tipo", "entrada")
-          .gte("data", inicioMes.toISOString())
+          .gte("data", inicioMes2.toISOString())
           .eq("status", "confirmada")
           .order("data", { ascending: false });
         
-        if (!entradas || entradas.length === 0) {
+        if (!entradas2 || entradas2.length === 0) {
           await sendMessage(payload.phoneNumber, "💰 Nenhuma entrada registrada este mês.\n\n_Manda \"recebi 1500\" pra registrar!_", payload.messageSource);
           return;
         }
         
-        const total = entradas.reduce((sum: number, e: any) => sum + Number(e.valor), 0);
-        const lista = entradas.slice(0, 10).map((e: any) => {
+        const total2 = entradas2.reduce((sum: number, e: any) => sum + Number(e.valor), 0);
+        const lista2 = entradas2.slice(0, 10).map((e: any) => {
           const dataStr = new Date(e.data).toLocaleDateString("pt-BR");
           return `💰 R$ ${Number(e.valor).toFixed(2)} - ${e.descricao || "Entrada"} (${dataStr})`;
         }).join("\n");
         
         await sendMessage(payload.phoneNumber, 
-          `💰 *Entradas do Mês*\n\n${lista}\n\n✅ *Total: R$ ${total.toFixed(2)}*`,
+          `💰 *Entradas do Mês*\n\n${lista2}\n\n✅ *Total: R$ ${total2.toFixed(2)}*`,
           payload.messageSource
         );
         return;
       }
       
-      // ========================================================================
-      // 💳 QUERY POR CARTÃO ESPECÍFICO
-      // ========================================================================
+      // Query por CARTÃO específico
       const cardMatch = normalized.match(/(?:gastei|quanto)\s+(?:no|na|do|da)\s+(\w+)/);
       if (cardMatch && cardMatch[1]) {
         const cardName = cardMatch[1];
         console.log(`📊 [QUERY] Query de gastos no cartão: "${cardName}"`);
         
-        // Buscar cartão pelo nome
         const { data: card } = await supabase
           .from("cartoes_credito")
           .select("id, nome, limite_disponivel, limite_total")
@@ -4024,9 +4173,9 @@ async function processarJob(job: any): Promise<void> {
           .maybeSingle();
         
         if (card) {
-          const inicioMes = new Date();
-          inicioMes.setDate(1);
-          inicioMes.setHours(0, 0, 0, 0);
+          const inicioMes3 = new Date();
+          inicioMes3.setDate(1);
+          inicioMes3.setHours(0, 0, 0, 0);
           
           const { data: gastos } = await supabase
             .from("transacoes")
@@ -4034,7 +4183,7 @@ async function processarJob(job: any): Promise<void> {
             .eq("usuario_id", userId)
             .eq("cartao_id", card.id)
             .eq("tipo", "saida")
-            .gte("data", inicioMes.toISOString())
+            .gte("data", inicioMes3.toISOString())
             .eq("status", "confirmada")
             .order("data", { ascending: false });
           
@@ -4046,28 +4195,27 @@ async function processarJob(job: any): Promise<void> {
             return;
           }
           
-          const total = gastos.reduce((sum: number, g: any) => sum + Number(g.valor), 0);
-          const lista = gastos.slice(0, 8).map((g: any) => {
+          const totalCard = gastos.reduce((sum: number, g: any) => sum + Number(g.valor), 0);
+          const listaCard = gastos.slice(0, 8).map((g: any) => {
             const dataStr = new Date(g.data).toLocaleDateString("pt-BR");
             return `💸 R$ ${Number(g.valor).toFixed(2)} - ${g.descricao || "Gasto"} (${dataStr})`;
           }).join("\n");
           
           await sendMessage(payload.phoneNumber, 
-            `💳 *Gastos no ${card.nome}*\n\n${lista}\n\n💸 Total: R$ ${total.toFixed(2)}\n🟢 Disponível: R$ ${(card.limite_disponivel ?? 0).toFixed(2)}`,
+            `💳 *Gastos no ${card.nome}*\n\n${listaCard}\n\n💸 Total: R$ ${totalCard.toFixed(2)}\n🟢 Disponível: R$ ${(card.limite_disponivel ?? 0).toFixed(2)}`,
             payload.messageSource
           );
           return;
         }
       }
       
-      // ========================================================================
-      // 📊 GASTOS POR CATEGORIA - Handler específico
-      // ========================================================================
+      // Gastos por CATEGORIA
       if (normalized.includes("categoria") || normalized.includes("categorias") ||
           (normalized.includes("gasto") && normalized.includes("por")) ||
           normalized.includes("breakdown") || normalized.includes("detalha")) {
-        console.log(`📊 [QUERY] Gastos por categoria detectado`);
-        const result = await getExpensesByCategory(userId);
+        console.log(`📊 [QUERY] Gastos por categoria detectado (fallback)`);
+        const { getExpensesByCategory: getCat } = await import("./intents/query.ts");
+        const result = await getCat(userId);
         await sendMessage(payload.phoneNumber, result, payload.messageSource);
         return;
       }

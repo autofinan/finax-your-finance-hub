@@ -2,11 +2,18 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { CartaoCredito } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 
-export function useCartoes(usuarioId?: string) {
+export function useCartoes(usuarioIdProp?: string) {
   const [cartoes, setCartoes] = useState<CartaoCredito[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  
+  // Usar hook para buscar usuario_id via telefone do auth
+  const { usuarioId: resolvedUsuarioId, loading: loadingUsuarioId } = useUsuarioId();
+  
+  // Priorizar prop, depois o resolvido via auth
+  const usuarioId = usuarioIdProp || resolvedUsuarioId;
 
   const fetchCartoes = async () => {
     try {
@@ -37,10 +44,20 @@ export function useCartoes(usuarioId?: string) {
   };
 
   const addCartao = async (cartao: Omit<CartaoCredito, 'id' | 'created_at'>) => {
+    // Validar que temos usuarioId
+    if (!usuarioId) {
+      toast({
+        title: 'Erro',
+        description: 'Você precisa estar conectado via WhatsApp para adicionar cartões.',
+        variant: 'destructive',
+      });
+      throw new Error('Usuario não vinculado');
+    }
+
     try {
       const { data, error } = await supabase
         .from('cartoes_credito')
-        .insert([cartao])
+        .insert([{ ...cartao, usuario_id: usuarioId }])
         .select()
         .single();
 
@@ -116,8 +133,10 @@ export function useCartoes(usuarioId?: string) {
   };
 
   useEffect(() => {
-    fetchCartoes();
-  }, [usuarioId]);
+    if (!loadingUsuarioId) {
+      fetchCartoes();
+    }
+  }, [usuarioId, loadingUsuarioId]);
 
   return {
     cartoes,

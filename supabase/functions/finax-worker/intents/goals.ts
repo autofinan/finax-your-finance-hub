@@ -53,6 +53,38 @@ export async function createGoal(params: CreateGoalParams): Promise<string> {
   console.log(`🎯 [GOALS] Criando meta: ${name} - R$ ${targetAmount}`);
 
   try {
+    // ========================================================================
+    // v3.2: UPSERT SEMÂNTICO - Verificar se já existe meta similar
+    // ========================================================================
+    const { data: existing } = await supabase
+      .from("savings_goals")
+      .select("id, name, target_amount, current_amount, status")
+      .eq("user_id", userId)
+      .ilike("name", `%${name}%`);
+    
+    if (existing && existing.length > 0) {
+      const activeGoals = existing.filter(g => g.status === "active");
+      
+      if (activeGoals.length === 1) {
+        // UMA meta similar ativa → oferecer atualizar
+        const goal = activeGoals[0];
+        return `🎯 Você já tem uma meta "${goal.name}"!\n\n` +
+          `💰 Objetivo: R$ ${Number(goal.target_amount).toFixed(2)}\n` +
+          `📊 Acumulado: R$ ${Number(goal.current_amount).toFixed(2)}\n\n` +
+          `Quer *atualizar o objetivo* para R$ ${targetAmount.toFixed(2)} ou *criar uma nova* meta diferente?`;
+      }
+      
+      if (activeGoals.length > 1) {
+        // MÚLTIPLAS metas similares → listar
+        const list = activeGoals.map(g => 
+          `• ${g.name}: R$ ${Number(g.current_amount).toFixed(2)}/${Number(g.target_amount).toFixed(2)}`
+        ).join("\n");
+        return `🎯 Você tem várias metas similares:\n\n${list}\n\n` +
+          `Qual você quer atualizar? Ou manda "nova meta ${name} ${targetAmount}" para criar uma diferente.`;
+      }
+    }
+    // ========================================================================
+
     const { data, error } = await supabase.from("savings_goals").insert({
       user_id: userId,
       name,
