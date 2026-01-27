@@ -19,6 +19,8 @@ import Cancelar from "./pages/Cancelar";
 import NotFound from "./pages/NotFound";
 import Auth from "./pages/Auth";
 import ProtectedRoute from "./components/ProtectedRoute";
+import Eventos from '@/pages/Eventos';
+import Metas from '@/pages/Metas';
 
 const queryClient = new QueryClient();
 
@@ -46,6 +48,8 @@ const App = () => (
             <Route path="/relatorios" element={<ProtectedRoute><Relatorios /></ProtectedRoute>} />
             <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
             <Route path="/configuracoes" element={<ProtectedRoute><Configuracoes /></ProtectedRoute>} />
+            <Route path="/eventos" element={<Eventos />} />
+            <Route path="/metas" element={<Metas />} />
             
             <Route path="*" element={<NotFound />} />
           </Routes>
