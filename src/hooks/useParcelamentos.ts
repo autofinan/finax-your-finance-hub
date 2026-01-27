@@ -2,14 +2,21 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Parcelamento, ParcelaAberta } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 
-export function useParcelamentos(usuarioId?: string) {
+export function useParcelamentos(usuarioIdProp?: string) {
   const [parcelamentos, setParcelamentos] = useState<Parcelamento[]>([]);
   const [parcelasAbertas, setParcelasAbertas] = useState<ParcelaAberta[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  
+  // Usar hook para buscar usuario_id via auth_id
+  const { usuarioId: resolvedUsuarioId, loading: loadingUsuarioId } = useUsuarioId();
+  const usuarioId = usuarioIdProp || resolvedUsuarioId;
 
   const fetchParcelamentos = async () => {
+    if (loadingUsuarioId) return;
+    
     try {
       setLoading(true);
       
@@ -58,10 +65,20 @@ export function useParcelamentos(usuarioId?: string) {
   };
 
   const addParcelamento = async (parcelamento: Omit<Parcelamento, 'id' | 'created_at'>) => {
+    // Validar que temos usuarioId
+    if (!usuarioId) {
+      toast({
+        title: 'Erro',
+        description: 'Você precisa estar conectado via WhatsApp para adicionar parcelamentos.',
+        variant: 'destructive',
+      });
+      throw new Error('Usuario não vinculado');
+    }
+
     try {
       const { data, error } = await supabase
         .from('parcelamentos')
-        .insert([parcelamento])
+        .insert([{ ...parcelamento, usuario_id: usuarioId }])
         .select()
         .single();
 
@@ -137,8 +154,10 @@ export function useParcelamentos(usuarioId?: string) {
   };
 
   useEffect(() => {
-    fetchParcelamentos();
-  }, [usuarioId]);
+    if (!loadingUsuarioId) {
+      fetchParcelamentos();
+    }
+  }, [usuarioId, loadingUsuarioId]);
 
   return {
     parcelamentos,
