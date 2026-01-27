@@ -18,12 +18,12 @@ import {
   DollarSign,
   AlertCircle,
   CheckCircle2,
-  Clock
+  Clock,
+  Zap,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const ContasPagar = () => {
-  // Usar usuarioId do WhatsApp (não auth.uid)
   const { usuarioId } = useUsuarioId();
   const { contas, loading, criarConta, desativarConta, registrarPagamento, calcularDiasAteVencimento } = useContasPagar(usuarioId || undefined);
   
@@ -77,7 +77,7 @@ const ContasPagar = () => {
     } else if (dias <= 3) {
       return <Badge variant="outline" className="gap-1 border-amber-500 text-amber-500"><Clock className="w-3 h-3" /> {dias} dias</Badge>;
     } else {
-      return <Badge variant="secondary" className="gap-1"><Calendar className="w-3 h-3" /> Dia {conta.dia_vencimento}</Badge>;
+      return <Badge className="gap-1 bg-blue-500/20 text-blue-400 border-blue-500/30"><Calendar className="w-3 h-3" /> Dia {conta.dia_vencimento}</Badge>;
     }
   };
 
@@ -92,20 +92,28 @@ const ContasPagar = () => {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-white">Contas a Pagar</h1>
-            <p className="text-slate-400 text-sm">Gerencie suas faturas e contas fixas</p>
+            <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center">
+                <Receipt className="w-6 h-6 text-white" />
+              </div>
+              Contas a Pagar
+            </h1>
+            <p className="text-slate-400 text-sm mt-1">Gerencie suas faturas e contas fixas mensais</p>
           </div>
           
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
-              <Button className="gap-2 bg-gradient-to-r from-indigo-500 to-blue-500">
+              <Button className="gap-2 bg-gradient-to-r from-indigo-500 to-purple-500 hover:opacity-90 shadow-lg shadow-indigo-500/20">
                 <Plus className="w-4 h-4" />
                 Nova Conta
               </Button>
             </DialogTrigger>
             <DialogContent className="bg-slate-900 border-white/10">
               <DialogHeader>
-                <DialogTitle className="text-white">Criar Nova Conta</DialogTitle>
+                <DialogTitle className="text-white flex items-center gap-2">
+                  <Receipt className="w-5 h-5 text-indigo-400" />
+                  Criar Nova Conta
+                </DialogTitle>
               </DialogHeader>
               <div className="space-y-4 pt-4">
                 <div>
@@ -125,8 +133,8 @@ const ContasPagar = () => {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-slate-800 border-white/10">
-                        <SelectItem value="fixa">Fixa</SelectItem>
-                        <SelectItem value="variavel">Variável</SelectItem>
+                        <SelectItem value="fixa">💎 Fixa</SelectItem>
+                        <SelectItem value="variavel">📊 Variável</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -145,16 +153,19 @@ const ContasPagar = () => {
                 </div>
                 <div>
                   <Label className="text-slate-300">Valor Estimado (opcional)</Label>
-                  <Input 
-                    type="number"
-                    step="0.01"
-                    value={valorEstimado}
-                    onChange={(e) => setValorEstimado(e.target.value)}
-                    placeholder="0.00"
-                    className="bg-slate-800 border-white/10 text-white"
-                  />
+                  <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <Input 
+                      type="number"
+                      step="0.01"
+                      value={valorEstimado}
+                      onChange={(e) => setValorEstimado(e.target.value)}
+                      placeholder="0.00"
+                      className="bg-slate-800 border-white/10 text-white pl-9"
+                    />
+                  </div>
                 </div>
-                <Button onClick={handleCreate} className="w-full bg-gradient-to-r from-indigo-500 to-blue-500">
+                <Button onClick={handleCreate} className="w-full bg-gradient-to-r from-indigo-500 to-purple-500">
                   Criar Conta
                 </Button>
               </div>
@@ -167,17 +178,19 @@ const ContasPagar = () => {
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {[1, 2, 3].map((i) => (
               <Card key={i} className="bg-slate-900/50 border-white/10 animate-pulse">
-                <CardContent className="h-32" />
+                <CardContent className="h-48" />
               </Card>
             ))}
           </div>
         ) : contas.length === 0 ? (
           <Card className="bg-slate-900/50 border-white/10">
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <Receipt className="w-12 h-12 text-slate-600 mb-4" />
-              <h3 className="text-lg font-medium text-white mb-2">Nenhuma conta cadastrada</h3>
-              <p className="text-slate-400 mb-4">Comece adicionando suas contas fixas como energia, internet, aluguel...</p>
-              <Button onClick={() => setIsCreateOpen(true)} variant="outline" className="gap-2">
+            <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+              <Receipt className="w-16 h-16 text-slate-600 mb-4" />
+              <h3 className="text-xl font-semibold text-white mb-2">Nenhuma conta cadastrada</h3>
+              <p className="text-slate-400 mb-6 max-w-md">
+                Comece adicionando suas contas fixas como energia, internet, aluguel...
+              </p>
+              <Button onClick={() => setIsCreateOpen(true)} className="gap-2 bg-gradient-to-r from-indigo-500 to-purple-500">
                 <Plus className="w-4 h-4" />
                 Adicionar Primeira Conta
               </Button>
@@ -192,17 +205,17 @@ const ContasPagar = () => {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.1 }}
               >
-                <Card className="bg-slate-900/50 border-white/10 hover:border-white/20 transition-colors">
-                  <CardHeader className="pb-2">
+                <Card className="bg-slate-900/50 border-white/10 hover:border-white/20 transition-all hover:shadow-lg hover:shadow-indigo-500/20">
+                  <CardHeader className="pb-3">
                     <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500/20 to-blue-500/20 flex items-center justify-center">
-                          <Receipt className="w-5 h-5 text-indigo-400" />
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center">
+                          <Receipt className="w-6 h-6 text-indigo-400" />
                         </div>
                         <div>
                           <CardTitle className="text-white text-lg">{conta.nome}</CardTitle>
                           <Badge variant="outline" className="text-xs mt-1">
-                            {conta.tipo === 'fixa' ? '📌 Fixa' : '📊 Variável'}
+                            {conta.tipo === 'fixa' ? '💎 Fixa' : '📊 Variável'}
                           </Badge>
                         </div>
                       </div>
@@ -210,24 +223,28 @@ const ContasPagar = () => {
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-400 flex items-center gap-1">
-                        <Calendar className="w-4 h-4" />
-                        Vence dia {conta.dia_vencimento}
-                      </span>
-                      {conta.valor_estimado && (
-                        <span className="text-white font-medium">
-                          ~{formatCurrency(conta.valor_estimado)}
+                    {/* Informações */}
+                    <div className="p-3 bg-slate-800/50 rounded-lg space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-400 flex items-center gap-1">
+                          <Calendar className="w-4 h-4" />
+                          Vence dia {conta.dia_vencimento}
                         </span>
-                      )}
-                    </div>
-                    
-                    <div className="flex items-center gap-2 text-xs text-slate-500">
-                      <Bell className="w-3 h-3" />
-                      Lembrete {conta.lembrar_dias_antes} dias antes
+                        {conta.valor_estimado && (
+                          <span className="text-white font-semibold">
+                            {formatCurrency(conta.valor_estimado)}
+                          </span>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-2 text-xs text-slate-500 pt-2 border-t border-slate-700">
+                        <Bell className="w-3 h-3" />
+                        Lembrete {conta.lembrar_dias_antes} dias antes
+                      </div>
                     </div>
 
-                    <div className="flex gap-2 pt-2">
+                    {/* Ações */}
+                    <div className="flex gap-2">
                       <Button 
                         size="sm" 
                         className="flex-1 gap-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400"
@@ -259,17 +276,21 @@ const ContasPagar = () => {
         <Dialog open={isPayOpen} onOpenChange={setIsPayOpen}>
           <DialogContent className="bg-slate-900 border-white/10">
             <DialogHeader>
-              <DialogTitle className="text-white">Registrar Pagamento</DialogTitle>
+              <DialogTitle className="text-white flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                Registrar Pagamento
+              </DialogTitle>
             </DialogHeader>
             {selectedConta && (
               <div className="space-y-4 pt-4">
                 <div className="p-4 bg-slate-800/50 rounded-lg">
                   <p className="text-slate-400 text-sm">Conta</p>
-                  <p className="text-white font-medium">{selectedConta.nome}</p>
+                  <p className="text-white font-medium text-lg">{selectedConta.nome}</p>
                   {selectedConta.valor_estimado && (
-                    <p className="text-slate-400 text-sm mt-1">
-                      Valor estimado: {formatCurrency(selectedConta.valor_estimado)}
-                    </p>
+                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-700">
+                      <span className="text-slate-400 text-sm">Valor estimado</span>
+                      <span className="text-white">{formatCurrency(selectedConta.valor_estimado)}</span>
+                    </div>
                   )}
                 </div>
                 <div>
@@ -283,10 +304,11 @@ const ContasPagar = () => {
                       onChange={(e) => setValorPago(e.target.value)}
                       placeholder="0.00"
                       className="bg-slate-800 border-white/10 text-white pl-9"
+                      autoFocus
                     />
                   </div>
                 </div>
-                <Button onClick={handlePay} className="w-full bg-gradient-to-r from-emerald-500 to-green-500 gap-2">
+                <Button onClick={handlePay} className="w-full bg-gradient-to-r from-emerald-500 to-green-500 gap-2 shadow-lg shadow-emerald-500/20">
                   <CheckCircle2 className="w-4 h-4" />
                   Confirmar Pagamento
                 </Button>
