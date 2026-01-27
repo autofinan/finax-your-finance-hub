@@ -1,43 +1,20 @@
 // ============================================================================
-// 🔗 HOOK: useUsuarioId - Pega ID do usuário logado via OTP WhatsApp
+// 🔗 HOOK: useUsuarioId - Pega ID do usuário logado via AuthContext
 // ============================================================================
-// O AuthContext já retorna o user com id da tabela usuarios.
-// Este hook apenas expõe isso de forma consistente para os outros hooks.
+// REGRA: usuarios.id é o ÚNICO identificador canônico.
+// Telefone NÃO é identidade. LocalStorage NÃO é fonte de verdade.
+// Frontend SEMPRE usa AuthContext.user.id
 // ============================================================================
 
-import { useEffect, useState } from "react";
-
-type UsuarioStorage = {
-  usuarioId?: string;
-};
+import { useAuth } from "@/contexts/AuthContext";
 
 export function useUsuarioId() {
-  const [usuarioId, setUsuarioId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user, loading } = useAuth();
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const raw = localStorage.getItem("usuario");
-      if (!raw) {
-        setUsuarioId(null);
-        setLoading(false);
-        return;
-      }
-
-      const parsed: UsuarioStorage = JSON.parse(raw);
-      setUsuarioId(parsed.usuarioId ?? null);
-    } catch (error) {
-      console.error("Erro ao ler usuario do localStorage:", error);
-      setUsuarioId(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  return { usuarioId, loading };
+  return {
+    usuarioId: user?.id ?? null,
+    usuario: user ?? null,
+    loading,
+    isAuthenticated: !!user,
+  };
 }
