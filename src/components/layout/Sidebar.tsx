@@ -11,12 +11,15 @@ import {
   Layers,
   Sparkles,
   LogOut,
-  User
+  User,
+  Palmtree,
+  Target,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -26,15 +29,18 @@ const navItems = [
   { to: '/faturas', icon: Receipt, label: 'Faturas' },
   { to: '/contas', icon: Receipt, label: 'Contas a Pagar' },
   { to: '/parcelamentos', icon: Layers, label: 'Parcelamentos' },
+  { to: '/eventos', icon: Palmtree, label: 'Eventos & Viagens' },
+  { to: '/metas', icon: Target, label: 'Metas' },
   { to: '/relatorios', icon: TrendingUp, label: 'Relatórios' },
   { to: '/chat', icon: MessageCircle, label: 'Fin Chat' },
 ];
 
 export function Sidebar() {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await logout();
     navigate('/');
   };
 
@@ -126,10 +132,14 @@ export function Sidebar() {
               <User className="w-5 h-5 text-white" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="font-bold text-white text-sm truncate">Christian</p>
+              <p className="font-bold text-white text-sm truncate">
+                {user?.nome || 'Usuário'}
+              </p>
               <div className="flex items-center gap-1.5">
                 <Sparkles className="w-3 h-3 text-amber-400" />
-                <span className="text-xs text-amber-400 font-bold">Pro</span>
+                <span className="text-xs text-amber-400 font-bold">
+                  {user?.plano === 'pro' ? 'Pro' : user?.plano === 'basico' ? 'Básico' : 'Trial'}
+                </span>
               </div>
             </div>
           </div>
