@@ -2,11 +2,18 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { GastoRecorrente } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 
-export function useGastosRecorrentes(usuarioId?: string) {
+export function useGastosRecorrentes(usuarioIdProp?: string) {
   const [gastos, setGastos] = useState<GastoRecorrente[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  
+  // Usar hook para buscar usuario_id via telefone do auth
+  const { usuarioId: resolvedUsuarioId, loading: loadingUsuarioId } = useUsuarioId();
+  
+  // Priorizar prop, depois o resolvido via auth
+  const usuarioId = usuarioIdProp || resolvedUsuarioId;
 
   const fetchGastos = async () => {
     try {
@@ -53,6 +60,16 @@ export function useGastosRecorrentes(usuarioId?: string) {
     origem?: string | null;
     usuario_id?: string | null;
   }) => {
+    // Validar que temos usuarioId
+    if (!usuarioId) {
+      toast({
+        title: 'Erro',
+        description: 'Você precisa estar conectado via WhatsApp para adicionar gastos recorrentes.',
+        variant: 'destructive',
+      });
+      throw new Error('Usuario não vinculado');
+    }
+
     try {
       const gastoData = {
         descricao: gasto.descricao || null,
@@ -69,7 +86,7 @@ export function useGastosRecorrentes(usuarioId?: string) {
         proxima_execucao: gasto.proxima_execucao || null,
         ultima_execucao: gasto.ultima_execucao || null,
         origem: gasto.origem || 'manual',
-        usuario_id: gasto.usuario_id || null,
+        usuario_id: usuarioId,
       };
 
       const { data, error } = await supabase
@@ -150,8 +167,10 @@ export function useGastosRecorrentes(usuarioId?: string) {
   };
 
   useEffect(() => {
-    fetchGastos();
-  }, [usuarioId]);
+    if (!loadingUsuarioId) {
+      fetchGastos();
+    }
+  }, [usuarioId, loadingUsuarioId]);
 
   return {
     gastos,

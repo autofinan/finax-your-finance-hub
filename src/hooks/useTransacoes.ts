@@ -60,6 +60,16 @@ export function useTransacoes(usuarioIdProp?: string) {
     merchant?: string | null;
     origem?: string | null;
   }) => {
+    // Validar que temos usuarioId
+    if (!usuarioId) {
+      toast({
+        title: 'Erro',
+        description: 'Você precisa estar conectado via WhatsApp para adicionar transações.',
+        variant: 'destructive',
+      });
+      throw new Error('Usuario não vinculado');
+    }
+
     try {
       const transacaoData = {
         tipo: transacao.tipo,
@@ -67,7 +77,7 @@ export function useTransacoes(usuarioIdProp?: string) {
         categoria: transacao.categoria,
         observacao: transacao.observacao || null,
         data: transacao.data || new Date().toISOString(),
-        usuario_id: transacao.usuario_id || null,
+        usuario_id: usuarioId,
         recorrente: transacao.recorrente ?? false,
         parcela: transacao.parcela || null,
         parcelamento_id: transacao.parcelamento_id || null,
