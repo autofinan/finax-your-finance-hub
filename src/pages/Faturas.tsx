@@ -1,7 +1,7 @@
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useFaturas } from '@/hooks/useFaturas';
 import { useCartoes } from '@/hooks/useCartoes';
-import { useAuth } from '@/contexts/AuthContext';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -19,9 +19,10 @@ import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 
 const Faturas = () => {
-  const { user } = useAuth();
-  const { faturas, faturasEmAberto, loading, pagarFatura } = useFaturas(user?.id);
-  const { cartoes } = useCartoes(user?.id);
+  // Usar usuarioId do WhatsApp (não auth.uid)
+  const { usuarioId } = useUsuarioId();
+  const { faturas, faturasEmAberto, loading, pagarFatura } = useFaturas(usuarioId || undefined);
+  const { cartoes } = useCartoes(usuarioId || undefined);
 
   const formatCurrency = (value: number | null) => {
     if (value === null) return 'R$ 0,00';

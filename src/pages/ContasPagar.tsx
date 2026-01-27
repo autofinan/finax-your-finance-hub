@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { useAuth } from '@/hooks/useAuth';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { useContasPagar, ContaPagar } from '@/hooks/useContasPagar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,8 +23,9 @@ import {
 import { motion } from 'framer-motion';
 
 const ContasPagar = () => {
-  const { user } = useAuth();
-  const { contas, loading, criarConta, desativarConta, registrarPagamento, calcularDiasAteVencimento } = useContasPagar(user?.id);
+  // Usar usuarioId do WhatsApp (não auth.uid)
+  const { usuarioId } = useUsuarioId();
+  const { contas, loading, criarConta, desativarConta, registrarPagamento, calcularDiasAteVencimento } = useContasPagar(usuarioId || undefined);
   
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isPayOpen, setIsPayOpen] = useState(false);

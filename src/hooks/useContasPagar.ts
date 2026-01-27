@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 
 export interface ContaPagar {
   id: string;
@@ -29,15 +30,22 @@ export interface Pagamento {
   created_at: string;
 }
 
-export function useContasPagar(usuarioId?: string) {
+export function useContasPagar(usuarioIdProp?: string) {
   const [contas, setContas] = useState<ContaPagar[]>([]);
   const [pagamentos, setPagamentos] = useState<Pagamento[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  
+  // Usar hook para buscar usuario_id via auth_id
+  const { usuarioId: resolvedUsuarioId, loading: loadingUsuarioId } = useUsuarioId();
+  const usuarioId = usuarioIdProp || resolvedUsuarioId;
 
   const fetchContas = async () => {
-    if (!usuarioId) return;
-    
+    if (loadingUsuarioId) return;
+    if (!usuarioId) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       
@@ -238,9 +246,11 @@ export function useContasPagar(usuarioId?: string) {
   };
 
   useEffect(() => {
-    fetchContas();
-    fetchPagamentos();
-  }, [usuarioId]);
+    if (!loadingUsuarioId) {
+      fetchContas();
+      fetchPagamentos();
+    }
+  }, [usuarioId, loadingUsuarioId]);
 
   return {
     contas,

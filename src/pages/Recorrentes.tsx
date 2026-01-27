@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useGastosRecorrentes } from '@/hooks/useGastosRecorrentes';
-import { useAuth } from '@/contexts/AuthContext';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -36,8 +36,9 @@ import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 
 const Recorrentes = () => {
-  const { user } = useAuth();
-  const { gastos, loading, addGasto, updateGasto, deleteGasto } = useGastosRecorrentes(user?.id);
+  // Usar usuarioId do WhatsApp (não auth.uid)
+  const { usuarioId } = useUsuarioId();
+  const { gastos, loading, addGasto, updateGasto, deleteGasto } = useGastosRecorrentes(usuarioId || undefined);
   const [formOpen, setFormOpen] = useState(false);
   const [descricao, setDescricao] = useState('');
   const [valorParcela, setValorParcela] = useState('');
