@@ -9,7 +9,6 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Progress } from '@/components/ui/progress';
 import { 
   Plus, 
   Target, 
@@ -19,7 +18,6 @@ import {
   DollarSign,
   Calendar,
   Trash2,
-  Sparkles,
   Trophy,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -106,7 +104,7 @@ const Metas = () => {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: index * 0.1 }}
       >
-        <Card className="bg-slate-900/50 border-white/10 hover:border-white/20 transition-all hover:shadow-lg hover:shadow-primary/20">
+        <Card className="bg-card/50 border-border/50 hover:border-primary/30 transition-all hover:shadow-lg hover:shadow-primary/10">
           <CardHeader className="pb-3">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3 flex-1">
@@ -122,7 +120,7 @@ const Metas = () => {
                   )}
                 </div>
                 <div className="flex-1">
-                  <CardTitle className="text-white text-lg">{meta.name}</CardTitle>
+                  <CardTitle className="text-foreground text-lg">{meta.name}</CardTitle>
                   {meta.category && (
                     <Badge variant="outline" className="text-xs mt-1">{meta.category}</Badge>
                   )}
@@ -139,14 +137,14 @@ const Metas = () => {
             {/* Barra de Progresso */}
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-400">Progresso</span>
+                <span className="text-muted-foreground">Progresso</span>
                 <span className={`font-semibold ${
-                  progress >= 100 ? 'text-emerald-400' : 'text-white'
+                  progress >= 100 ? 'text-emerald-400' : 'text-foreground'
                 }`}>
                   {progress.toFixed(0)}%
                 </span>
               </div>
-              <div className="relative h-3 bg-slate-800 rounded-full overflow-hidden">
+              <div className="relative h-3 bg-muted rounded-full overflow-hidden">
                 <motion.div
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min(progress, 100)}%` }}
@@ -157,22 +155,22 @@ const Metas = () => {
             </div>
 
             {/* Valores */}
-            <div className="p-3 bg-slate-800/50 rounded-lg space-y-2">
+            <div className="p-3 bg-muted/50 rounded-lg space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-slate-400 text-sm">Atual</span>
-                <span className="text-white font-semibold">
+                <span className="text-muted-foreground text-sm">Atual</span>
+                <span className="text-foreground font-semibold">
                   {formatCurrency(meta.current_amount)}
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-400 text-sm">Objetivo</span>
+                <span className="text-muted-foreground text-sm">Objetivo</span>
                 <span className="text-primary font-semibold">
                   {formatCurrency(meta.target_amount)}
                 </span>
               </div>
               {valorFaltante > 0 && (
-                <div className="flex items-center justify-between pt-2 border-t border-slate-700">
-                  <span className="text-slate-400 text-sm">Faltam</span>
+                <div className="flex items-center justify-between pt-2 border-t border-border">
+                  <span className="text-muted-foreground text-sm">Faltam</span>
                   <span className="text-amber-400 font-semibold">
                     {formatCurrency(valorFaltante)}
                   </span>
@@ -183,11 +181,11 @@ const Metas = () => {
             {/* Prazo */}
             {meta.deadline && (
               <div className="flex items-center gap-2 text-sm">
-                <Calendar className="w-4 h-4 text-slate-400" />
-                <span className="text-slate-300">
+                <Calendar className="w-4 h-4 text-muted-foreground" />
+                <span className="text-foreground">
                   {formatDate(meta.deadline)}
                   {diasRestantes !== null && diasRestantes >= 0 && (
-                    <span className="text-slate-500 ml-2">
+                    <span className="text-muted-foreground ml-2">
                       ({diasRestantes} dias)
                     </span>
                   )}
@@ -222,7 +220,7 @@ const Metas = () => {
                 <Button 
                   size="sm" 
                   variant="ghost" 
-                  className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                  className="text-destructive hover:text-destructive/80 hover:bg-destructive/10"
                   onClick={() => cancelarMeta(meta.id)}
                 >
                   <XCircle className="w-4 h-4" />
@@ -230,7 +228,7 @@ const Metas = () => {
                 <Button 
                   size="sm" 
                   variant="ghost" 
-                  className="text-slate-400 hover:text-slate-300"
+                  className="text-muted-foreground hover:text-foreground"
                   onClick={() => deletarMeta(meta.id)}
                 >
                   <Trash2 className="w-4 h-4" />
@@ -245,187 +243,202 @@ const Metas = () => {
 
   return (
     <AppLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-white flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-blue-500 flex items-center justify-center">
-                <Target className="w-6 h-6 text-white" />
-              </div>
-              Metas Financeiras
-            </h1>
-            <p className="text-slate-400 text-sm mt-1">Crie e acompanhe seus objetivos financeiros</p>
-          </div>
-          
-          <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-            <DialogTrigger asChild>
-              <Button className="gap-2 bg-gradient-to-r from-primary to-blue-500 hover:opacity-90 shadow-lg shadow-primary/20">
-                <Plus className="w-4 h-4" />
-                Nova Meta
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="bg-slate-900 border-white/10">
-              <DialogHeader>
-                <DialogTitle className="text-white flex items-center gap-2">
-                  <Target className="w-5 h-5 text-primary" />
-                  Criar Nova Meta
-                </DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 pt-4">
-                <div>
-                  <Label className="text-slate-300">Nome da Meta</Label>
-                  <Input 
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Ex: Viagem para Europa, Carro Novo..."
-                    className="bg-slate-800 border-white/10 text-white"
-                  />
+      <div className="min-h-screen p-6 lg:p-8">
+        {/* Background Effects */}
+        <div className="fixed inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-primary/5 blur-[120px] rounded-full" />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-accent/5 blur-[120px] rounded-full" />
+        </div>
+
+        {/* Grid Pattern */}
+        <div className="fixed inset-0 bg-[linear-gradient(hsl(var(--primary)/0.03)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--primary)/0.03)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
+
+        <div className="relative z-10 max-w-[1800px] mx-auto space-y-6">
+          {/* Header */}
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+          >
+            <div>
+              <p className="text-muted-foreground font-medium mb-1">Seus objetivos</p>
+              <h1 className="text-3xl lg:text-4xl font-bold text-foreground flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-blue-500 flex items-center justify-center">
+                  <Target className="w-6 h-6 text-primary-foreground" />
                 </div>
-                <div>
-                  <Label className="text-slate-300">Valor Objetivo</Label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <Input 
-                      type="number"
-                      step="0.01"
-                      value={targetAmount}
-                      onChange={(e) => setTargetAmount(e.target.value)}
-                      placeholder="0.00"
-                      className="bg-slate-800 border-white/10 text-white pl-9"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-slate-300">Prazo (opcional)</Label>
-                    <Input 
-                      type="date"
-                      value={deadline}
-                      onChange={(e) => setDeadline(e.target.value)}
-                      className="bg-slate-800 border-white/10 text-white"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-slate-300">Categoria (opcional)</Label>
-                    <Input 
-                      value={category}
-                      onChange={(e) => setCategory(e.target.value)}
-                      placeholder="Ex: Viagem, Investimento..."
-                      className="bg-slate-800 border-white/10 text-white"
-                    />
-                  </div>
-                </div>
-                <Button onClick={handleCreate} className="w-full bg-gradient-to-r from-primary to-blue-500">
-                  Criar Meta
+                Metas Financeiras
+              </h1>
+            </div>
+            
+            <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+              <DialogTrigger asChild>
+                <Button className="gap-2 bg-gradient-to-r from-primary to-blue-500 hover:opacity-90 shadow-lg shadow-primary/20">
+                  <Plus className="w-4 h-4" />
+                  Nova Meta
                 </Button>
-              </div>
+              </DialogTrigger>
+              <DialogContent className="bg-card border-border">
+                <DialogHeader>
+                  <DialogTitle className="text-foreground flex items-center gap-2">
+                    <Target className="w-5 h-5 text-primary" />
+                    Criar Nova Meta
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 pt-4">
+                  <div>
+                    <Label className="text-foreground">Nome da Meta</Label>
+                    <Input 
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Ex: Viagem para Europa, Carro Novo..."
+                      className="bg-muted border-border text-foreground"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-foreground">Valor Objetivo</Label>
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input 
+                        type="number"
+                        step="0.01"
+                        value={targetAmount}
+                        onChange={(e) => setTargetAmount(e.target.value)}
+                        placeholder="0.00"
+                        className="bg-muted border-border text-foreground pl-9"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-foreground">Prazo (opcional)</Label>
+                      <Input 
+                        type="date"
+                        value={deadline}
+                        onChange={(e) => setDeadline(e.target.value)}
+                        className="bg-muted border-border text-foreground"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-foreground">Categoria (opcional)</Label>
+                      <Input 
+                        value={category}
+                        onChange={(e) => setCategory(e.target.value)}
+                        placeholder="Ex: Viagem, Investimento..."
+                        className="bg-muted border-border text-foreground"
+                      />
+                    </div>
+                  </div>
+                  <Button onClick={handleCreate} className="w-full bg-gradient-to-r from-primary to-blue-500">
+                    Criar Meta
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </motion.div>
+
+          {/* Tabs */}
+          <Tabs defaultValue="ativas" className="w-full">
+            <TabsList className="grid w-full grid-cols-2 bg-muted/50 border border-border">
+              <TabsTrigger value="ativas">Ativas ({metasAtivas.length})</TabsTrigger>
+              <TabsTrigger value="concluidas">Concluídas ({metasConcluidas.length})</TabsTrigger>
+            </TabsList>
+            
+            {/* Metas Ativas */}
+            <TabsContent value="ativas" className="mt-6">
+              {loading ? (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {[1, 2, 3].map((i) => (
+                    <Card key={i} className="bg-card/50 border-border animate-pulse">
+                      <CardContent className="h-64" />
+                    </Card>
+                  ))}
+                </div>
+              ) : metasAtivas.length === 0 ? (
+                <Card className="bg-card/50 border-border">
+                  <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                    <Target className="w-16 h-16 text-muted-foreground mb-4" />
+                    <h3 className="text-xl font-semibold text-foreground mb-2">Nenhuma meta ativa</h3>
+                    <p className="text-muted-foreground mb-6 max-w-md">
+                      Crie metas para seus objetivos financeiros e acompanhe seu progresso
+                    </p>
+                    <Button onClick={() => setIsCreateOpen(true)} className="gap-2 bg-gradient-to-r from-primary to-blue-500">
+                      <Plus className="w-4 h-4" />
+                      Criar Primeira Meta
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {metasAtivas.map((meta, index) => (
+                    <MetaCard key={meta.id} meta={meta} index={index} />
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Metas Concluídas */}
+            <TabsContent value="concluidas" className="mt-6">
+              {metasConcluidas.length === 0 ? (
+                <Card className="bg-card/50 border-border">
+                  <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                    <Trophy className="w-16 h-16 text-muted-foreground mb-4" />
+                    <h3 className="text-xl font-semibold text-foreground mb-2">Nenhuma meta concluída</h3>
+                    <p className="text-muted-foreground">Conclua suas metas ativas para vê-las aqui</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {metasConcluidas.map((meta, index) => (
+                    <MetaCard key={meta.id} meta={meta} index={index} />
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
+
+          {/* Dialog Adicionar Progresso */}
+          <Dialog open={isAddProgressOpen} onOpenChange={setIsAddProgressOpen}>
+            <DialogContent className="bg-card border-border">
+              <DialogHeader>
+                <DialogTitle className="text-foreground">Adicionar Progresso</DialogTitle>
+              </DialogHeader>
+              {selectedMeta && (
+                <div className="space-y-4 pt-4">
+                  <div className="p-4 bg-muted/50 rounded-lg">
+                    <p className="text-muted-foreground text-sm">Meta</p>
+                    <p className="text-foreground font-medium">{selectedMeta.name}</p>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-muted-foreground text-sm">Atual</span>
+                      <span className="text-foreground">{formatCurrency(selectedMeta.current_amount)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground text-sm">Objetivo</span>
+                      <span className="text-primary">{formatCurrency(selectedMeta.target_amount)}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-foreground">Valor a Adicionar</Label>
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input 
+                        type="number"
+                        step="0.01"
+                        value={progressValue}
+                        onChange={(e) => setProgressValue(e.target.value)}
+                        placeholder="0.00"
+                        className="bg-muted border-border text-foreground pl-9"
+                      />
+                    </div>
+                  </div>
+                  <Button onClick={handleAddProgress} className="w-full bg-gradient-to-r from-primary to-blue-500 gap-2">
+                    <TrendingUp className="w-4 h-4" />
+                    Adicionar Progresso
+                  </Button>
+                </div>
+              )}
             </DialogContent>
           </Dialog>
         </div>
-
-        {/* Tabs */}
-        <Tabs defaultValue="ativas" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 bg-slate-900/50 border border-white/10">
-            <TabsTrigger value="ativas">Ativas ({metasAtivas.length})</TabsTrigger>
-            <TabsTrigger value="concluidas">Concluídas ({metasConcluidas.length})</TabsTrigger>
-          </TabsList>
-          
-          {/* Metas Ativas */}
-          <TabsContent value="ativas" className="mt-6">
-            {loading ? (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {[1, 2, 3].map((i) => (
-                  <Card key={i} className="bg-slate-900/50 border-white/10 animate-pulse">
-                    <CardContent className="h-64" />
-                  </Card>
-                ))}
-              </div>
-            ) : metasAtivas.length === 0 ? (
-              <Card className="bg-slate-900/50 border-white/10">
-                <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-                  <Target className="w-16 h-16 text-slate-600 mb-4" />
-                  <h3 className="text-xl font-semibold text-white mb-2">Nenhuma meta ativa</h3>
-                  <p className="text-slate-400 mb-6 max-w-md">
-                    Crie metas para seus objetivos financeiros e acompanhe seu progresso
-                  </p>
-                  <Button onClick={() => setIsCreateOpen(true)} className="gap-2 bg-gradient-to-r from-primary to-blue-500">
-                    <Plus className="w-4 h-4" />
-                    Criar Primeira Meta
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {metasAtivas.map((meta, index) => (
-                  <MetaCard key={meta.id} meta={meta} index={index} />
-                ))}
-              </div>
-            )}
-          </TabsContent>
-
-          {/* Metas Concluídas */}
-          <TabsContent value="concluidas" className="mt-6">
-            {metasConcluidas.length === 0 ? (
-              <Card className="bg-slate-900/50 border-white/10">
-                <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-                  <Trophy className="w-16 h-16 text-slate-600 mb-4" />
-                  <h3 className="text-xl font-semibold text-white mb-2">Nenhuma meta concluída</h3>
-                  <p className="text-slate-400">Conclua suas metas ativas para vê-las aqui</p>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {metasConcluidas.map((meta, index) => (
-                  <MetaCard key={meta.id} meta={meta} index={index} />
-                ))}
-              </div>
-            )}
-          </TabsContent>
-        </Tabs>
-
-        {/* Dialog Adicionar Progresso */}
-        <Dialog open={isAddProgressOpen} onOpenChange={setIsAddProgressOpen}>
-          <DialogContent className="bg-slate-900 border-white/10">
-            <DialogHeader>
-              <DialogTitle className="text-white">Adicionar Progresso</DialogTitle>
-            </DialogHeader>
-            {selectedMeta && (
-              <div className="space-y-4 pt-4">
-                <div className="p-4 bg-slate-800/50 rounded-lg">
-                  <p className="text-slate-400 text-sm">Meta</p>
-                  <p className="text-white font-medium">{selectedMeta.name}</p>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-slate-400 text-sm">Atual</span>
-                    <span className="text-white">{formatCurrency(selectedMeta.current_amount)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400 text-sm">Objetivo</span>
-                    <span className="text-primary">{formatCurrency(selectedMeta.target_amount)}</span>
-                  </div>
-                </div>
-                <div>
-                  <Label className="text-slate-300">Valor a Adicionar</Label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <Input 
-                      type="number"
-                      step="0.01"
-                      value={progressValue}
-                      onChange={(e) => setProgressValue(e.target.value)}
-                      placeholder="0.00"
-                      className="bg-slate-800 border-white/10 text-white pl-9"
-                    />
-                  </div>
-                </div>
-                <Button onClick={handleAddProgress} className="w-full bg-gradient-to-r from-primary to-blue-500 gap-2">
-                  <TrendingUp className="w-4 h-4" />
-                  Adicionar Progresso
-                </Button>
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
       </div>
     </AppLayout>
   );
