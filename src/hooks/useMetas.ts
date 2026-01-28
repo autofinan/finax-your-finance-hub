@@ -22,6 +22,19 @@ export interface Meta {
   updated_at: string;
 }
 
+// Normaliza status do banco para tipo seguro
+function normalizeMetaStatus(status: string): 'active' | 'completed' | 'cancelled' {
+  if (status === 'completed' || status === 'cancelled') return status;
+  return 'active';
+}
+
+function normalizeMeta(data: any): Meta {
+  return {
+    ...data,
+    status: normalizeMetaStatus(data.status),
+  };
+}
+
 export interface CriarMetaInput {
   name: string;
   target_amount: number;
@@ -55,7 +68,7 @@ export function useMetas(usuarioId?: string) {
           .order('created_at', { ascending: false });
 
         if (error) throw error;
-        setMetas(data || []);
+        setMetas((data || []).map(normalizeMeta));
       } catch (error: any) {
         console.error('Erro ao carregar metas:', error);
         toast({
@@ -103,7 +116,7 @@ export function useMetas(usuarioId?: string) {
 
       if (error) throw error;
 
-      setMetas((prev) => [data, ...prev]);
+      setMetas((prev) => [normalizeMeta(data), ...prev]);
       
       toast({
         title: 'Meta criada!',
@@ -140,7 +153,7 @@ export function useMetas(usuarioId?: string) {
       if (error) throw error;
 
       setMetas((prev) =>
-        prev.map((m) => (m.id === id ? data : m))
+        prev.map((m) => (m.id === id ? normalizeMeta(data) : m))
       );
 
       toast({
@@ -184,7 +197,7 @@ export function useMetas(usuarioId?: string) {
       if (error) throw error;
 
       setMetas((prev) =>
-        prev.map((m) => (m.id === id ? data : m))
+        prev.map((m) => (m.id === id ? normalizeMeta(data) : m))
       );
 
       // Verificar se atingiu a meta
@@ -230,7 +243,7 @@ export function useMetas(usuarioId?: string) {
       if (error) throw error;
 
       setMetas((prev) =>
-        prev.map((m) => (m.id === id ? data : m))
+        prev.map((m) => (m.id === id ? normalizeMeta(data) : m))
       );
 
       toast({
@@ -268,7 +281,7 @@ export function useMetas(usuarioId?: string) {
       if (error) throw error;
 
       setMetas((prev) =>
-        prev.map((m) => (m.id === id ? data : m))
+        prev.map((m) => (m.id === id ? normalizeMeta(data) : m))
       );
 
       toast({

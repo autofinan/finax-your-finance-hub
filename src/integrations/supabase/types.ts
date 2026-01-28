@@ -166,6 +166,86 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_decisions: {
+        Row: {
+          actual_classification: string | null
+          ai_classification: string
+          ai_confidence: number
+          ai_reasoning: string | null
+          ai_slots: Json
+          created_at: string | null
+          feedback: string | null
+          id: string
+          message: string
+          message_id: string | null
+          message_type: string | null
+          model_version: string | null
+          user_confirmed: boolean | null
+          user_id: string
+        }
+        Insert: {
+          actual_classification?: string | null
+          ai_classification: string
+          ai_confidence: number
+          ai_reasoning?: string | null
+          ai_slots?: Json
+          created_at?: string | null
+          feedback?: string | null
+          id?: string
+          message: string
+          message_id?: string | null
+          message_type?: string | null
+          model_version?: string | null
+          user_confirmed?: boolean | null
+          user_id: string
+        }
+        Update: {
+          actual_classification?: string | null
+          ai_classification?: string
+          ai_confidence?: number
+          ai_reasoning?: string | null
+          ai_slots?: Json
+          created_at?: string | null
+          feedback?: string | null
+          id?: string
+          message?: string
+          message_id?: string | null
+          message_type?: string | null
+          model_version?: string | null
+          user_confirmed?: boolean | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_decisions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "ai_decisions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_decisions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "ai_decisions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       alert_feedback: {
         Row: {
           alert_id: string | null
@@ -2909,6 +2989,17 @@ export type Database = {
       }
     }
     Views: {
+      ai_accuracy_summary: {
+        Row: {
+          accuracy_percent: number | null
+          ai_classification: string | null
+          avg_confidence: number | null
+          correct_count: number | null
+          error_count: number | null
+          total_decisions: number | null
+        }
+        Relationships: []
+      }
       queue_status: {
         Row: {
           current_transaction_id: string | null

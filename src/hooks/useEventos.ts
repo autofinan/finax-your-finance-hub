@@ -21,6 +21,19 @@ export interface Evento {
   updated_at: string;
 }
 
+// Normaliza status do banco para tipo seguro
+function normalizeEventoStatus(status: string): 'active' | 'completed' | 'cancelled' {
+  if (status === 'completed' || status === 'cancelled') return status;
+  return 'active';
+}
+
+function normalizeEvento(data: any): Evento {
+  return {
+    ...data,
+    status: normalizeEventoStatus(data.status),
+  };
+}
+
 export interface CriarEventoInput {
   label: string;
   description?: string;
@@ -53,7 +66,7 @@ export function useEventos(usuarioId?: string) {
           .order('start_date', { ascending: false });
 
         if (error) throw error;
-        setEventos(data || []);
+        setEventos((data || []).map(normalizeEvento));
       } catch (error: any) {
         console.error('Erro ao carregar eventos:', error);
         toast({
@@ -101,7 +114,7 @@ export function useEventos(usuarioId?: string) {
 
       if (error) throw error;
 
-      setEventos((prev) => [data, ...prev]);
+      setEventos((prev) => [normalizeEvento(data), ...prev]);
       
       toast({
         title: 'Evento criado!',
@@ -138,7 +151,7 @@ export function useEventos(usuarioId?: string) {
       if (error) throw error;
 
       setEventos((prev) =>
-        prev.map((e) => (e.id === id ? data : e))
+        prev.map((e) => (e.id === id ? normalizeEvento(data) : e))
       );
 
       toast({
@@ -177,7 +190,7 @@ export function useEventos(usuarioId?: string) {
       if (error) throw error;
 
       setEventos((prev) =>
-        prev.map((e) => (e.id === id ? data : e))
+        prev.map((e) => (e.id === id ? normalizeEvento(data) : e))
       );
 
       toast({
@@ -215,7 +228,7 @@ export function useEventos(usuarioId?: string) {
       if (error) throw error;
 
       setEventos((prev) =>
-        prev.map((e) => (e.id === id ? data : e))
+        prev.map((e) => (e.id === id ? normalizeEvento(data) : e))
       );
 
       toast({
