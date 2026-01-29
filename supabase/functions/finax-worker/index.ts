@@ -1,9 +1,25 @@
+// Sentry must be imported FIRST for proper error tracking
+import * as Sentry from "https://esm.sh/@sentry/deno@7";
+
+// Initialize Sentry before any other code
+const SENTRY_DSN = Deno.env.get("SENTRY_DSN");
+if (SENTRY_DSN) {
+  Sentry.init({
+    dsn: SENTRY_DSN,
+    environment: Deno.env.get("ENVIRONMENT") || "production",
+    tracesSampleRate: 0.1,
+  });
+}
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { classifyDeterministic } from "./decision/classifier.ts";
 import { detectMultipleExpenses, formatExpensesList, calculateTotal } from "./utils/multiple-expenses.ts";
 import { parseRelativeDate, getBrasiliaDate } from "./utils/date-helpers.ts";
 import { queueMessage, markMessageProcessed, countPendingMessages } from "./utils/message-queue.ts";
+import { logger } from "./utils/logger.ts";
+import { FinaxError, FinaxErrorCode } from "./utils/errors.ts";
+import { parseBrazilianAmount } from "./utils/parseAmount.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
@@ -249,13 +265,16 @@ function isNumericOnly(text: string): boolean {
 }
 
 function parseNumericValue(text: string): number | null {
-  const cleaned = text.replace(/[^\d.,]/g, "").replace(",", ".");
-  const value = parseFloat(cleaned);
-  return isNaN(value) || value <= 0 ? null : value;
+  return parseBrazilianAmount(text);
 }
 
 function logDecision(data: { messageId: string; decision: string; details?: any }) {
-  console.log(`📊 [DECISION] ${JSON.stringify({ msg_id: data.messageId?.slice(-8), decision: data.decision, ...data.details })}`);
+  logger.info({
+    component: "decision",
+    messageId: data.messageId,
+    intent: data.decision,
+    ...data.details
+  }, "Decision logged");
 }
 
 // ============================================================================
@@ -721,6 +740,40 @@ Exemplo: "50" (número isolado sem contexto)
 5. goal > set_context (se tem valor objetivo)
 6. purchase > chat (se é pergunta com valor específico)
 
+## 🚨 NOMENCLATURA OBRIGATÓRIA DE SLOTS (INGLÊS APENAS!)
+
+SEMPRE use estes nomes EXATOS em inglês. NUNCA traduza para português.
+
+| Intent | Slots Obrigatórios | Opcional |
+|--------|-------------------|----------|
+| expense | amount, payment_method | description, category, card |
+| income | amount | description, source |
+| recurring | amount, description, payment_method | day_of_month, periodicity |
+| installment | amount, installments | description, card |
+| goal | amount, description | deadline |
+| query | query_scope | time_range |
+| cancel | | cancel_target, target_name |
+
+### Exemplo CORRETO:
+{
+  "actionType": "expense",
+  "confidence": 0.92,
+  "slots": {
+    "amount": 50,
+    "description": "cafe",
+    "payment_method": "pix"
+  }
+}
+
+### ERRADO (NUNCA FAÇA):
+{
+  "slots": {
+    "valor": 50,
+    "descricao": "cafe",
+    "forma_pagamento": "pix"
+  }
+}
+
 ## 📦 SLOTS (extraia apenas o que está claro)
 
 Valores: amount, limit, value, installments, due_day, closing_day
@@ -753,103 +806,97 @@ Context: action (start|end)
 RESPONDA APENAS COM JSON. SEM MARKDOWN. SEM EXPLICAÇÕES ADICIONAIS.`;
 
 // ============================================================================
-// 🔧 NORMALIZAÇÃO DE SLOTS DA IA
+// 🔧 NORMALIZAÇÃO DE SLOTS DA IA (SIMPLIFICADO - v3.3)
+// ============================================================================
+// Com o prompt atualizado para usar nomes em inglês, precisamos apenas de
+// conversões de tipo, não de renomeação de campos.
 // ============================================================================
 function normalizeAISlots(slots: Record<string, any>): ExtractedSlots {
   const normalized: ExtractedSlots = {};
   
-  // Copiar slots válidos
-  if (slots.amount !== undefined) normalized.amount = Number(slots.amount);
-  if (slots.description) normalized.description = String(slots.description);
-  if (slots.payment_method) normalized.payment_method = String(slots.payment_method).toLowerCase();
-  if (slots.source) normalized.source = String(slots.source).toLowerCase();
-  if (slots.card) normalized.card = String(slots.card);
-  if (slots.value !== undefined) normalized.value = Number(slots.value);
-  if (slots.label) normalized.label = String(slots.label);
-  if (slots.start_date) normalized.start_date = String(slots.start_date);
-  if (slots.end_date) normalized.end_date = String(slots.end_date);
-  if (slots.day_of_month !== undefined) normalized.day_of_month = Number(slots.day_of_month);
-  if (slots.date_range) normalized.date_range = slots.date_range;
-  if (slots.category) normalized.category = String(slots.category);
+  // ========================================================================
+  // CONVERSÕES DE TIPO (única lógica necessária)
+  // ========================================================================
   
-  // Novos slots v3.1
+  // Amount - usar parseBrazilianAmount para lidar com vírgula decimal
+  if (slots.amount !== undefined) {
+    if (typeof slots.amount === 'string') {
+      normalized.amount = parseBrazilianAmount(slots.amount) || 0;
+    } else {
+      normalized.amount = Number(slots.amount);
+    }
+  }
+  
+  // Outros valores numéricos
+  if (slots.value !== undefined) {
+    if (typeof slots.value === 'string') {
+      normalized.value = parseBrazilianAmount(slots.value) || 0;
+    } else {
+      normalized.value = Number(slots.value);
+    }
+  }
   if (slots.installments !== undefined) normalized.installments = Number(slots.installments);
-  if (slots.bill_name) normalized.bill_name = String(slots.bill_name);
-  if (slots.card_name) normalized.card_name = String(slots.card_name);
   if (slots.limit !== undefined) normalized.limit = Number(slots.limit);
   if (slots.due_day !== undefined) normalized.due_day = Number(slots.due_day);
   if (slots.closing_day !== undefined) normalized.closing_day = Number(slots.closing_day);
-  if (slots.deadline) normalized.deadline = String(slots.deadline);
+  if (slots.day_of_month !== undefined) normalized.day_of_month = Number(slots.day_of_month);
   
-  // Normalizar periodicity (corrigir se IA retornar em português)
+  // Strings - normalizar para lowercase onde apropriado
+  if (slots.description) normalized.description = String(slots.description);
+  if (slots.category) normalized.category = String(slots.category);
+  if (slots.card) normalized.card = String(slots.card);
+  if (slots.card_name) normalized.card_name = String(slots.card_name);
+  if (slots.bill_name) normalized.bill_name = String(slots.bill_name);
+  if (slots.source) normalized.source = String(slots.source).toLowerCase();
+  if (slots.label) normalized.label = String(slots.label);
+  if (slots.deadline) normalized.deadline = String(slots.deadline);
+  if (slots.start_date) normalized.start_date = String(slots.start_date);
+  if (slots.end_date) normalized.end_date = String(slots.end_date);
+  if (slots.date_range) normalized.date_range = slots.date_range;
+  
+  // Payment method - normalizar para formato interno
+  if (slots.payment_method) {
+    const pm = String(slots.payment_method).toLowerCase();
+    const paymentMap: Record<string, string> = {
+      "pix": "pix",
+      "débito": "debito",
+      "debito": "debito",
+      "crédito": "credito",
+      "credito": "credito",
+      "cartão": "credito",
+      "dinheiro": "dinheiro",
+    };
+    normalized.payment_method = paymentMap[pm] || pm;
+  }
+  
+  // Periodicity - normalizar para formato interno
   if (slots.periodicity) {
     const periodicityMap: Record<string, string> = {
       "mensal": "monthly",
-      "semanal": "weekly", 
+      "semanal": "weekly",
       "anual": "yearly",
       "monthly": "monthly",
       "weekly": "weekly",
-      "yearly": "yearly"
+      "yearly": "yearly",
     };
     normalized.periodicity = periodicityMap[String(slots.periodicity).toLowerCase()] || "monthly";
   }
   
-  // Normalizar frequency → periodicity (caso IA use nome errado)
-  if (slots.frequency && !normalized.periodicity) {
-    const freqMap: Record<string, string> = {
-      "mensal": "monthly",
-      "semanal": "weekly",
-      "anual": "yearly"
-    };
-    normalized.periodicity = freqMap[String(slots.frequency).toLowerCase()] || "monthly";
-  }
-  
-  // Normalizar valor → amount
-  if (slots.valor && !normalized.amount) {
-    normalized.amount = Number(slots.valor);
-  }
-  
-  // Normalizar descricao → description
-  if (slots.descricao && !normalized.description) {
-    normalized.description = String(slots.descricao);
-  }
-  
-  // Normalizar parcelas → installments
-  if (slots.parcelas && !normalized.installments) {
-    normalized.installments = Number(slots.parcelas);
-  }
-  
-  // Normalizar nome_conta → bill_name
-  if (slots.nome_conta && !normalized.bill_name) {
-    normalized.bill_name = String(slots.nome_conta);
-  }
-  
-  // Normalizar nome_cartao → card_name
-  if (slots.nome_cartao && !normalized.card_name) {
-    normalized.card_name = String(slots.nome_cartao);
-  }
-  
-  // Normalizar limite → limit
-  if (slots.limite && !normalized.limit) {
-    normalized.limit = Number(slots.limite);
-  }
-  
-  // Normalizar dia_vencimento → due_day
-  if (slots.dia_vencimento && !normalized.due_day) {
-    normalized.due_day = Number(slots.dia_vencimento);
-  }
-  
-  // Normalizar dia_fechamento → closing_day
-  if (slots.dia_fechamento && !normalized.closing_day) {
-    normalized.closing_day = Number(slots.dia_fechamento);
-  }
-  
-  // v3.2: Novos slots para query, cancel e context
+  // Query e cancel slots
   if (slots.query_scope) normalized.query_scope = String(slots.query_scope).toLowerCase();
   if (slots.time_range) normalized.time_range = String(slots.time_range).toLowerCase();
   if (slots.cancel_target) normalized.cancel_target = String(slots.cancel_target).toLowerCase();
   if (slots.target_name) normalized.target_name = String(slots.target_name);
   if (slots.action) normalized.action = String(slots.action).toLowerCase();
+  
+  // ========================================================================
+  // FALLBACK: Copiar slots não processados diretamente
+  // ========================================================================
+  Object.keys(slots).forEach(key => {
+    if (!(key in normalized) && slots[key] !== undefined && slots[key] !== null) {
+      normalized[key] = slots[key];
+    }
+  });
   
   return normalized;
 }
@@ -1122,13 +1169,19 @@ async function decisionEngine(
   // ========================================================================
   // Importação já feita no topo: classifyDeterministic
   const deterministicResult = classifyDeterministic(message);
-  console.log(`⚡ [DETERMINÍSTICO] ${deterministicResult.actionType} (${(deterministicResult.confidence * 100).toFixed(0)}%) - ${deterministicResult.reason}`);
+  logger.info({
+    component: "classifier",
+    userId: activeAction?.user_id,
+    actionType: deterministicResult.actionType,
+    confidence: deterministicResult.confidence,
+    source: deterministicResult.source
+  }, "Classificacao deterministica concluida");
 
   // Se determinístico detectou palavra solta → NÃO chamar IA, forçar clarificação
   if (deterministicResult.source === "deterministic" && 
       deterministicResult.actionType === "unknown" && 
       deterministicResult.slots.possible_description) {
-    console.log(`🔤 [WORD GUARD] Palavra solta "${deterministicResult.slots.possible_description}" → forçar clarificação`);
+    logger.info({ component: "word_guard", word: deterministicResult.slots.possible_description }, "Palavra solta detectada - forcando clarificacao");
     
     return {
       result: {
@@ -1147,7 +1200,7 @@ async function decisionEngine(
     // Cast para ActionType local (goal não existe aqui, mas nunca terá conf 0.9)
     const detActionType = deterministicResult.actionType as ActionType;
     const missing = getMissingSlots(detActionType, deterministicResult.slots);
-    console.log(`✅ [DETERMINÍSTICO] Usando resultado direto: ${detActionType}`);
+    logger.info({ component: "classifier", actionType: detActionType, canExecute: missing.length === 0 }, "Usando resultado deterministico direto");
     
     return {
       result: {
@@ -1164,7 +1217,7 @@ async function decisionEngine(
   // ========================================================================
   // PRIORIDADE 3: IA EXTRAI E CLASSIFICA (quando determinístico incerto)
   // ========================================================================
-  console.log(`🤖 [IA] Chamando IA para classificar (determinístico incerto)...`);
+  logger.info({ component: "ai_classifier" }, "Chamando IA para classificar (deterministico incerto)");
   
   const aiResult = await callAIForDecision(
     message,
@@ -1177,7 +1230,28 @@ async function decisionEngine(
     history
   );
   
-  console.log(`🤖 [IA] Resultado: ${aiResult.actionType} | Conf: ${(aiResult.confidence * 100).toFixed(0)}% | Slots: ${JSON.stringify(aiResult.slots)}`);
+  // SALVAR DECISÃO DA IA PARA ANALYTICS
+  try {
+    await supabase.from("ai_decisions").insert({
+      user_id: activeAction?.user_id || "unknown",
+      message: message.slice(0, 500),
+      message_type: "text",
+      ai_classification: aiResult.actionType,
+      ai_confidence: aiResult.confidence,
+      ai_slots: aiResult.slots,
+      ai_reasoning: aiResult.reason?.slice(0, 500),
+      model_version: "gemini-2.5-flash"
+    });
+  } catch (trackError) {
+    logger.warn({ component: "ai_tracker" }, "Falha ao salvar decisao IA");
+  }
+  
+  logger.info({
+    component: "ai_classifier",
+    actionType: aiResult.actionType,
+    confidence: aiResult.confidence,
+    slots: aiResult.slots
+  }, "Classificacao IA concluida");
   
   // ========================================================================
   // Se IA tem boa confiança (>= 0.75), USAR resultado da IA
@@ -1185,7 +1259,7 @@ async function decisionEngine(
   if (aiResult.confidence >= 0.75 && aiResult.actionType !== "unknown") {
     const missing = getMissingSlots(aiResult.actionType, aiResult.slots);
     
-    console.log(`✅ [IA] Confiança alta (${(aiResult.confidence * 100).toFixed(0)}%) | Faltam: ${missing.join(", ") || "nenhum"}`);
+    logger.info({ component: "ai_classifier", confidence: aiResult.confidence, missing: missing.join(", ") || "nenhum" }, "IA com confianca alta");
     
     return {
       result: {
@@ -1200,14 +1274,14 @@ async function decisionEngine(
   // IA INCERTA → Usar resultado da IA mesmo assim (sem fallback de keywords)
   // A IA é a fonte única de verdade para classificação
   // ========================================================================
-  console.log(`⚠️ [IA] Confiança baixa (${(aiResult.confidence * 100).toFixed(0)}%) → usando resultado da IA mesmo assim`);
+  logger.warn({ component: "ai_classifier", confidence: aiResult.confidence }, "IA com confianca baixa - usando mesmo assim");
   
-  const missing = getMissingSlots(aiResult.actionType, aiResult.slots);
+  const missingLowConf = getMissingSlots(aiResult.actionType, aiResult.slots);
   
   return {
     result: {
       ...aiResult,
-      canExecuteDirectly: missing.length === 0
+      canExecuteDirectly: missingLowConf.length === 0
     },
     shouldBlockLegacyFlow: aiResult.confidence >= 0.5
   };
@@ -1220,7 +1294,7 @@ function extractSlotValue(message: string, slotType: string): any {
     case "amount":
     case "value":
       const numMatch = message.match(/(\d+[.,]?\d*)/);
-      if (numMatch) return parseFloat(numMatch[1].replace(",", "."));
+      if (numMatch) return parseBrazilianAmount(numMatch[1]);
       return null;
       
     case "payment_method":
@@ -4629,12 +4703,28 @@ async function processarJob(job: any): Promise<void> {
     await sendMessage(payload.phoneNumber, `Oi ${primeiroNome}! 👋\n\nNão entendi bem essa. Você pode:\n\n💸 *Registrar gasto:* "café 8 pix"\n💰 *Registrar entrada:* "recebi 200"\n📊 *Ver resumo:* "resumo"\n💬 *Conversar:* "tô gastando demais?"`, payload.messageSource);
     
   } catch (error: unknown) {
-    console.error("❌ [WORKER] Erro no processamento:", error);
+    const finaxError = FinaxError.fromError(error);
+    
+    // Log estruturado
+    logger.error({
+      component: "job_processor",
+      userId,
+      messageId: job.id,
+      error: finaxError.message,
+      code: finaxError.code
+    }, "Erro no processamento do job");
+    
+    // Enviar para Sentry se configurado
+    if (SENTRY_DSN) {
+      Sentry.captureException(finaxError, {
+        tags: { component: "job_processor" },
+        extra: { userId, messageId: job.id, phoneNumber: payload.phoneNumber }
+      });
+    }
     
     // Retry com backoff exponencial
     const retryCount = (job.retry_count || 0) + 1;
     const maxRetries = job.max_retries || 3;
-    const errorMessage = error instanceof Error ? error.message : String(error);
     
     if (retryCount < maxRetries) {
       // Calcular backoff exponencial (1s, 2s, 4s, max 30s)
@@ -4644,25 +4734,25 @@ async function processarJob(job: any): Promise<void> {
       await supabase.from("webhook_jobs").update({
         status: "pending",
         retry_count: retryCount,
-        last_error: errorMessage,
+        last_error: finaxError.message,
         next_retry_at: nextRetry.toISOString()
       }).eq("id", job.id);
       
-      console.log(`🔄 [WORKER] Retry ${retryCount}/${maxRetries} agendado para ${nextRetry.toISOString()}`);
+      logger.info({ component: "job_processor", jobId: job.id, retry: retryCount, maxRetries }, "Retry agendado");
     } else {
       // Mover para dead letter queue
       await supabase.from("webhook_jobs").update({
         status: "failed",
         dead_letter: true,
-        last_error: errorMessage
+        last_error: finaxError.message
       }).eq("id", job.id);
       
-      console.log(`💀 [WORKER] Job ${job.id} movido para dead letter queue após ${maxRetries} tentativas`);
+      logger.warn({ component: "job_processor", jobId: job.id }, "Job movido para dead letter queue");
     }
     
-    // Ainda tenta enviar mensagem de erro ao usuário
+    // Enviar mensagem amigável ao usuário
     try {
-      await sendMessage(payload.phoneNumber, "Ops, algo deu errado 😕\n\nTenta de novo?", payload.messageSource);
+      await sendMessage(payload.phoneNumber, finaxError.userMessage, payload.messageSource);
     } catch {}
   }
 }
