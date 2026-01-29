@@ -1036,6 +1036,7 @@ function assertDomainIsolation(
 async function decisionEngine(
   message: string,
   activeAction: ActiveAction | null,
+  userId: string,
   history?: string,
   payloadType?: string  // NOVO: tipo do payload (text, interactive, audio, image)
 ): Promise<{ result: SemanticResult; shouldBlockLegacyFlow: boolean }> {
@@ -1233,7 +1234,7 @@ async function decisionEngine(
   // SALVAR DECISÃO DA IA PARA ANALYTICS
   try {
     await supabase.from("ai_decisions").insert({
-      user_id: activeAction?.user_id || "unknown",
+      user_id: userId,
       message: message.slice(0, 500),
       message_type: "text",
       ai_classification: aiResult.actionType,
@@ -3322,6 +3323,7 @@ async function processarJob(job: any): Promise<void> {
     const { result: decision, shouldBlockLegacyFlow } = await decisionEngine(
       conteudoProcessado,
       activeAction,
+      userId,
       historicoFormatado,
       payload.messageType  // Passa o tipo: 'text', 'interactive', 'audio', etc.
     );
@@ -4119,20 +4121,29 @@ async function processarJob(job: any): Promise<void> {
           return;
         
         case "expenses":
-          if (timeRange === "week") {
-            console.log(`📊 [QUERY] Roteando para: EXPENSES WEEK`);
-            const weekResult = await getWeeklyExpenses(userId);
-            await sendMessage(payload.phoneNumber, weekResult, payload.messageSource);
-            return;
-          }
-          if (timeRange === "today") {
-            console.log(`📊 [QUERY] Roteando para: EXPENSES TODAY`);
-            const todayResult = await getTodayExpenses(userId);
-            await sendMessage(payload.phoneNumber, todayResult, payload.messageSource);
-            return;
-          }
-          // Default: continua para checar categorias ou resumo
-          break;
+          console.log(`📊 [QUERY] Roteando para: EXPENSES ${timeRange.toUpperCase()}`);
+        
+        // Detalhamento de gastos por período
+          let expensesResult: string;
+        
+          switch (timeRange) {
+            case "week":
+              expensesResult = await getWeeklyExpenses(userId);
+              break;
+              
+            case "today":
+              expensesResult = await getTodayExpenses(userId);
+              break;
+              
+            case "month":
+            default:
+              // Para "detalhe os gastos" sem período → mostrar por categoria
+              expensesResult = await getExpensesByCategory(userId);
+              break;
+        }
+        
+        await sendMessage(payload.phoneNumber, expensesResult, payload.messageSource);
+        return;
         
         case "income":
           console.log(`📊 [QUERY] Roteando para: INCOME`);
