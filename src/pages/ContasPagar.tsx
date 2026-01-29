@@ -33,7 +33,7 @@ const ContasPagar = () => {
   
   // Form states
   const [nome, setNome] = useState('');
-  const [tipo, setTipo] = useState<'fixa' | 'variavel'>('fixa');
+  const [tipo, setTipo] = useState<'cartao' | 'fixa' | 'variavel'>('fixa');
   const [diaVencimento, setDiaVencimento] = useState('');
   const [valorEstimado, setValorEstimado] = useState('');
   const [valorPago, setValorPago] = useState('');
@@ -88,9 +88,17 @@ const ContasPagar = () => {
 
   return (
     <AppLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
+      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 p-6 lg:p-8">
+        {/* Background Effects */}
+        <div className="fixed inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full" />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full" />
+        </div>
+        
+        {/* Grid Pattern */}
+        <div className="fixed inset-0 bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
+        
+        <div className="relative z-10 max-w-[1800px] mx-auto space-y-6">
           <div>
             <h1 className="text-3xl font-bold text-white flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center">
@@ -128,13 +136,14 @@ const ContasPagar = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label className="text-slate-300">Tipo</Label>
-                    <Select value={tipo} onValueChange={(v) => setTipo(v as 'fixa' | 'variavel')}>
+                    <Select value={tipo} onValueChange={(v) => setTipo(v as 'cartao' | 'fixa' | 'variavel')}>
                       <SelectTrigger className="bg-slate-800 border-white/10 text-white">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-slate-800 border-white/10">
                         <SelectItem value="fixa">💎 Fixa</SelectItem>
                         <SelectItem value="variavel">📊 Variável</SelectItem>
+                        <SelectItem value="cartao">💳 Cartão</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -171,7 +180,6 @@ const ContasPagar = () => {
               </div>
             </DialogContent>
           </Dialog>
-        </div>
 
         {/* Cards Grid */}
         {loading ? (
@@ -316,6 +324,7 @@ const ContasPagar = () => {
             )}
           </DialogContent>
         </Dialog>
+        </div>
       </div>
     </AppLayout>
   );

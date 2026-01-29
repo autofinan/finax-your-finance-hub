@@ -2,6 +2,8 @@
 // 💸 MULTIPLE EXPENSES DETECTOR - Detectar múltiplos gastos na mesma mensagem
 // ============================================================================
 
+import { parseBrazilianAmount } from "./parseAmount.ts";
+
 export interface DetectedExpense {
   amount: number;
   description: string;
@@ -17,6 +19,8 @@ export interface DetectedExpense {
  * - "gastei 20 no café e 15 no almoço" → 2 gastos
  * - "X 20\nY 15\nZ 18" → 3 gastos
  * 
+ * IMPORTANTE: NÃO separar por vírgula quando seguida de dígitos (8,54 é um valor, não dois)
+ * 
  * @param message - Texto da mensagem do usuário
  * @returns Array de gastos detectados (vazio se apenas 1 ou nenhum)
  */
@@ -26,9 +30,11 @@ export function detectMultipleExpenses(message: string): DetectedExpense[] {
   const normalized = original.toLowerCase();
   
   // ========================================================================
-  // ESTRATÉGIA 1: Separar por delimitadores (vírgula, "e", quebra de linha)
+  // ESTRATÉGIA 1: Separar por delimitadores
+  // IMPORTANTE: Vírgula SÓ separa se NÃO for decimal (não tem dígito logo depois)
   // ========================================================================
-  const separators = /[,\n]|\s+e\s+/gi;
+  // Regex: vírgula seguida de espaço OU quebra de linha OU " e " (conjunção)
+  const separators = /,(?!\d)|\n|\s+e\s+/gi;
   const parts = original.split(separators).filter(p => p.trim().length > 0);
   
   // Se só tem 1 parte, não há múltiplos
@@ -62,8 +68,9 @@ export function detectMultipleExpenses(message: string): DetectedExpense[] {
     for (const pattern of valuePatterns) {
       const match = trimmed.match(pattern);
       if (match && match[1]) {
-        const parsed = parseFloat(match[1].replace(",", "."));
-        if (!isNaN(parsed) && parsed > 0 && parsed < 100000) {
+        // USAR parseBrazilianAmount para lidar com vírgula decimal
+        const parsed = parseBrazilianAmount(match[1]);
+        if (parsed !== null && parsed > 0 && parsed < 100000) {
           amount = parsed;
           matchedValue = match[0];
           break;
@@ -113,8 +120,10 @@ export function detectMultipleExpenses(message: string): DetectedExpense[] {
     const fallbackExpenses: DetectedExpense[] = [];
     
     while ((match = intercalatedPattern.exec(original)) !== null) {
-      const amount = parseFloat(match[1].replace(",", "."));
+      const amount = parseBrazilianAmount(match[1]);
       const description = match[2].trim();
+      
+      if (amount === null) continue;
       
       if (amount > 0 && amount < 100000 && description.length > 1) {
         fallbackExpenses.push({
@@ -135,7 +144,9 @@ export function detectMultipleExpenses(message: string): DetectedExpense[] {
     
     while ((match = reversedPattern.exec(original)) !== null) {
       const description = match[1].trim();
-      const amount = parseFloat(match[2].replace(",", "."));
+      const amount = parseBrazilianAmount(match[2]);
+      
+      if (amount === null) continue;
       
       if (amount > 0 && amount < 100000 && description.length > 1) {
         // Filtrar palavras que não são descrições válidas
