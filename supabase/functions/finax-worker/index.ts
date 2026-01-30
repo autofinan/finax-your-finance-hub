@@ -6,7 +6,7 @@ const SENTRY_DSN = Deno.env.get("SENTRY_DSN");
 if (SENTRY_DSN) {
   Sentry.init({
     dsn: SENTRY_DSN,
-    environment: Deno.env.get("ENVIRONMENT") || "production",
+    environment: Deno.env.get("SENTRY_ENVIRONMENT") || "production",
     tracesSampleRate: 0.1,
   });
 }
