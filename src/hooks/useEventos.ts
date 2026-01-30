@@ -281,7 +281,11 @@ export function useEventos(usuarioId?: string) {
   // 📊 HELPERS
   // ========================================================================
   function getEventosAtivos() {
-    return eventos.filter((e) => e.status === 'active');
+    const now = new Date();
+    return eventos.filter((e) => 
+      e.status === 'active' && 
+      new Date(e.end_date) >= now
+    );
   }
 
   function getEventosFinalizados() {

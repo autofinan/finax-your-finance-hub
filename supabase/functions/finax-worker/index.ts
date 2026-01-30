@@ -20,6 +20,8 @@ import { queueMessage, markMessageProcessed, countPendingMessages } from "./util
 import { logger } from "./utils/logger.ts";
 import { FinaxError, FinaxErrorCode } from "./utils/errors.ts";
 import { parseBrazilianAmount } from "./utils/parseAmount.ts";
+import { getConversationContext, updateConversationContext, clearConversationContext, scopeToTopic } from "./utils/conversation-context.ts";
+import { formatTimeAgo } from "./utils/date-helpers.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
@@ -3095,6 +3097,74 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
+    // 🧹 COMANDO "ESQUECE CONTEXTO" - Limpar memória de curto prazo
+    // ========================================================================
+    const RESET_COMMANDS = ["esquece", "limpa contexto", "comeca de novo", "reseta", "limpar", "esquece tudo"];
+    const normalizedForReset = normalizeText(conteudoProcessado);
+    
+    if (RESET_COMMANDS.some(cmd => normalizedForReset.includes(cmd))) {
+      await clearConversationContext(userId);
+      await cancelAction(userId);
+      await sendMessage(
+        payload.phoneNumber,
+        "✅ Contexto limpo! Podemos começar uma nova conversa 😊",
+        payload.messageSource
+      );
+      return;
+    }
+    
+    // ========================================================================
+    // 💬 RESOLUÇÃO DETERMINÍSTICA DE REFERÊNCIAS (ANTES DA IA)
+    // ========================================================================
+    // Economiza chamadas de IA e é mais confiável para referências implícitas
+    // ========================================================================
+    const conversationContext = await getConversationContext(userId);
+    let contextualDecisionOverride: DecisionOutput | null = null;
+    
+    // Referências temporais: "e ontem?", "e hoje?", "e semana passada?"
+    const temporalRefs: Record<string, string> = {
+      "e ontem": "yesterday",
+      "e hoje": "today",
+      "e essa semana": "week",
+      "e semana passada": "last_week",
+      "e esse mes": "month",
+      "e mes passado": "last_month"
+    };
+    
+    for (const [pattern, timeRange] of Object.entries(temporalRefs)) {
+      if (normalizedForReset.startsWith(pattern) && conversationContext?.lastIntent === "query") {
+        console.log(`💬 [CONTEXT] Referência temporal detectada: ${pattern} -> ${timeRange}`);
+        
+        contextualDecisionOverride = {
+          actionType: "query",
+          confidence: 0.95,
+          reasoning: `Referência contextual: ${pattern}`,
+          slots: {
+            query_scope: conversationContext.lastQueryScope || "summary",
+            time_range: timeRange
+          },
+          missingSlots: [],
+          shouldExecute: true,
+          shouldAsk: false,
+          question: null,
+          buttons: null
+        };
+        break;
+      }
+    }
+    
+    // Referência a entidade: "primeiro", "segundo", "esse cartão", "mesma categoria"
+    if (!contextualDecisionOverride && normalizedForReset.match(/^(primeiro|segundo|terceiro|esse|essa|mesmo|mesma)/) && conversationContext) {
+      if (conversationContext.lastCardId && (normalizedForReset.includes("cart") || normalizedForReset.includes("primeiro") || normalizedForReset.includes("segundo"))) {
+        console.log(`💬 [CONTEXT] Referência a cartão anterior: ${conversationContext.lastCardId}`);
+        // Será usado nos slots adiante
+      }
+      if (conversationContext.lastCategory && normalizedForReset.includes("categor")) {
+        console.log(`💬 [CONTEXT] Referência a categoria anterior: ${conversationContext.lastCategory}`);
+      }
+    }
+    
+    // ========================================================================
     // 🔒 PRIORIDADE ABSOLUTA: CONTEXTO ATIVO (FSM STATE MACHINE)
     // ========================================================================
     // REGRA DE OURO v7.0: Action ativa tem prioridade TOTAL.
@@ -3320,13 +3390,45 @@ async function processarJob(job: any): Promise<void> {
     const historicoFormatado = historico?.map(h => `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 80)}...`).reverse().join("\n") || "";
     
     // 🔒 DECISION ENGINE - Única fonte de verdade
-    const { result: decision, shouldBlockLegacyFlow } = await decisionEngine(
-      conteudoProcessado,
-      activeAction,
-      userId,
-      historicoFormatado,
-      payload.messageType  // Passa o tipo: 'text', 'interactive', 'audio', etc.
-    );
+    // Se temos override de contexto, usar isso em vez de chamar IA
+    let decision: DecisionOutput;
+    let shouldBlockLegacyFlow = false;
+    
+    if (contextualDecisionOverride) {
+      console.log(`💬 [CONTEXT] Usando decisão do contexto conversacional: ${contextualDecisionOverride.actionType}`);
+      decision = contextualDecisionOverride;
+      
+      // Atualizar contexto após resolver referência temporal
+      await updateConversationContext(userId, {
+        currentTopic: scopeToTopic(contextualDecisionOverride.slots.query_scope as string || "summary"),
+        lastIntent: "query",
+        lastTimeRange: contextualDecisionOverride.slots.time_range as string,
+        lastQueryScope: contextualDecisionOverride.slots.query_scope as string
+      });
+    } else {
+      const engineResult = await decisionEngine(
+        conteudoProcessado,
+        activeAction,
+        userId,
+        historicoFormatado,
+        payload.messageType  // Passa o tipo: 'text', 'interactive', 'audio', etc.
+      );
+      
+      // Converter SemanticResult para DecisionOutput
+      const semanticResult = engineResult.result;
+      decision = {
+        actionType: semanticResult.actionType,
+        confidence: semanticResult.confidence,
+        reasoning: semanticResult.reason || "",
+        slots: semanticResult.slots,
+        missingSlots: [],
+        shouldExecute: semanticResult.canExecuteDirectly || false,
+        shouldAsk: !semanticResult.canExecuteDirectly,
+        question: null,
+        buttons: null
+      };
+      shouldBlockLegacyFlow = engineResult.shouldBlockLegacyFlow;
+    }
     
     logDecision({ 
       messageId: payload.messageId, 
@@ -3335,9 +3437,10 @@ async function processarJob(job: any): Promise<void> {
         type: decision.actionType, 
         conf: decision.confidence, 
         slots: decision.slots,
-        canExec: decision.canExecuteDirectly,
-        blocked: shouldBlockLegacyFlow
-      } 
+        canExec: decision.shouldExecute,
+        blocked: shouldBlockLegacyFlow,
+        contextual: !!contextualDecisionOverride
+      }
     });
     
     // ========================================================================
@@ -4099,13 +4202,28 @@ async function processarJob(job: any): Promise<void> {
       // ========================================================================
       // v3.2: ROTEAMENTO PRIORITÁRIO POR query_scope DA IA
       // ========================================================================
-      const queryScope = decision.slots.query_scope || detectQueryScope(normalized);
+      let queryScope = decision.slots.query_scope || detectQueryScope(normalized);
       const timeRange = decision.slots.time_range || detectTimeRange(normalized);
+      
+      // 🔧 FIX: "detalhe entradas" deve rotear para income, não para expense
+      if ((normalized.includes("detalhe") || normalized.includes("detalha")) && 
+          (normalized.includes("entrada") || normalized.includes("entrou") || normalized.includes("recebi"))) {
+        queryScope = "income";
+        console.log(`📊 [QUERY] FIX: "detalhe entradas" → roteando para INCOME`);
+      }
       
       console.log(`📊 [QUERY] Scope: ${queryScope}, TimeRange: ${timeRange}`);
       
       // Importar funções de query
       const { getWeeklyExpenses, getTodayExpenses, listPendingExpenses, getExpensesByCategory, getMonthlySummary } = await import("./intents/query.ts");
+      
+      // 💬 Atualizar contexto conversacional para referências futuras
+      await updateConversationContext(userId, {
+        currentTopic: scopeToTopic(queryScope as string),
+        lastIntent: "query",
+        lastTimeRange: timeRange as string,
+        lastQueryScope: queryScope as string
+      });
       
       switch (queryScope) {
         case "cards":
