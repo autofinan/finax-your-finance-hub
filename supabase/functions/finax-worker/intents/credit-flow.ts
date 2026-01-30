@@ -109,16 +109,38 @@ export async function resolveCreditCard(
   // CASO 4: Múltiplos cartões → perguntar qual
   // ========================================================================
   console.log(`💳 [CREDIT] ${cards.length} cartões - precisa selecionar`);
-  return {
-    success: false,
-    needsCardSelection: true,
-    cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
-    message: `💳 Qual cartão?\n\n${cards.map((c, i) => 
+  
+  // WhatsApp suporta até 3 botões, mas podemos usar até 5 com lista numerada como fallback
+  const MAX_BUTTONS = 5;
+  
+  if (cards.length <= MAX_BUTTONS) {
+    // Usar botões para até 5 cartões
+    return {
+      success: false,
+      needsCardSelection: true,
+      cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
+      message: `💳 Qual cartão?\n\n${cards.map((c, i) => 
+        `${i + 1}. ${c.nome} (R$ ${c.limite_disponivel?.toFixed(2)} disponível)`
+      ).join("\n")}`,
+      missingSlot: "card",
+      cardButtons: cards.slice(0, MAX_BUTTONS).map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) }))
+    };
+  } else {
+    // Mais de 5 cartões: usar lista numerada (sem botões)
+    const lista = cards.map((c, i) => 
       `${i + 1}. ${c.nome} (R$ ${c.limite_disponivel?.toFixed(2)} disponível)`
-    ).join("\n")}`,
-    missingSlot: "card",
-    cardButtons: cards.slice(0, 3).map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) }))
-  };
+    ).join("\n");
+    
+    return {
+      success: false,
+      needsCardSelection: true,
+      cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
+      message: `💳 Você tem ${cards.length} cartões:\n\n${lista}\n\n_Responde com o número do cartão_`,
+      missingSlot: "card",
+      // SEM botões - vai usar seleção numérica
+      cardButtons: undefined
+    };
+  }
 }
 
 // ============================================================================

@@ -877,6 +877,84 @@ export type Database = {
           },
         ]
       }
+      conversation_context: {
+        Row: {
+          created_at: string | null
+          current_topic: string | null
+          expires_at: string | null
+          last_card_id: string | null
+          last_category: string | null
+          last_goal_id: string | null
+          last_intent: string | null
+          last_interaction_at: string | null
+          last_query_scope: string | null
+          last_time_range: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          current_topic?: string | null
+          expires_at?: string | null
+          last_card_id?: string | null
+          last_category?: string | null
+          last_goal_id?: string | null
+          last_intent?: string | null
+          last_interaction_at?: string | null
+          last_query_scope?: string | null
+          last_time_range?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          current_topic?: string | null
+          expires_at?: string | null
+          last_card_id?: string | null
+          last_category?: string | null
+          last_goal_id?: string | null
+          last_intent?: string | null
+          last_interaction_at?: string | null
+          last_query_scope?: string | null
+          last_time_range?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_context_last_card_id_fkey"
+            columns: ["last_card_id"]
+            isOneToOne: false
+            referencedRelation: "cartoes_credito"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_context_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "conversation_context_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_context_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "conversation_context_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       conversation_state: {
         Row: {
           current_transaction_id: string | null
@@ -3808,6 +3886,7 @@ export type Database = {
         Args: { p_usuario_id: string }
         Returns: undefined
       }
+      fn_cleanup_expired_contexts: { Args: never; Returns: undefined }
       fn_cleanup_expired_patterns: { Args: never; Returns: undefined }
       fn_cleanup_expired_selections: { Args: never; Returns: undefined }
       fn_close_card_faturas: { Args: never; Returns: undefined }

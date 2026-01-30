@@ -461,6 +461,27 @@ export function parseRelativeDate(message: string, baseDate?: Date): Date | null
   return null;
 }
 
+// ============================================================================
+// ⏱️ FORMATAR TEMPO RELATIVO ("há 2h", "ontem", etc.)
+// ============================================================================
+
+export function formatTimeAgo(date: Date | string): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return "agora";
+  if (diffMins < 60) return `${diffMins} min atrás`;
+  if (diffHours < 24) return `${diffHours}h atrás`;
+  if (diffDays === 1) return "ontem";
+  if (diffDays < 7) return `${diffDays} dias atrás`;
+  
+  return d.toLocaleDateString("pt-BR");
+}
+
 /**
  * Formata valor monetário em R$
  */
