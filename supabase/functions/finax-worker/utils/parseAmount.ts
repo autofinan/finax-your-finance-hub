@@ -2,6 +2,7 @@
 // 💵 PARSER DE VALORES MONETÁRIOS FORMATO BRASILEIRO
 // ============================================================================
 // Resolve o bug onde "8,54" era parseado como 8 e 54 separadamente
+// E onde "3.100" era parseado como 3.1 ao invés de 3100
 // ============================================================================
 
 /**
@@ -13,6 +14,8 @@
  * - 1.234,56 → 1234.56
  * - R$ 50,00 → 50.00
  * - 100 → 100
+ * - 3.100 → 3100 (milhar brasileiro)
+ * - 3.14 → 3.14 (decimal americano)
  * 
  * @param input String com valor monetário
  * @returns Número parseado ou null se inválido
@@ -40,12 +43,29 @@ export function parseBrazilianAmount(input: string | number | null | undefined):
   const lastDot = raw.lastIndexOf(".");
   
   if (lastComma > lastDot && lastComma !== -1) {
-    // Formato brasileiro: 1.234,56 ou 8,54
+    // ✅ Formato brasileiro: 1.234,56 ou 8,54
     raw = raw.replace(/\./g, "");  // Remove separadores de milhar
     raw = raw.replace(",", ".");    // Troca vírgula decimal por ponto
   } else if (lastDot > lastComma && lastDot !== -1) {
-    // Formato americano ou só com ponto: 1,234.56 ou 8.54
-    raw = raw.replace(/,/g, "");   // Remove separadores de milhar
+    // Tem ponto mas não tem vírgula OU ponto vem depois
+    // Pode ser: 1,234.56 (US) OU 3.100 (BR sem decimal) OU 3.14 (US decimal)
+    
+    // ✅ HEURÍSTICA: Se o ponto tem exatamente 3 dígitos depois, é milhar BR
+    const parts = raw.split('.');
+    const digitsAfterDot = parts[1]?.length || 0;
+    
+    if (digitsAfterDot === 3) {
+      // 3.100 → milhar brasileiro (3100)
+      // 1.500 → milhar brasileiro (1500)
+      raw = raw.replace(/\./g, "");
+    } else if (digitsAfterDot === 1 || digitsAfterDot === 2) {
+      // 3.1 → decimal americano (3.1)
+      // 3.14 → decimal americano (3.14)
+      raw = raw.replace(/,/g, "");  // Remove separadores de milhar (se houver)
+    } else {
+      // Sem vírgula e sem decimal → número inteiro ou formato US com separadores
+      raw = raw.replace(/,/g, "");
+    }
   }
   // Se não tem nem vírgula nem ponto, é número inteiro
   
@@ -68,6 +88,7 @@ export function containsBrazilianAmount(input: string): boolean {
   const patterns = [
     /\d+,\d{1,2}(?!\d)/,           // 8,54 (vírgula decimal, não seguida de mais dígitos)
     /\d+\.\d{3},\d{2}/,            // 1.234,56 (milhar + decimal)
+    /\d+\.\d{3}(?!\d)/,            // 3.100 (milhar sem decimal)
     /R\$\s*\d/i,                    // R$ seguido de número
     /\d+(?:\s*reais?|\s*conto)/i,  // 50 reais, 50 conto
   ];
@@ -85,7 +106,7 @@ export function extractBrazilianAmounts(input: string): number[] {
   const amounts: number[] = [];
   
   // Padrão para capturar valores
-  const pattern = /(?:R\$\s*)?(\d+(?:[.,]\d{1,2})?)/gi;
+  const pattern = /(?:R\$\s*)?(\d+(?:[.,]\d{1,3})?)/gi;
   
   let match;
   while ((match = pattern.exec(input)) !== null) {
