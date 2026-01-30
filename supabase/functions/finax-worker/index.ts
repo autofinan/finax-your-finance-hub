@@ -2652,30 +2652,40 @@ async function processarJob(job: any): Promise<void> {
       }
     }
     
-    // ========================================================================
-    // 🔕 GUARD: VERIFICAR OPERATION_MODE
-    // ========================================================================
-    const { data: perfil } = await supabase
-      .from("perfil_cliente")
-      .select("operation_mode")
-      .eq("usuario_id", userId)
-      .single();
-    
-    const operationMode = perfil?.operation_mode || "normal";
-    console.log(`🔕 [WORKER] operation_mode: ${operationMode}`);
-    
-    // Verificar novo usuário (onboarding)
-    const { count: historicoCount } = await supabase
-      .from("historico_conversas")
-      .select("id", { count: "exact", head: true })
-      .eq("phone_number", payload.phoneNumber);
-    
-    if ((historicoCount || 0) === 0) {
-      console.log(`🎉 [WORKER] Novo usuário: ${payload.phoneNumber}`);
-      await sendMessage(payload.phoneNumber, `Oi, ${nomeUsuario.split(" ")[0]}! 👋\n\nSou o *Finax* — seu assistente financeiro.\n\nPode me mandar gastos por texto, áudio ou foto.\n\nPra começar, me conta: quanto você costuma ganhar por mês? 💰`, payload.messageSource);
-      await supabase.from("historico_conversas").insert({ phone_number: payload.phoneNumber, user_id: userId, user_message: payload.messageText || "[MÍDIA]", ai_response: "[ONBOARDING]", tipo: "onboarding" });
-      return;
-    }
+// Substituir linhas 2655-2679 por:
+
+import { startOnboarding, handleOnboardingStep } from "supabase/functions/finax-worker/utils/onboarding.ts";
+
+// Verificar se está no onboarding
+const { data: onboardingState } = await supabase
+  .from("user_onboarding")
+  .select("current_step")
+  .eq("user_id", userId)
+  .single();
+
+if (onboardingState && onboardingState.current_step !== "done") {
+  // Processar step do onboarding
+  const handled = await handleOnboardingStep(
+    userId,
+    payload.phoneNumber,
+    conteudoProcessado,
+    payload.buttonReplyId
+  );
+  
+  if (handled) return;
+}
+
+// Verificar novo usuário (primeira vez)
+const { count: historicoCount } = await supabase
+  .from("historico_conversas")
+  .select("id", { count: "exact", head: true })
+  .eq("phone_number", payload.phoneNumber);
+
+if ((historicoCount || 0) === 0) {
+  console.log(`🎉 [ONBOARDING] Novo usuário: ${payload.phoneNumber}`);
+  await startOnboarding(userId, payload.phoneNumber);
+  return;
+}
     
     // ========================================================================
     // 🎯 BUSCAR CONTEXTO ATIVO
