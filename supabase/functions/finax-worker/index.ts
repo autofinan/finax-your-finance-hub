@@ -2652,41 +2652,30 @@ async function processarJob(job: any): Promise<void> {
       }
     }
     
-// Substituir linhas 2655-2679 por:
-
-import { startOnboarding, handleOnboardingStep } from "supabase/functions/finax-worker/utils/onboarding.ts";
-
-// Verificar se está no onboarding
-const { data: onboardingState } = await supabase
-  .from("user_onboarding")
-  .select("current_step")
-  .eq("user_id", userId)
-  .single();
-
-if (onboardingState && onboardingState.current_step !== "done") {
-  // Processar step do onboarding
-  const handled = await handleOnboardingStep(
-    userId,
-    payload.phoneNumber,
-    conteudoProcessado,
-    payload.buttonReplyId
-  );
-  
-  if (handled) return;
-}
-
-// Verificar novo usuário (primeira vez)
-const { count: historicoCount } = await supabase
-  .from("historico_conversas")
-  .select("id", { count: "exact", head: true })
-  .eq("phone_number", payload.phoneNumber);
-
-if ((historicoCount || 0) === 0) {
-  console.log(`🎉 [ONBOARDING] Novo usuário: ${payload.phoneNumber}`);
-  await startOnboarding(userId, payload.phoneNumber);
-  return;
-}
+    // ========================================================================
+    // 🔕 GUARD: VERIFICAR OPERATION_MODE
+    // ========================================================================
+    const { data: perfil } = await supabase
+      .from("perfil_cliente")
+      .select("operation_mode")
+      .eq("usuario_id", userId)
+      .single();
     
+    const operationMode = perfil?.operation_mode || "normal";
+    console.log(`🔕 [WORKER] operation_mode: ${operationMode}`);
+    
+    // Verificar novo usuário (onboarding)
+    const { count: historicoCount } = await supabase
+      .from("historico_conversas")
+      .select("id", { count: "exact", head: true })
+      .eq("phone_number", payload.phoneNumber);
+    
+    if ((historicoCount || 0) === 0) {
+      console.log(`🎉 [WORKER] Novo usuário: ${payload.phoneNumber}`);
+      await sendMessage(payload.phoneNumber, `Oi, ${nomeUsuario.split(" ")[0]}! 👋\n\nSou o *Finax* — seu assistente financeiro.\n\nPode me mandar gastos por texto, áudio ou foto.\n\nPra começar, me conta: quanto você costuma ganhar por mês? 💰`, payload.messageSource);
+      await supabase.from("historico_conversas").insert({ phone_number: payload.phoneNumber, user_id: userId, user_message: payload.messageText || "[MÍDIA]", ai_response: "[ONBOARDING]", tipo: "onboarding" });
+      return;
+    }
     // ========================================================================
     // 🎯 BUSCAR CONTEXTO ATIVO
     // ========================================================================
@@ -2929,6 +2918,74 @@ if ((historicoCount || 0) === 0) {
         await closeAction(activeAction.id);
         await createAction(userId, "income", "income", { amount: activeAction.slots.amount }, "source", payload.messageId);
         await sendButtons(payload.phoneNumber, "Como você recebeu?", SLOT_PROMPTS.source.buttons!, payload.messageSource);
+        return;
+      }
+      
+      // ========================================================================
+      // 📄 HANDLER: Resposta à sugestão de criar fatura
+      // ========================================================================
+      if (payload.buttonReplyId === "create_bill_yes" && activeAction?.intent === "bill") {
+        const billName = activeAction.slots.bill_name;
+        const estimatedValue = activeAction.slots.estimated_value;
+        
+        console.log(`📄 [BILL] Criando fatura recorrente: ${billName}`);
+        
+        await closeAction(activeAction.id);
+        await createAction(userId, "bill", "bill", {
+          bill_name: billName,
+          estimated_value: estimatedValue
+        }, "due_day", payload.messageId);
+        
+        await sendMessage(payload.phoneNumber,
+          `📄 Qual dia do mês vence a conta de *${billName}*? (1-31)`,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      if (payload.buttonReplyId === "create_bill_no" && activeAction?.intent === "bill") {
+        await closeAction(activeAction.id);
+        await sendMessage(payload.phoneNumber, 
+          `Tranquilo! Se mudar de ideia, é só me avisar 😊`,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ========================================================================
+      // 📬 HANDLER: Confirmação de gastos pendentes
+      // ========================================================================
+      if (payload.buttonReplyId === "confirm_pending_yes") {
+        // Buscar mensagens pendentes
+        const { data: pendingMsgs } = await supabase
+          .from("pending_messages")
+          .select("id, message_text")
+          .eq("user_id", userId)
+          .eq("processed", false)
+          .order("created_at", { ascending: true })
+          .limit(10);
+        
+        if (pendingMsgs && pendingMsgs.length > 0) {
+          const lista = pendingMsgs.map((p, i) => `${i + 1}. ${p.message_text?.slice(0, 40)}`).join("\n");
+          
+          await sendMessage(payload.phoneNumber,
+            `📬 *Gastos Pendentes*\n\n${lista}\n\n_Digite o número para confirmar ou "todos" para confirmar tudo_`,
+            payload.messageSource
+          );
+          
+          await createAction(userId, "confirm_pending", "confirm_pending", {
+            pending_ids: pendingMsgs.map(p => p.id),
+            pending_contents: pendingMsgs.map(p => p.message_text)
+          }, "selection", payload.messageId);
+        }
+        return;
+      }
+      
+      if (payload.buttonReplyId === "confirm_pending_no") {
+        await sendMessage(payload.phoneNumber, 
+          `Blz! Os gastos ficam anotados aqui. É só dizer "gastos pendentes" quando quiser ver 📋`,
+          payload.messageSource
+        );
         return;
       }
       
@@ -3649,6 +3706,24 @@ if ((historicoCount || 0) === 0) {
           .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         
+        // ✅ APÓS registrar expense que foi reclassificado de pay_bill → oferecer criar fatura
+        if (slots.suggest_bill_after && slots.description) {
+          await sendButtons(payload.phoneNumber,
+            `💡 Quer que eu crie uma fatura "${slots.description}" pra te lembrar todo mês?`,
+            [
+              { id: "create_bill_yes", title: "✅ Sim, criar" },
+              { id: "create_bill_no", title: "❌ Não" }
+            ],
+            payload.messageSource
+          );
+          
+          // Salvar contexto para resposta
+          await createAction(userId, "bill_suggestion", "bill", {
+            bill_name: slots.description,
+            estimated_value: slots.amount
+          }, "choice", payload.messageId);
+        }
+        
         // Processar fila de mensagens pendentes
         const pendingCount = await countPendingMessages(userId);
         if (pendingCount > 0) {
@@ -3814,7 +3889,7 @@ if ((historicoCount || 0) === 0) {
     }
     
     // ========================================================================
-    // 💸 PAY_BILL - Pagar fatura existente
+    // 💸 PAY_BILL - Pagar fatura existente (COM FALLBACK INTELIGENTE)
     // ========================================================================
     if (decision.actionType === "pay_bill") {
       const slots = decision.slots;
@@ -3828,20 +3903,45 @@ if ((historicoCount || 0) === 0) {
         return;
       }
       
-      if (!amount) {
-        await sendMessage(payload.phoneNumber, `Quanto foi a conta de *${billName}*? 💸`, payload.messageSource);
-        await createAction(userId, "pay_bill", "pay_bill", { ...slots, bill_name: billName }, "amount", payload.messageId);
+      // ✅ VERIFICAR SE FATURA EXISTE ANTES DE PROSSEGUIR
+      const { data: faturaExistente } = await supabase
+        .from("contas_pagar")
+        .select("id, nome")
+        .eq("usuario_id", userId)
+        .eq("ativa", true)
+        .ilike("nome", `%${billName}%`)
+        .maybeSingle();
+      
+      if (!faturaExistente) {
+        // ❌ FATURA NÃO EXISTE → Registrar como gasto E oferecer criar fatura
+        console.log(`💸 [PAY_BILL] Fatura "${billName}" não existe - registrando como gasto`);
+        
+        // Reclassificar como expense
+        decision.actionType = "expense";
+        decision.slots.category = "Contas";
+        decision.slots.description = billName;
+        decision.slots.suggest_bill_after = true;  // Flag para oferecer criar fatura
+        
+        // NÃO dar return - continuar para handler de expense abaixo
+      } else {
+        // ✅ FATURA EXISTE - continuar fluxo normal
+        console.log(`📄 [PAY_BILL] Fatura encontrada: ${faturaExistente.nome}`);
+        
+        if (!amount) {
+          await sendMessage(payload.phoneNumber, `Quanto foi a conta de *${faturaExistente.nome}*? 💸`, payload.messageSource);
+          await createAction(userId, "pay_bill", "pay_bill", { ...slots, bill_name: faturaExistente.nome, bill_id: faturaExistente.id }, "amount", payload.messageId);
+          return;
+        }
+        
+        const result = await payBill({
+          userId,
+          contaNome: faturaExistente.nome,
+          valorPago: Number(amount),
+        });
+        
+        await sendMessage(payload.phoneNumber, result, payload.messageSource);
         return;
       }
-      
-      const result = await payBill({
-        userId,
-        contaNome: billName,
-        valorPago: Number(amount),
-      });
-      
-      await sendMessage(payload.phoneNumber, result, payload.messageSource);
-      return;
     }
     
     // ========================================================================

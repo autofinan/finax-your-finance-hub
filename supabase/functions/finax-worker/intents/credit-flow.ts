@@ -110,20 +110,18 @@ export async function resolveCreditCard(
   // ========================================================================
   console.log(`💳 [CREDIT] ${cards.length} cartões - precisa selecionar`);
   
-  // WhatsApp suporta até 3 botões, mas podemos usar até 5 com lista numerada como fallback
-  const MAX_BUTTONS = 5;
+  // WhatsApp suporta APENAS 3 botões interativos
+  const MAX_BUTTONS = 3;
   
   if (cards.length <= MAX_BUTTONS) {
-    // Usar botões para até 5 cartões
+    // Usar botões para até 3 cartões
     return {
       success: false,
       needsCardSelection: true,
       cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
-      message: `💳 Qual cartão?\n\n${cards.map((c, i) => 
-        `${i + 1}. ${c.nome} (R$ ${c.limite_disponivel?.toFixed(2)} disponível)`
-      ).join("\n")}`,
+      message: `💳 Qual cartão?`,
       missingSlot: "card",
-      cardButtons: cards.slice(0, MAX_BUTTONS).map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) }))
+      cardButtons: cards.map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) }))
     };
   } else {
     // Mais de 5 cartões: usar lista numerada (sem botões)

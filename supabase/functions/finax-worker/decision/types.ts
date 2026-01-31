@@ -86,6 +86,16 @@ export interface DecisionInput {
     activeActionIntent?: string;
     activeActionSlots?: Record<string, any>;
     pendingSlot?: string | null;
+    // ✅ Contexto conversacional (memória de curto prazo)
+    conversationContext?: {
+      currentTopic?: string | null;
+      lastIntent?: string | null;
+      lastTimeRange?: string | null;
+      lastQueryScope?: string | null;
+      lastCardId?: string | null;
+      lastCardName?: string | null;
+      lastCategory?: string | null;
+    } | null;
   };
   history?: string;
 }
