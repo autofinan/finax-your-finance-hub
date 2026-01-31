@@ -1,8 +1,7 @@
 // ============================================================================
-// 📊 INTENT: QUERY (Consultas) - v3.2 Data-First Architecture
+// 📊 INTENT: QUERY (Consultas) - v3.3 Data-First Architecture + YESTERDAY
 // ============================================================================
-// Regra: Funções retornam DADOS estruturados, formatters retornam TEXTO
-// Isso permite reuso dos dados para análises, gráficos, etc.
+// ✅ ADICIONADO: getYesterdayExpenses para suporte a "e ontem?"
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -35,6 +34,13 @@ export interface WeeklyExpensesData {
 }
 
 export interface TodayExpensesData {
+  transactions: { valor: number; descricao: string; categoria: string }[];
+  total: number;
+  date: string;
+}
+
+// ✅ NOVO: Tipo para gastos de ontem
+export interface YesterdayExpensesData {
   transactions: { valor: number; descricao: string; categoria: string }[];
   total: number;
   date: string;
@@ -78,7 +84,6 @@ export async function getMonthlySummaryData(userId: string): Promise<MonthlySumm
   };
 }
 
-// FORMATTER
 export async function getMonthlySummary(userId: string): Promise<string> {
   const data = await getMonthlySummaryData(userId);
   
@@ -95,7 +100,7 @@ export async function getMonthlySummary(userId: string): Promise<string> {
 }
 
 // ============================================================================
-// 📊 GASTOS POR CATEGORIA - DATA FUNCTION
+// 📊 GASTOS POR CATEGORIA
 // ============================================================================
 
 const categoryEmojis: Record<string, string> = {
@@ -144,7 +149,6 @@ export async function getExpensesByCategoryData(userId: string): Promise<Expense
   };
 }
 
-// FORMATTER
 export async function getExpensesByCategory(userId: string): Promise<string> {
   const data = await getExpensesByCategoryData(userId);
   
@@ -160,13 +164,13 @@ export async function getExpensesByCategory(userId: string): Promise<string> {
 }
 
 // ============================================================================
-// 📊 GASTOS DA SEMANA - DATA FUNCTION
+// 📊 GASTOS DA SEMANA
 // ============================================================================
 
 export async function getWeeklyExpensesData(userId: string): Promise<WeeklyExpensesData> {
   const now = new Date();
   const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay()); // Domingo
+  startOfWeek.setDate(now.getDate() - now.getDay());
   startOfWeek.setHours(0, 0, 0, 0);
   
   const { data: transactions } = await supabase
@@ -193,7 +197,6 @@ export async function getWeeklyExpensesData(userId: string): Promise<WeeklyExpen
   };
 }
 
-// FORMATTER
 export async function getWeeklyExpenses(userId: string): Promise<string> {
   const data = await getWeeklyExpensesData(userId);
   
@@ -209,7 +212,7 @@ export async function getWeeklyExpenses(userId: string): Promise<string> {
 }
 
 // ============================================================================
-// 📊 GASTOS DE HOJE - DATA FUNCTION
+// 📊 GASTOS DE HOJE
 // ============================================================================
 
 export async function getTodayExpensesData(userId: string): Promise<TodayExpensesData> {
@@ -237,7 +240,6 @@ export async function getTodayExpensesData(userId: string): Promise<TodayExpense
   };
 }
 
-// FORMATTER
 export async function getTodayExpenses(userId: string): Promise<string> {
   const data = await getTodayExpensesData(userId);
   
@@ -253,7 +255,55 @@ export async function getTodayExpenses(userId: string): Promise<string> {
 }
 
 // ============================================================================
-// 📬 GASTOS PENDENTES - DATA FUNCTION
+// ✅ NOVO: 📊 GASTOS DE ONTEM
+// ============================================================================
+
+export async function getYesterdayExpensesData(userId: string): Promise<YesterdayExpensesData> {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setHours(0, 0, 0, 0);
+  
+  const endOfYesterday = new Date(yesterday);
+  endOfYesterday.setHours(23, 59, 59, 999);
+  
+  const { data } = await supabase
+    .from("transacoes")
+    .select("valor, descricao, categoria")
+    .eq("usuario_id", userId)
+    .eq("tipo", "saida")
+    .gte("data", yesterday.toISOString())
+    .lte("data", endOfYesterday.toISOString())
+    .eq("status", "confirmada");
+  
+  const txList = (data || []).map(t => ({
+    valor: Number(t.valor),
+    descricao: t.descricao || t.categoria || "Gasto",
+    categoria: t.categoria || "outros"
+  }));
+  
+  return {
+    transactions: txList,
+    total: txList.reduce((s, t) => s + t.valor, 0),
+    date: yesterday.toISOString()
+  };
+}
+
+export async function getYesterdayExpenses(userId: string): Promise<string> {
+  const data = await getYesterdayExpensesData(userId);
+  
+  if (data.transactions.length === 0) {
+    return "📊 Nenhum gasto ontem! 🎉";
+  }
+  
+  const list = data.transactions.map(t => 
+    `💸 R$ ${t.valor.toFixed(2)} - ${t.descricao}`
+  ).join("\n");
+  
+  return `📊 *Gastos de Ontem*\n\n${list}\n\n💸 Total: *R$ ${data.total.toFixed(2)}*`;
+}
+
+// ============================================================================
+// 📬 GASTOS PENDENTES
 // ============================================================================
 
 export async function getPendingExpensesData(userId: string): Promise<PendingExpensesData> {
@@ -275,7 +325,6 @@ export async function getPendingExpensesData(userId: string): Promise<PendingExp
   };
 }
 
-// FORMATTER
 export async function listPendingExpenses(userId: string): Promise<string> {
   const data = await getPendingExpensesData(userId);
   
