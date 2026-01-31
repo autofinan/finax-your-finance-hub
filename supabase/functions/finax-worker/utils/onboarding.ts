@@ -2,6 +2,80 @@
 // 🎯 ONBOARDING DO FINAX - CONSULTOR FINANCEIRO
 // ============================================================================
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const WHATSAPP_ACCESS_TOKEN = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+const WHATSAPP_PHONE_NUMBER_ID = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// ============================================================================
+// 📱 FUNÇÕES DE ENVIO (duplicadas localmente para evitar imports circulares)
+// ============================================================================
+
+async function sendMessage(to: string, message: string, _source: string = "whatsapp"): Promise<void> {
+  try {
+    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to,
+        type: "text",
+        text: { body: message },
+      }),
+    });
+    if (!response.ok) {
+      console.error(`[ONBOARDING] Erro ao enviar mensagem:`, await response.text());
+    }
+  } catch (err) {
+    console.error(`[ONBOARDING] Erro ao enviar mensagem:`, err);
+  }
+}
+
+async function sendButtons(to: string, message: string, buttons: Array<{ id: string; title: string }>, _source: string = "whatsapp"): Promise<void> {
+  try {
+    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: message },
+          action: {
+            buttons: buttons.slice(0, 3).map(b => ({
+              type: "reply",
+              reply: { id: b.id, title: b.title.slice(0, 20) },
+            })),
+          },
+        },
+      }),
+    });
+    if (!response.ok) {
+      console.error(`[ONBOARDING] Erro ao enviar botões:`, await response.text());
+    }
+  } catch (err) {
+    console.error(`[ONBOARDING] Erro ao enviar botões:`, err);
+  }
+}
+
+function parseBrazilianAmount(text: string): number | null {
+  const cleaned = text.replace(/[^\d,.]/g, "").replace(",", ".");
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
 export interface OnboardingState {
   userId: string;
   step: "emotional" | "problem" | "goal_setup" | "name" | "done";
@@ -48,13 +122,13 @@ export async function handleOnboardingStep(
   
   // STEP 1: Estado emocional
   if (onboarding.current_step === "emotional" && buttonId) {
-    const stateMap = {
+    const stateMap: Record<string, string> = {
       "onb_stressed": "stressed",
       "onb_ok": "ok",
       "onb_good": "good"
     };
     
-    const state = stateMap[buttonId];
+    const state = stateMap[buttonId] || "ok";
     await supabase.from("user_onboarding").update({
       financial_state: state,
       current_step: "problem"

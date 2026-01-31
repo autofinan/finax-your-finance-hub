@@ -2776,6 +2776,83 @@ export type Database = {
           },
         ]
       }
+      user_onboarding: {
+        Row: {
+          completed_at: string | null
+          created_at: string | null
+          current_step: string | null
+          financial_state: string | null
+          first_name: string | null
+          goal_amount: number | null
+          goal_deadline: string | null
+          goal_monthly: number | null
+          goal_type: string | null
+          main_problem: string | null
+          monthly_income: number | null
+          problem_details: Json | null
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string | null
+          current_step?: string | null
+          financial_state?: string | null
+          first_name?: string | null
+          goal_amount?: number | null
+          goal_deadline?: string | null
+          goal_monthly?: number | null
+          goal_type?: string | null
+          main_problem?: string | null
+          monthly_income?: number | null
+          problem_details?: Json | null
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string | null
+          current_step?: string | null
+          financial_state?: string | null
+          first_name?: string | null
+          goal_amount?: number | null
+          goal_deadline?: string | null
+          goal_monthly?: number | null
+          goal_type?: string | null
+          main_problem?: string | null
+          monthly_income?: number | null
+          problem_details?: Json | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_onboarding_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "user_onboarding_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_onboarding_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "user_onboarding_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       user_patterns: {
         Row: {
           confidence: number | null

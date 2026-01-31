@@ -56,10 +56,10 @@ const SEMANTIC_PATTERNS = {
     contexts: ["agua", "água", "luz", "energia", "internet", "gas", "gás", "telefone", "aluguel", "condominio", "condomínio"],
     weight: 0.95
   },
-  // 💸 PAGAR FATURA
+  // 💸 PAGAR FATURA - Mais restrito (exige "conta de" ou "fatura de" explícito)
   pay_bill: {
-    verbs: ["paguei a conta", "paguei a fatura", "paguei energia", "paguei agua", "paguei água", "paguei luz", "paguei internet"],
-    contexts: ["deu", "foi", "ficou"],
+    verbs: ["paguei a conta de", "paguei a fatura de", "paguei a conta da", "paguei a fatura da", "conta de luz", "conta de agua", "conta de energia", "conta de internet"],
+    contexts: ["da energia", "da agua", "da água", "da luz", "da internet", "do gas", "do gás"],
     weight: 0.94
   },
   // ENTRADA - alta prioridade
@@ -430,6 +430,8 @@ async function callAIForDecision(
 ): Promise<{ type: ActionType; confidence: number; slots: ExtractedSlots }> {
   try {
     let contextInfo = "";
+    
+    // Contexto de ação ativa
     if (context.hasActiveAction) {
       contextInfo = `
 CONTEXTO ATIVO:
@@ -437,6 +439,31 @@ CONTEXTO ATIVO:
 - Intent: ${context.activeActionIntent}
 - Slots: ${JSON.stringify(context.activeActionSlots)}
 - Slot pendente: ${context.pendingSlot || "nenhum"}
+`;
+    }
+    
+    // ✅ Contexto conversacional (memória de curto prazo)
+    if (context.conversationContext) {
+      const cc = context.conversationContext;
+      contextInfo += `
+CONTEXTO DA CONVERSA ANTERIOR (memória de 30 min):
+- Tópico atual: ${cc.currentTopic || "nenhum"}
+- Última intenção: ${cc.lastIntent || "nenhuma"}
+- Período consultado: ${cc.lastTimeRange || "mês (padrão)"}
+- Tipo de consulta: ${cc.lastQueryScope || "resumo"}
+${cc.lastCardName ? `- Último cartão citado: ${cc.lastCardName}` : ""}
+${cc.lastCategory ? `- Última categoria: ${cc.lastCategory}` : ""}
+
+⚠️ IMPORTANTE: O usuário pode fazer referências implícitas como:
+- "e ontem?" → quer a MESMA query (${cc.lastQueryScope || "resumo"}) com período ONTEM
+- "e hoje?" → quer a MESMA query com período HOJE
+- "e semana passada?" → quer a MESMA query com período SEMANA_PASSADA
+- "no primeiro cartão" / "no ${cc.lastCardName || "cartão anterior"}" → refere-se ao cartão anterior
+- "mesma categoria" → usar categoria ${cc.lastCategory || "anterior"}
+
+Você DEVE interpretar essas referências com base no contexto.
+Exemplo: Se última query foi "gastos de hoje" e usuário diz "e ontem?", retorne:
+  tipo_operacao: "consulta", query_scope: "expenses", time_range: "yesterday"
 `;
     }
     
