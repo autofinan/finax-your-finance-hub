@@ -3888,61 +3888,70 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
-    // ========================================================================
-    // 💸 PAY_BILL - Pagar fatura existente (COM FALLBACK INTELIGENTE)
-    // ========================================================================
-    if (decision.actionType === "pay_bill") {
-      const slots = decision.slots;
-      const { payBill } = await import("./intents/bills.ts");
-      
-      const billName = slots.bill_name || slots.description;
-      const amount = slots.amount;
-      
-      if (!billName) {
-        await sendMessage(payload.phoneNumber, "Qual conta você pagou? (ex: Energia, Água, Internet...)", payload.messageSource);
-        return;
-      }
-      
-      // ✅ VERIFICAR SE FATURA EXISTE ANTES DE PROSSEGUIR
-      const { data: faturaExistente } = await supabase
-        .from("contas_pagar")
-        .select("id, nome")
-        .eq("usuario_id", userId)
-        .eq("ativa", true)
-        .ilike("nome", `%${billName}%`)
-        .maybeSingle();
-      
-      if (!faturaExistente) {
-        // ❌ FATURA NÃO EXISTE → Registrar como gasto E oferecer criar fatura
-        console.log(`💸 [PAY_BILL] Fatura "${billName}" não existe - registrando como gasto`);
-        
-        // Reclassificar como expense
-        decision.actionType = "expense";
-        decision.slots.category = "Contas";
-        decision.slots.description = billName;
-        decision.slots.suggest_bill_after = true;  // Flag para oferecer criar fatura
-        
-        // NÃO dar return - continuar para handler de expense abaixo
-      } else {
-        // ✅ FATURA EXISTE - continuar fluxo normal
-        console.log(`📄 [PAY_BILL] Fatura encontrada: ${faturaExistente.nome}`);
-        
-        if (!amount) {
-          await sendMessage(payload.phoneNumber, `Quanto foi a conta de *${faturaExistente.nome}*? 💸`, payload.messageSource);
-          await createAction(userId, "pay_bill", "pay_bill", { ...slots, bill_name: faturaExistente.nome, bill_id: faturaExistente.id }, "amount", payload.messageId);
-          return;
-        }
-        
-        const result = await payBill({
-          userId,
-          contaNome: faturaExistente.nome,
-          valorPago: Number(amount),
-        });
-        
-        await sendMessage(payload.phoneNumber, result, payload.messageSource);
-        return;
-      }
+// ========================================================================
+// 💸 PAY_BILL - Pagar fatura existente (COM FALLBACK INTELIGENTE)
+// ========================================================================
+if (decision.actionType === "pay_bill") {
+  const slots = decision.slots;
+  const { payBill } = await import("./intents/bills.ts");
+  
+  const billName = slots.bill_name || slots.description;
+  const amount = slots.amount;
+  
+  if (!billName) {
+    await sendMessage(payload.phoneNumber, "Qual conta você pagou? (ex: Energia, Água, Internet...)", payload.messageSource);
+    return;
+  }
+  
+  // ✅ VERIFICAR SE FATURA EXISTE ANTES DE PROSSEGUIR
+  const { data: faturaExistente } = await supabase
+    .from("contas_pagar")
+    .select("id, nome")
+    .eq("usuario_id", userId)
+    .eq("ativa", true)
+    .ilike("nome", `%${billName}%`)
+    .maybeSingle();
+  
+  if (!faturaExistente) {
+    // ❌ FATURA NÃO EXISTE → Registrar como gasto E oferecer criar fatura
+    console.log(`💸 [PAY_BILL] Fatura "${billName}" não existe - registrando como gasto`);
+    
+    // ✅ RECLASSIFICAR COMO EXPENSE (NÃO DAR RETURN - CONTINUAR ABAIXO)
+    decision.actionType = "expense";
+    decision.slots = {
+      ...slots,
+      category: "Contas",
+      description: billName,
+      suggest_bill_after: true  // Flag para oferecer criar fatura depois
+    };
+    
+    // ⚠️ NÃO DAR RETURN AQUI - DEIXAR O CÓDIGO CONTINUAR PARA O HANDLER DE EXPENSE ABAIXO
+    console.log(`🔄 [PAY_BILL→EXPENSE] Reclassificado. Continuando para handler de expense...`);
+    
+  } else {
+    // ✅ FATURA EXISTE - continuar fluxo normal de pay_bill
+    console.log(`📄 [PAY_BILL] Fatura encontrada: ${faturaExistente.nome}`);
+    
+    if (!amount) {
+      await sendMessage(payload.phoneNumber, `Quanto foi a conta de *${faturaExistente.nome}*? 💸`, payload.messageSource);
+      await createAction(userId, "pay_bill", "pay_bill", { 
+        ...slots, 
+        bill_name: faturaExistente.nome, 
+        bill_id: faturaExistente.id 
+      }, "amount", payload.messageId);
+      return;
     }
+    
+    const result = await payBill({
+      userId,
+      contaNome: faturaExistente.nome,
+      valorPago: Number(amount),
+    });
+    
+    await sendMessage(payload.phoneNumber, result, payload.messageSource);
+    return;
+  }
+}
     
     // ========================================================================
     // 🔄 RECURRING - Gastos Recorrentes
