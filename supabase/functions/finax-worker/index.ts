@@ -3971,14 +3971,14 @@ if (decision.actionType === "pay_bill") {
 // ========================================================================
 if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
   const slots = decision.slots;
-console.log(`💸 [RECLASSIFIED] pay_bill → expense, processando: R$ ${slots.amount} - ${slots.description}`);
+  console.log(`💸 [RECLASSIFIED] pay_bill → expense, processando: R$ ${slots.amount} - ${slots.description}`);
   
   // Verificar se tem todos os slots obrigatórios
   const missing = getMissingSlots("expense", slots);
   
   if (hasAllRequiredSlots("expense", slots)) {
     // ✅ Slots completos - registrar direto
-   console.log(`💸 [RECLASSIFIED] Registrando gasto reclassificado`);
+    console.log(`💸 [RECLASSIFIED] Registrando gasto reclassificado`);
     
     const result = await registerExpense(userId, slots as any, undefined);
     await supabase.from("actions")
