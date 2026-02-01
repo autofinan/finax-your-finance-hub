@@ -2924,7 +2924,8 @@ async function processarJob(job: any): Promise<void> {
       // ========================================================================
       // 📄 HANDLER: Resposta à sugestão de criar fatura
       // ========================================================================
-      if (payload.buttonReplyId === "create_bill_yes" && activeAction?.intent === "bill") {
+      if (payload.buttonReplyId === "create_bill_yes" && 
+    (activeAction?.intent === "bill" || activeAction?.intent === "bill_suggestion")) {
         const billName = activeAction.slots.bill_name;
         const estimatedValue = activeAction.slots.estimated_value;
         
@@ -2943,7 +2944,8 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      if (payload.buttonReplyId === "create_bill_no" && activeAction?.intent === "bill") {
+      if (payload.buttonReplyId === "create_bill_no" && 
+    (activeAction?.intent === "bill" || activeAction?.intent === "bill_suggestion")) {
         await closeAction(activeAction.id);
         await sendMessage(payload.phoneNumber, 
           `Tranquilo! Se mudar de ideia, é só me avisar 😊`,
@@ -3226,37 +3228,6 @@ async function processarJob(job: any): Promise<void> {
     const conversationContext = await getConversationContext(userId);
     let contextualDecisionOverride: DecisionOutput | null = null;
     
-    // Referências temporais: "e ontem?", "e hoje?", "e semana passada?"
-    const temporalRefs: Record<string, string> = {
-      "e ontem": "yesterday",
-      "e hoje": "today",
-      "e essa semana": "week",
-      "e semana passada": "last_week",
-      "e esse mes": "month",
-      "e mes passado": "last_month"
-    };
-    
-    for (const [pattern, timeRange] of Object.entries(temporalRefs)) {
-      if (normalizedForReset.startsWith(pattern) && conversationContext?.lastIntent === "query") {
-        console.log(`💬 [CONTEXT] Referência temporal detectada: ${pattern} -> ${timeRange}`);
-        
-        contextualDecisionOverride = {
-          actionType: "query",
-          confidence: 0.95,
-          reasoning: `Referência contextual: ${pattern}`,
-          slots: {
-            query_scope: conversationContext.lastQueryScope || "summary",
-            time_range: timeRange
-          },
-          missingSlots: [],
-          shouldExecute: true,
-          shouldAsk: false,
-          question: null,
-          buttons: null
-        };
-        break;
-      }
-    }
     
     // Referência a entidade: "primeiro", "segundo", "esse cartão", "mesma categoria"
     if (!contextualDecisionOverride && normalizedForReset.match(/^(primeiro|segundo|terceiro|esse|essa|mesmo|mesma)/) && conversationContext) {
@@ -4467,30 +4438,36 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         
         // Detalhamento de gastos por período
           let expensesResult: string;
-          
-          // ✅ Importar getYesterdayExpenses para suporte a "e ontem?"
-          const { getYesterdayExpenses } = await import("./intents/query.ts");
         
-          switch (timeRange) {
-            case "yesterday":
-              console.log(`📊 [QUERY] Roteando para: EXPENSES YESTERDAY`);
-              expensesResult = await getYesterdayExpenses(userId);
-              break;
-              
-            case "week":
-              expensesResult = await getWeeklyExpenses(userId);
-              break;
-              
-            case "today":
-              expensesResult = await getTodayExpenses(userId);
-              break;
-              
-            case "month":
-            default:
-              // Para "detalhe os gastos" sem período → mostrar por categoria
-              expensesResult = await getExpensesByCategory(userId);
-              break;
-        }
+  // ✅ Sistema dinâmico de queries - funciona para QUALQUER período
+          const { executeDynamicQuery } = await import("./intents/dynamic-query.ts");
+          
+          const queryParams = {
+            userId,
+            query_scope: decision.slots.query_scope || "expenses",
+            start_date: decision.slots.start_date,
+            end_date: decision.slots.end_date,
+            time_range: decision.slots.time_range || timeRange,
+            category: decision.slots.category,
+            card_id: decision.slots.card_id
+          };
+          
+          console.log(`📊 [QUERY] Executando query dinâmica:`, queryParams);
+          
+          const expensesResult = await executeDynamicQuery(queryParams);
+          await sendMessage(payload.phoneNumber, expensesResult, payload.messageSource);
+          
+          // Atualizar contexto para próxima pergunta ("e ontem?")
+          await updateConversationContext(userId, {
+            currentTopic: decision.slots.query_scope || "expenses",
+            lastIntent: "query",
+            lastTimeRange: decision.slots.time_range || timeRange,
+            lastQueryScope: decision.slots.query_scope || "expenses",
+            lastStartDate: decision.slots.start_date,
+            lastEndDate: decision.slots.end_date
+          });
+          
+          return;
         
         await sendMessage(payload.phoneNumber, expensesResult, payload.messageSource);
         return;
