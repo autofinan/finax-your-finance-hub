@@ -537,6 +537,70 @@ F. Gerar OUTPUT JSON estrito (modelo abaixo). Nunca gere texto livre em vez do J
 ${contextInfo || "Nenhum contexto ativo."}
 
 ═══════════════════════════════════════════════════════════════
+📊 REGRAS PARA QUERIES (CONSULTAS)
+═══════════════════════════════════════════════════════════════
+
+Quando tipo_operacao = "consulta", você DEVE SEMPRE retornar no dados_extraidos:
+
+- query_scope: "expenses" | "income" | "all"
+- start_date: data inicial em formato ISO 8601 (ex: "2026-01-31T00:00:00.000Z")
+- end_date: data final em formato ISO 8601 (ex: "2026-01-31T23:59:59.999Z")  
+- time_range: "today" | "yesterday" | "week" | "month" | "custom" (apenas para formatação)
+
+DATA ATUAL DE REFERÊNCIA: ${new Date().toISOString()}
+
+EXEMPLOS:
+
+1) Usuário: "Quanto gastei hoje?"
+   Retornar:
+   {
+     "tipo_operacao": "consulta",
+     "dados_extraidos": {
+       "query_scope": "expenses",
+       "start_date": "2026-02-01T00:00:00.000Z",
+       "end_date": "2026-02-01T23:59:59.999Z",
+       "time_range": "today"
+     }
+   }
+
+2) Contexto anterior: { lastQueryScope: "expenses", lastTimeRange: "today" }
+   Usuário: "e ontem?"
+   Retornar:
+   {
+     "tipo_operacao": "consulta",
+     "dados_extraidos": {
+       "query_scope": "expenses",        // ← MANTÉM do contexto
+       "start_date": "2026-01-31T00:00:00.000Z",
+       "end_date": "2026-01-31T23:59:59.999Z",
+       "time_range": "yesterday"
+     }
+   }
+
+3) Usuário: "últimos 5 dias"
+   Retornar:
+   {
+     "tipo_operacao": "consulta",
+     "dados_extraidos": {
+       "query_scope": "expenses",
+       "start_date": "2026-01-27T00:00:00.000Z",  // 5 dias atrás
+       "end_date": "2026-02-01T23:59:59.999Z",
+       "time_range": "custom"
+     }
+   }
+
+4) Usuário: "semana passada"
+   Retornar:
+   {
+     "tipo_operacao": "consulta",
+     "dados_extraidos": {
+       "query_scope": "expenses",
+       "start_date": "2026-01-25T00:00:00.000Z",  // Segunda-feira anterior
+       "end_date": "2026-01-31T23:59:59.999Z",    // Domingo anterior
+       "time_range": "custom"
+     }
+   }
+   
+═══════════════════════════════════════════════════════════════
 📤 SAÍDA OBRIGATÓRIA (JSON)
 ═══════════════════════════════════════════════════════════════
 
@@ -608,18 +672,23 @@ Devolva SEMPRE este JSON válido (campos null quando apropriado, sem markdown):
     
     const actionType = typeMap[parsed.tipo_operacao] || parsed.type || "unknown";
     
-    // Extrair slots do novo formato
-    const slots: ExtractedSlots = {};
-    if (parsed.dados_extraidos) {
-      if (parsed.dados_extraidos.valor) slots.amount = parsed.dados_extraidos.valor;
-      if (parsed.dados_extraidos.descricao) slots.description = parsed.dados_extraidos.descricao;
-      if (parsed.dados_extraidos.forma_pagamento) slots.payment_method = parsed.dados_extraidos.forma_pagamento;
-      if (parsed.dados_extraidos.fonte) slots.source = parsed.dados_extraidos.fonte;
-      if (parsed.dados_extraidos.nome_cartao) slots.card = parsed.dados_extraidos.nome_cartao;
-      if (parsed.dados_extraidos.categoria) slots.category = parsed.dados_extraidos.categoria;
-    } else if (parsed.slots) {
-      Object.assign(slots, parsed.slots);
-    }
+const slots: ExtractedSlots = {};
+if (parsed.dados_extraidos) {
+  if (parsed.dados_extraidos.valor) slots.amount = parsed.dados_extraidos.valor;
+  if (parsed.dados_extraidos.descricao) slots.description = parsed.dados_extraidos.descricao;
+  if (parsed.dados_extraidos.forma_pagamento) slots.payment_method = parsed.dados_extraidos.forma_pagamento;
+  if (parsed.dados_extraidos.fonte) slots.source = parsed.dados_extraidos.fonte;
+  if (parsed.dados_extraidos.nome_cartao) slots.card = parsed.dados_extraidos.nome_cartao;
+  if (parsed.dados_extraidos.categoria) slots.category = parsed.dados_extraidos.categoria;
+  
+  // ✅ Mapear campos de query dinâmica
+  if (parsed.dados_extraidos.query_scope) slots.query_scope = parsed.dados_extraidos.query_scope;
+  if (parsed.dados_extraidos.start_date) slots.start_date = parsed.dados_extraidos.start_date;
+  if (parsed.dados_extraidos.end_date) slots.end_date = parsed.dados_extraidos.end_date;
+  if (parsed.dados_extraidos.time_range) slots.time_range = parsed.dados_extraidos.time_range;
+} else if (parsed.slots) {
+  Object.assign(slots, parsed.slots);
+}
     
     console.log(`🤖 [DE AI] ${parsed.tipo_operacao || parsed.type} → ${actionType} (${((parsed.confianca || parsed.confidence || 0.5) * 100).toFixed(0)}%)`);
     console.log(`📋 [DE AI] Evidências: ${JSON.stringify(parsed.evidencias_encontradas || [])}`);
