@@ -4436,10 +4436,7 @@ console.log(`💸 [RECLASSIFIED] pay_bill → expense, processando: R$ ${slots.a
         case "expenses":
           console.log(`📊 [QUERY] Roteando para: EXPENSES ${timeRange.toUpperCase()}`);
         
-        // Detalhamento de gastos por período
-          let expensesResult: string;
-        
-  // ✅ Sistema dinâmico de queries - funciona para QUALQUER período
+          // ✅ Sistema dinâmico de queries - funciona para QUALQUER período
           const { executeDynamicQuery } = await import("./intents/dynamic-query.ts");
           
           const queryParams = {
@@ -4468,10 +4465,7 @@ console.log(`💸 [RECLASSIFIED] pay_bill → expense, processando: R$ ${slots.a
           });
           
           return;
-        
-        await sendMessage(payload.phoneNumber, expensesResult, payload.messageSource);
-        return;
-        
+
         case "income":
           console.log(`📊 [QUERY] Roteando para: INCOME`);
           const inicioMes = new Date();
