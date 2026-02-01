@@ -3181,6 +3181,44 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
+    // 🔒 LOCK: Detectar mensagens simultâneas (< 2 segundos)
+    // ========================================================================
+    // Se o usuário mandou múltiplas mensagens em < 2s, enfileirar as extras
+    // para evitar processamento paralelo e respostas duplicadas.
+    // ========================================================================
+    const { data: recentMessages } = await supabase
+      .from("historico_conversas")
+      .select("id, created_at")
+      .eq("phone_number", payload.phoneNumber)
+      .gte("created_at", new Date(Date.now() - 2000).toISOString())
+      .order("created_at", { ascending: false });
+
+    // Se já tem 1+ mensagem nos últimos 2s E não é resposta a slot ativo
+    if ((recentMessages?.length || 0) >= 1) {
+      const activeActionForLock = await getActiveAction(userId);
+      
+      // Verificar se é resposta a um slot (não enfileirar nesse caso)
+      const isSlotResponse = activeActionForLock?.pending_slot && (
+        // Respostas típicas de slot: pagamento, números curtos, confirmações
+        /^(pix|debito|credito|dinheiro|cartao|sim|nao|\d{1,4})$/i.test(conteudoProcessado.trim())
+      );
+      
+      // Verificar se parece um novo gasto (tem valor numérico + mais texto)
+      const hasAmount = /\d+/.test(conteudoProcessado);
+      const isLikelyNewExpense = hasAmount && conteudoProcessado.length > 4;
+      
+      if (!isSlotResponse && isLikelyNewExpense) {
+        console.log(`📬 [LOCK] Mensagem simultânea detectada - enfileirando: "${conteudoProcessado.slice(0, 30)}..."`);
+        await queueMessage(userId, conteudoProcessado, payload.messageId);
+        
+        // Não enviar mensagem imediatamente para não confundir
+        // O sistema vai processar depois que terminar o gasto atual
+        
+        return;
+      }
+    }
+    
+    //
     // 💬 RESOLUÇÃO DETERMINÍSTICA DE REFERÊNCIAS (ANTES DA IA)
     // ========================================================================
     // Economiza chamadas de IA e é mais confiável para referências implícitas
@@ -3952,6 +3990,73 @@ if (decision.actionType === "pay_bill") {
     return;
   }
 }
+
+// ========================================================================
+// 💸 PÓS-RECLASSIFICAÇÃO: Se pay_bill reclassificou para expense, processar aqui
+// ========================================================================
+// Este bloco captura o caso em que pay_bill detectou que a fatura não existe
+// e reclassificou para expense. Como o handler de expense já passou, precisamos
+// processar manualmente aqui.
+// ========================================================================
+if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
+  const slots = decision.slots;
+  console.log(`💸 [RECLASSIFIED] pay_bill → expense, processando: R$ ${slots.amount} - ${slots.description}`);
+  
+  // Verificar se tem todos os slots obrigatórios
+  const missing = getMissingSlots("expense", slots);
+  
+  if (hasAllRequiredSlots("expense", slots)) {
+    // ✅ Slots completos - registrar direto
+    console.log(`💸 [RECLASSIFIED] Registrando gasto reclassificado`);
+    
+    const result = await registerExpense(userId, slots as any, undefined);
+    await supabase.from("actions")
+      .update({ status: "done" })
+      .eq("user_id", userId)
+      .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+    await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+    
+    // ✅ Oferecer criar fatura (apenas para categorias de contas)
+    const billKeywords = ["internet", "luz", "agua", "energia", "gas", "telefone", "aluguel", "condominio"];
+    const descLower = (slots.description || "").toLowerCase();
+    const shouldOfferBill = billKeywords.some(k => descLower.includes(k));
+    
+    if (shouldOfferBill) {
+      await sendButtons(payload.phoneNumber,
+        `💡 Quer que eu crie uma fatura "${slots.description}" pra te lembrar todo mês?`,
+        [
+          { id: "create_bill_yes", title: "✅ Sim, criar" },
+          { id: "create_bill_no", title: "❌ Não" }
+        ],
+        payload.messageSource
+      );
+      
+      await createAction(userId, "bill_suggestion", "bill", {
+        bill_name: slots.description,
+        estimated_value: slots.amount
+      }, "choice", payload.messageId);
+    }
+    return;
+  }
+  
+  // ❌ Falta slot - perguntar
+  const nextMissing = missing[0];
+  console.log(`💸 [RECLASSIFIED] Falta slot: ${nextMissing}`);
+  
+  await createAction(userId, "expense", "expense", slots, nextMissing, payload.messageId);
+  
+  const prompt = SLOT_PROMPTS[nextMissing];
+  if (prompt?.useButtons && prompt.buttons) {
+    await sendButtons(payload.phoneNumber, 
+      `💸 R$ ${slots.amount?.toFixed(2)} - ${slots.description || "Conta"}\n\n${prompt.text}`,
+      prompt.buttons, 
+      payload.messageSource
+    );
+  } else {
+    await sendMessage(payload.phoneNumber, prompt?.text || `Qual é o ${nextMissing}?`, payload.messageSource);
+  }
+  return;
+}
     
     // ========================================================================
     // 🔄 RECURRING - Gastos Recorrentes
@@ -4362,8 +4467,16 @@ if (decision.actionType === "pay_bill") {
         
         // Detalhamento de gastos por período
           let expensesResult: string;
+          
+          // ✅ Importar getYesterdayExpenses para suporte a "e ontem?"
+          const { getYesterdayExpenses } = await import("./intents/query.ts");
         
           switch (timeRange) {
+            case "yesterday":
+              console.log(`📊 [QUERY] Roteando para: EXPENSES YESTERDAY`);
+              expensesResult = await getYesterdayExpenses(userId);
+              break;
+              
             case "week":
               expensesResult = await getWeeklyExpenses(userId);
               break;
