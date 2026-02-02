@@ -2924,7 +2924,8 @@ async function processarJob(job: any): Promise<void> {
       // ========================================================================
       // 📄 HANDLER: Resposta à sugestão de criar fatura
       // ========================================================================
-      if (payload.buttonReplyId === "create_bill_yes" && activeAction?.intent === "bill") {
+      if (payload.buttonReplyId === "create_bill_yes" && 
+          (activeAction?.intent === "bill" || activeAction?.intent === "bill_suggestion")) {
         const billName = activeAction.slots.bill_name;
         const estimatedValue = activeAction.slots.estimated_value;
         
@@ -2943,7 +2944,8 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      if (payload.buttonReplyId === "create_bill_no" && activeAction?.intent === "bill") {
+      if (payload.buttonReplyId === "create_bill_no" && 
+          (activeAction?.intent === "bill" || activeAction?.intent === "bill_suggestion")) {
         await closeAction(activeAction.id);
         await sendMessage(payload.phoneNumber, 
           `Tranquilo! Se mudar de ideia, é só me avisar 😊`,
@@ -3224,42 +3226,14 @@ async function processarJob(job: any): Promise<void> {
     // Economiza chamadas de IA e é mais confiável para referências implícitas
     // ========================================================================
     const conversationContext = await getConversationContext(userId);
-    let contextualDecisionOverride: DecisionOutput | null = null;
     
-    // Referências temporais: "e ontem?", "e hoje?", "e semana passada?"
-    const temporalRefs: Record<string, string> = {
-      "e ontem": "yesterday",
-      "e hoje": "today",
-      "e essa semana": "week",
-      "e semana passada": "last_week",
-      "e esse mes": "month",
-      "e mes passado": "last_month"
-    };
-    
-    for (const [pattern, timeRange] of Object.entries(temporalRefs)) {
-      if (normalizedForReset.startsWith(pattern) && conversationContext?.lastIntent === "query") {
-        console.log(`💬 [CONTEXT] Referência temporal detectada: ${pattern} -> ${timeRange}`);
-        
-        contextualDecisionOverride = {
-          actionType: "query",
-          confidence: 0.95,
-          reasoning: `Referência contextual: ${pattern}`,
-          slots: {
-            query_scope: conversationContext.lastQueryScope || "summary",
-            time_range: timeRange
-          },
-          missingSlots: [],
-          shouldExecute: true,
-          shouldAsk: false,
-          question: null,
-          buttons: null
-        };
-        break;
-      }
-    }
+    // ✅ [v6.1] Referências temporais agora são resolvidas pela IA via dynamic-query.ts
+    // O contexto conversacional é passado para a IA que calcula start_date/end_date dinamicamente
+    // Isso permite períodos como "últimos 5 dias", "anteontem", "semana retrasada", etc.
     
     // Referência a entidade: "primeiro", "segundo", "esse cartão", "mesma categoria"
-    if (!contextualDecisionOverride && normalizedForReset.match(/^(primeiro|segundo|terceiro|esse|essa|mesmo|mesma)/) && conversationContext) {
+    // ✅ [v6.1] Esta lógica ainda é útil para contexto de entidades, não temporal
+    if (normalizedForReset.match(/^(primeiro|segundo|terceiro|esse|essa|mesmo|mesma)/) && conversationContext) {
       if (conversationContext.lastCardId && (normalizedForReset.includes("cart") || normalizedForReset.includes("primeiro") || normalizedForReset.includes("segundo"))) {
         console.log(`💬 [CONTEXT] Referência a cartão anterior: ${conversationContext.lastCardId}`);
         // Será usado nos slots adiante
@@ -3495,45 +3469,32 @@ async function processarJob(job: any): Promise<void> {
     const historicoFormatado = historico?.map(h => `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 80)}...`).reverse().join("\n") || "";
     
     // 🔒 DECISION ENGINE - Única fonte de verdade
-    // Se temos override de contexto, usar isso em vez de chamar IA
+    // ✅ [v6.1] Agora a IA sempre é chamada e resolve referências temporais dinamicamente
     let decision: DecisionOutput;
     let shouldBlockLegacyFlow = false;
     
-    if (contextualDecisionOverride) {
-      console.log(`💬 [CONTEXT] Usando decisão do contexto conversacional: ${contextualDecisionOverride.actionType}`);
-      decision = contextualDecisionOverride;
-      
-      // Atualizar contexto após resolver referência temporal
-      await updateConversationContext(userId, {
-        currentTopic: scopeToTopic(contextualDecisionOverride.slots.query_scope as string || "summary"),
-        lastIntent: "query",
-        lastTimeRange: contextualDecisionOverride.slots.time_range as string,
-        lastQueryScope: contextualDecisionOverride.slots.query_scope as string
-      });
-    } else {
-      const engineResult = await decisionEngine(
-        conteudoProcessado,
-        activeAction,
-        userId,
-        historicoFormatado,
-        payload.messageType  // Passa o tipo: 'text', 'interactive', 'audio', etc.
-      );
-      
-      // Converter SemanticResult para DecisionOutput
-      const semanticResult = engineResult.result;
-      decision = {
-        actionType: semanticResult.actionType,
-        confidence: semanticResult.confidence,
-        reasoning: semanticResult.reason || "",
-        slots: semanticResult.slots,
-        missingSlots: [],
-        shouldExecute: semanticResult.canExecuteDirectly || false,
-        shouldAsk: !semanticResult.canExecuteDirectly,
-        question: null,
-        buttons: null
-      };
-      shouldBlockLegacyFlow = engineResult.shouldBlockLegacyFlow;
-    }
+    const engineResult = await decisionEngine(
+      conteudoProcessado,
+      activeAction,
+      userId,
+      historicoFormatado,
+      payload.messageType  // Passa o tipo: 'text', 'interactive', 'audio', etc.
+    );
+    
+    // Converter SemanticResult para DecisionOutput
+    const semanticResult = engineResult.result;
+    decision = {
+      actionType: semanticResult.actionType,
+      confidence: semanticResult.confidence,
+      reasoning: semanticResult.reason || "",
+      slots: semanticResult.slots,
+      missingSlots: [],
+      shouldExecute: semanticResult.canExecuteDirectly || false,
+      shouldAsk: !semanticResult.canExecuteDirectly,
+      question: null,
+      buttons: null
+    };
+    shouldBlockLegacyFlow = engineResult.shouldBlockLegacyFlow;
     
     logDecision({ 
       messageId: payload.messageId, 
@@ -3543,8 +3504,7 @@ async function processarJob(job: any): Promise<void> {
         conf: decision.confidence, 
         slots: decision.slots,
         canExec: decision.shouldExecute,
-        blocked: shouldBlockLegacyFlow,
-        contextual: !!contextualDecisionOverride
+        blocked: shouldBlockLegacyFlow
       }
     });
     
@@ -4463,37 +4423,35 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           return;
         
         case "expenses":
-          console.log(`📊 [QUERY] Roteando para: EXPENSES ${timeRange.toUpperCase()}`);
-        
-        // Detalhamento de gastos por período
-          let expensesResult: string;
+          console.log(`📊 [QUERY] Roteando para: EXPENSES - usando dynamic query`);
           
-          // ✅ Importar getYesterdayExpenses para suporte a "e ontem?"
-          const { getYesterdayExpenses } = await import("./intents/query.ts");
-        
-          switch (timeRange) {
-            case "yesterday":
-              console.log(`📊 [QUERY] Roteando para: EXPENSES YESTERDAY`);
-              expensesResult = await getYesterdayExpenses(userId);
-              break;
-              
-            case "week":
-              expensesResult = await getWeeklyExpenses(userId);
-              break;
-              
-            case "today":
-              expensesResult = await getTodayExpenses(userId);
-              break;
-              
-            case "month":
-            default:
-              // Para "detalhe os gastos" sem período → mostrar por categoria
-              expensesResult = await getExpensesByCategory(userId);
-              break;
-        }
-        
-        await sendMessage(payload.phoneNumber, expensesResult, payload.messageSource);
-        return;
+          // ✅ [v6.1] Sistema dinâmico - funciona para QUALQUER período
+          const { executeDynamicQuery } = await import("./utils/dynamic-query.ts");
+          
+          const expenseQueryParams = {
+            userId,
+            query_scope: "expenses" as const,
+            start_date: decision.slots.start_date as string | undefined,
+            end_date: decision.slots.end_date as string | undefined,
+            time_range: timeRange,
+            category: decision.slots.category as string | undefined,
+            card_id: decision.slots.card_id as string | undefined
+          };
+          
+          console.log(`📊 [QUERY] Dynamic params:`, expenseQueryParams);
+          
+          const expensesResult = await executeDynamicQuery(expenseQueryParams);
+          await sendMessage(payload.phoneNumber, expensesResult, payload.messageSource);
+          
+          // Atualizar contexto para próxima pergunta
+          await updateConversationContext(userId, {
+            currentTopic: "expenses",
+            lastIntent: "query",
+            lastTimeRange: timeRange,
+            lastQueryScope: "expenses"
+          });
+          
+          return;
         
         case "income":
           console.log(`📊 [QUERY] Roteando para: INCOME`);

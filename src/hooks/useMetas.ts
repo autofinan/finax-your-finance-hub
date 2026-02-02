@@ -364,6 +364,47 @@ export function useMetas(usuarioId?: string) {
       currency: 'BRL',
     }).format(value);
   }
+  
+  // ========================================================================
+  // 💡 INSIGHTS: Valor necessário por período para atingir a meta
+  // ========================================================================
+  function calcularValorMensal(meta: Meta): number | null {
+    if (!meta.deadline) return null;
+    const diasRestantes = calcularDiasRestantes(meta.deadline);
+    if (!diasRestantes || diasRestantes <= 0) return null;
+    const valorFaltante = calcularValorFaltante(meta);
+    if (valorFaltante <= 0) return null;
+    const mesesRestantes = Math.max(1, Math.ceil(diasRestantes / 30));
+    return valorFaltante / mesesRestantes;
+  }
+
+  function calcularValorSemanal(meta: Meta): number | null {
+    if (!meta.deadline) return null;
+    const diasRestantes = calcularDiasRestantes(meta.deadline);
+    if (!diasRestantes || diasRestantes <= 0) return null;
+    const valorFaltante = calcularValorFaltante(meta);
+    if (valorFaltante <= 0) return null;
+    const semanasRestantes = Math.max(1, Math.ceil(diasRestantes / 7));
+    return valorFaltante / semanasRestantes;
+  }
+  
+  function getInsightMeta(meta: Meta): string | null {
+    const diasRestantes = calcularDiasRestantes(meta.deadline);
+    if (!diasRestantes || diasRestantes <= 0) return null;
+    
+    const valorFaltante = calcularValorFaltante(meta);
+    if (valorFaltante <= 0) return null;
+    
+    // Se faltam menos de 30 dias, mostrar valor semanal
+    if (diasRestantes <= 30) {
+      const valorSemanal = calcularValorSemanal(meta);
+      return valorSemanal ? `Guardar ${formatCurrency(valorSemanal)}/semana` : null;
+    }
+    
+    // Caso contrário, mostrar valor mensal
+    const valorMensal = calcularValorMensal(meta);
+    return valorMensal ? `Guardar ${formatCurrency(valorMensal)}/mês` : null;
+  }
 
   return {
     metas,
@@ -379,6 +420,9 @@ export function useMetas(usuarioId?: string) {
     getMetasCanceladas,
     calcularDiasRestantes,
     calcularValorFaltante,
+    calcularValorMensal,
+    calcularValorSemanal,
+    getInsightMeta,
     formatCurrency,
   };
 }
