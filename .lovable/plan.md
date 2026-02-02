@@ -1,468 +1,383 @@
 
-# Plano de Correcao Completo - Semana 1 + Bugs Criticos
+# Plano de Correcoes e Melhorias Criticas - Finax
 
 ## Resumo Executivo
 
-Este plano resolve TODOS os problemas identificados em 4 frentes:
-
-1. **Backend (finax-worker)**: Integrar logger, FinaxError, salvar ai_decisions, atualizar prompt
-2. **Bug Critico**: Parser de valores brasileiros (8,54 sendo interpretado como 8 e 54)
-3. **Frontend - Contas a Pagar**: Corrigir erro na criacao
-4. **Frontend - Visual**: Padronizar Eventos, Metas e ContasPagar com mesmo template do Dashboard
+Este plano resolve **2 bugs criticos no WhatsApp** e adiciona **6 melhorias no site** solicitadas pelo usuario.
 
 ---
 
-## PARTE 1: PARSER BRASILEIRO (BUG CRITICO)
+## PARTE 1: BUGS CRITICOS WHATSAPP
 
-### Problema
-Mensagem "101,31 internet Cuiaba" esta sendo parseada como 2 gastos:
-- Gasto de R$ 101.00
-- Internet Cuiaba: R$ 31.00
+### BUG 1: Handlers de Botoes (create_bill_yes/no)
 
-### Causa Raiz
-O arquivo `multiple-expenses.ts` linha 65 usa:
+**Problema:** Os handlers verificam `activeAction?.intent === "bill"`, mas a action criada usa `intent === "bill_suggestion"`.
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Linhas:** 2927 e 2946
+
+**Correcao:**
+- Linha 2927: Mudar condicao para aceitar tanto `"bill"` quanto `"bill_suggestion"`
+- Linha 2946: Mesma correcao
+
+**Codigo atual:**
 ```typescript
-const parsed = parseFloat(match[1].replace(",", "."));
+if (payload.buttonReplyId === "create_bill_yes" && activeAction?.intent === "bill") {
 ```
 
-Porem o regex na linha 37 captura `\d+[.,]?\d*` que funciona, mas o PROBLEMA esta no separator da linha 31:
+**Codigo corrigido:**
 ```typescript
-const separators = /[,\n]|\s+e\s+/gi;  // ← VIRGULA e tratada como separator!
-```
-
-Quando o usuario escreve "101,31 internet" o sistema:
-1. Separa por VIRGULA → ["101", "31 internet Cuiaba"]
-2. Parseia 101 como primeiro gasto
-3. Parseia 31 como segundo gasto
-
-### Solucao
-
-**Arquivo Novo**: `supabase/functions/finax-worker/utils/parseAmount.ts`
-
-```typescript
-// Parser de valores monetarios formato brasileiro
-export function parseBrazilianAmount(input: string): number | null {
-  if (!input || typeof input !== 'string') return null;
-
-  // Limpar espacos e simbolos de moeda
-  let raw = input.trim().replace(/[R$\s]/gi, "");
-  
-  // Se vazio, retornar null
-  if (!raw || raw.length === 0) return null;
-  
-  // Detectar formato: se tem virgula DEPOIS de ponto, e BR (1.234,56)
-  // Se tem ponto DEPOIS de virgula, e US (1,234.56)
-  const lastComma = raw.lastIndexOf(",");
-  const lastDot = raw.lastIndexOf(".");
-  
-  if (lastComma > lastDot && lastComma !== -1) {
-    // Formato brasileiro: 1.234,56 ou 8,54
-    raw = raw.replace(/\./g, "");  // Remove separadores de milhar
-    raw = raw.replace(",", ".");    // Troca virgula decimal por ponto
-  } else if (lastDot > lastComma && lastDot !== -1) {
-    // Formato americano ou so com ponto: 1,234.56 ou 8.54
-    raw = raw.replace(/,/g, "");   // Remove separadores de milhar
-  }
-  // Se nao tem nem virgula nem ponto, e numero inteiro
-  
-  const value = Number(raw);
-  
-  if (isNaN(value) || value <= 0 || value >= 1000000) return null;
-  
-  // Arredondar para 2 casas decimais
-  return Math.round(value * 100) / 100;
-}
-```
-
-**Modificar**: `supabase/functions/finax-worker/utils/multiple-expenses.ts`
-
-1. Importar o novo parser
-2. Mudar regex de separador para NAO separar por virgula quando seguida de digitos:
-```typescript
-// ANTES (linha 31)
-const separators = /[,\n]|\s+e\s+/gi;
-
-// DEPOIS - Nao separar virgula que tem digito depois (decimal)
-const separators = /(?<!\d),(?!\d)|\n|\s+e\s+/gi;
-```
-
-3. Usar `parseBrazilianAmount` em vez de `parseFloat`:
-```typescript
-// ANTES (linha 65)
-const parsed = parseFloat(match[1].replace(",", "."));
-
-// DEPOIS
-const parsed = parseBrazilianAmount(match[1]);
-if (parsed === null) continue;
-```
-
-**Modificar**: `supabase/functions/finax-worker/index.ts`
-
-1. Linha 252-254 - `parseNumericValue`:
-```typescript
-// ANTES
-function parseNumericValue(text: string): number | null {
-  const cleaned = text.replace(/[^\d.,]/g, "").replace(",", ".");
-  const value = parseFloat(cleaned);
-  return isNaN(value) || value <= 0 ? null : value;
-}
-
-// DEPOIS - Importar e usar parseBrazilianAmount
-import { parseBrazilianAmount } from "./utils/parseAmount.ts";
-
-function parseNumericValue(text: string): number | null {
-  return parseBrazilianAmount(text);
-}
-```
-
-2. Linha 762 em `normalizeAISlots` - garantir que amount seja parseado corretamente:
-```typescript
-// ANTES
-if (slots.amount !== undefined) normalized.amount = Number(slots.amount);
-
-// DEPOIS
-if (slots.amount !== undefined) {
-  if (typeof slots.amount === 'string') {
-    normalized.amount = parseBrazilianAmount(slots.amount) || 0;
-  } else {
-    normalized.amount = Number(slots.amount);
-  }
-}
+if (payload.buttonReplyId === "create_bill_yes" && 
+    (activeAction?.intent === "bill" || activeAction?.intent === "bill_suggestion")) {
 ```
 
 ---
 
-## PARTE 2: INTEGRACAO LOGGER + FINAXERROR + AI_DECISIONS
+### BUG 2: Sistema de Contexto Dinamico (Queries)
 
-### 2.1 Usar Logger no index.ts
+**Problema:** O switch/case atual (linhas 4474-4493) so cobre periodos fixos (today, yesterday, week, month). Precisamos usar o sistema dinamico que ja existe em `utils/dynamic-query.ts`.
 
-**Modificar**: `supabase/functions/finax-worker/index.ts`
+**Solucao em 3 partes:**
 
-Adicionar import no topo (linha ~7):
+#### Parte 2.1: Substituir switch/case por executeDynamicQuery
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Linhas:** 4465-4496
+
+**Deletar:** Todo o bloco do switch case de timeRange
+
+**Substituir por:**
 ```typescript
-import { logger } from "./utils/logger.ts";
-import { FinaxError, FinaxErrorCode } from "./utils/errors.ts";
-```
-
-Substituir console.log criticos por logger estruturado (exemplos):
-
-```typescript
-// Linha 1125 - classificacao deterministica
-// ANTES
-console.log(`⚡ [DETERMINISTICO] ${deterministicResult.actionType}...`);
-
-// DEPOIS
-logger.info({
-  component: "classifier",
-  userId,
-  messageId: payload.messageId,
-  actionType: deterministicResult.actionType,
-  confidence: deterministicResult.confidence
-}, "Classificacao deterministica concluida");
-```
-
-```typescript
-// Linha 1180 - resultado IA
-// ANTES
-console.log(`🤖 [IA] Resultado: ${aiResult.actionType}...`);
-
-// DEPOIS
-logger.info({
-  component: "ai_classifier",
-  userId,
-  messageId: payload.messageId,
-  actionType: aiResult.actionType,
-  confidence: aiResult.confidence,
-  slots: aiResult.slots
-}, "Classificacao IA concluida");
-```
-
-### 2.2 Salvar Decisoes da IA
-
-**Modificar**: Linha ~1180 de `index.ts`, APOS `callAIForDecision`:
-
-```typescript
-const aiResult = await callAIForDecision(message, context, history);
-
-// SALVAR DECISAO PARA ANALYTICS
-try {
-  await supabase.from("ai_decisions").insert({
-    user_id: userId,
-    message: conteudoProcessado.slice(0, 500),
-    message_type: payload.messageType,
-    message_id: payload.messageId ? payload.messageId : undefined,
-    ai_classification: aiResult.actionType,
-    ai_confidence: aiResult.confidence,
-    ai_slots: aiResult.slots,
-    ai_reasoning: aiResult.reasoning?.slice(0, 500),
-    model_version: "gemini-2.5-flash"
-  });
-} catch (trackError) {
-  logger.warn({ component: "ai_tracker", userId }, "Falha ao salvar decisao IA");
-}
-```
-
-### 2.3 Usar FinaxError no catch principal
-
-**Modificar**: Linhas 4631-4667
-
-```typescript
-} catch (error: unknown) {
-  const finaxError = FinaxError.fromError(error);
+case "expenses":
+  console.log(`📊 [QUERY] Roteando para: EXPENSES`);
   
-  logger.error({
-    component: "job_processor",
+  // ✅ Usar sistema dinamico que a IA ja calculou as datas
+  const { executeDynamicQuery } = await import("./utils/dynamic-query.ts");
+  
+  const queryParams = {
     userId,
-    messageId: job.id,
-    error: finaxError.message,
-    code: finaxError.code
-  }, "Erro no processamento do job");
+    query_scope: "expenses" as const,
+    start_date: decision.slots.start_date as string | undefined,
+    end_date: decision.slots.end_date as string | undefined,
+    time_range: timeRange,
+    category: decision.slots.category as string | undefined,
+    card_id: decision.slots.card_id as string | undefined
+  };
   
-  // Retry com backoff exponencial
-  const retryCount = (job.retry_count || 0) + 1;
-  const maxRetries = job.max_retries || 3;
+  console.log(`📊 [QUERY] Params dinamicos:`, queryParams);
   
-  if (retryCount < maxRetries) {
-    const backoffMs = Math.min(30000, 1000 * Math.pow(2, retryCount));
-    const nextRetry = new Date(Date.now() + backoffMs);
-    
-    await supabase.from("webhook_jobs").update({
-      status: "pending",
-      retry_count: retryCount,
-      last_error: finaxError.message,
-      next_retry_at: nextRetry.toISOString()
-    }).eq("id", job.id);
-    
-    logger.info({ component: "job_processor", jobId: job.id }, 
-      `Retry ${retryCount}/${maxRetries} agendado`);
-  } else {
-    await supabase.from("webhook_jobs").update({
-      status: "failed",
-      dead_letter: true,
-      last_error: finaxError.message
-    }).eq("id", job.id);
-  }
-  
-  // Enviar mensagem amigavel ao usuario
-  try {
-    await sendMessage(payload.phoneNumber, finaxError.userMessage, payload.messageSource);
-  } catch {}
+  const expensesResult = await executeDynamicQuery(queryParams);
+  await sendMessage(payload.phoneNumber, expensesResult, payload.messageSource);
+  return;
+```
+
+#### Parte 2.2: Remover override contextual (redundante)
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Linhas:** 3229-3259
+
+**Deletar:** O bloco `temporalRefs` que faz override deterministico.
+
+**Motivo:** Agora a IA resolve tudo via prompt com contexto. O override era necessario antes, mas agora e redundante e pode causar conflitos.
+
+#### Parte 2.3: Garantir que o contexto conversacional esta sendo passado para a IA
+
+**Verificar:** `decision/engine.ts` ja tem as regras de query (linhas 540-600).
+
+O prompt ja instrui a IA a:
+- Retornar `start_date` e `end_date` em ISO format
+- Usar `time_range` apenas para formatacao
+- Interpretar referencias como "e ontem?" usando o contexto passado
+
+---
+
+## PARTE 2: MELHORIAS NO SITE
+
+### Melhoria 1: Filtro por Datas nas Transacoes
+
+**Arquivo:** `src/pages/Transacoes.tsx`
+
+**Adicionar:**
+- Estado para `dataInicio` e `dataFim`
+- DatePicker (ou inputs date) no filtro
+- Logica de filtragem por periodo
+
+**Componente de filtro de data:**
+```typescript
+// Novos estados
+const [dataInicio, setDataInicio] = useState<string>('');
+const [dataFim, setDataFim] = useState<string>('');
+
+// Na filtragem
+const matchData = !dataInicio || !dataFim || 
+  (new Date(t.data) >= new Date(dataInicio) && new Date(t.data) <= new Date(dataFim));
+```
+
+**UI:** Adicionar dois inputs de data ao lado dos filtros existentes.
+
+---
+
+### Melhoria 2: Insights de Metas (Valor por semana/mes)
+
+**Arquivo:** `src/hooks/useMetas.ts`
+
+**Adicionar funcao:**
+```typescript
+function calcularValorMensal(meta: Meta): number | null {
+  if (!meta.deadline) return null;
+  const diasRestantes = calcularDiasRestantes(meta.deadline);
+  if (!diasRestantes || diasRestantes <= 0) return null;
+  const valorFaltante = calcularValorFaltante(meta);
+  const mesesRestantes = Math.ceil(diasRestantes / 30);
+  return valorFaltante / Math.max(mesesRestantes, 1);
+}
+
+function calcularValorSemanal(meta: Meta): number | null {
+  if (!meta.deadline) return null;
+  const diasRestantes = calcularDiasRestantes(meta.deadline);
+  if (!diasRestantes || diasRestantes <= 0) return null;
+  const valorFaltante = calcularValorFaltante(meta);
+  const semanasRestantes = Math.ceil(diasRestantes / 7);
+  return valorFaltante / Math.max(semanasRestantes, 1);
 }
 ```
 
+**Arquivo:** `src/pages/Metas.tsx`
+
+**Adicionar no MetaCard:**
+- Exibir "Guardar R$ X/mes" ou "R$ X/semana" abaixo da barra de progresso
+- Mostrar insight ao criar meta no toast de sucesso
+
 ---
 
-## PARTE 3: ATUALIZAR PROMPT PARA SLOTS EM INGLES
+### Melhoria 3: Edicao de Cartoes (Site)
 
-**Modificar**: `PROMPT_FINAX_UNIVERSAL` (linha 576)
+**Arquivo:** `src/pages/Cartoes.tsx`
 
-Adicionar secao de nomenclatura rigida ANTES do checklist:
+**Adicionar:**
+- Dialog de edicao (reutilizar estrutura do form de criacao)
+- Botao de editar em cada card (icone de lapis)
+- Estados para `editingCard` e `editFormOpen`
 
+**Campos editaveis:**
+- Nome
+- Limite Total
+- Dia Fechamento
+- Dia Vencimento
+
+**Hook:** `useCartoes.ts` ja tem `updateCartao` implementado.
+
+---
+
+### Melhoria 4: Edicao de Gastos Recorrentes (Site)
+
+**Arquivo:** `src/pages/Recorrentes.tsx`
+
+**Adicionar:**
+- Dialog de edicao similar ao de criacao
+- Botao de editar em cada item
+- Estados para `editingGasto` e `editOpen`
+
+**Campos editaveis:**
+- Descricao
+- Valor
+- Dia do Mes
+- Categoria
+
+**Hook:** `useGastosRecorrentes.ts` ja tem `updateGasto` implementado.
+
+---
+
+### Melhoria 5: Edicao de Cartoes (WhatsApp)
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+
+**Adicionar handler para intent "card_edit":**
 ```typescript
-## 🚨 NOMENCLATURA OBRIGATORIA DE SLOTS
-
-SEMPRE use estes nomes EXATOS em ingles. NUNCA traduza para portugues.
-
-| Intent | Slots Obrigatorios | Opcional |
-|--------|-------------------|----------|
-| expense | amount, payment_method | description, category, card |
-| income | amount | description, source |
-| recurring | amount, description, payment_method | day_of_month, periodicity |
-| installment | amount, installments | description, card |
-| goal | amount, description | deadline |
-| query | query_scope | time_range |
-| cancel | | cancel_target, target_name |
-
-### Exemplo CORRETO:
-{
-  "actionType": "expense",
-  "confidence": 0.92,
-  "slots": {
-    "amount": 50,
-    "description": "cafe",
-    "payment_method": "pix"
+if (decision.actionType === "card_edit") {
+  const cardName = decision.slots.card_name;
+  const field = decision.slots.field; // "limite", "vencimento", "fechamento"
+  const newValue = decision.slots.value;
+  
+  // Buscar cartao
+  const { data: card } = await supabase
+    .from("cartoes_credito")
+    .select("id, nome")
+    .eq("usuario_id", userId)
+    .ilike("nome", `%${cardName}%`)
+    .single();
+  
+  if (!card) {
+    await sendMessage(phone, `Nao encontrei o cartao "${cardName}"`, source);
+    return;
   }
+  
+  // Atualizar campo
+  const updates = {};
+  if (field === "limite") updates.limite_total = newValue;
+  if (field === "vencimento") updates.dia_vencimento = newValue;
+  if (field === "fechamento") updates.dia_fechamento = newValue;
+  
+  await supabase.from("cartoes_credito").update(updates).eq("id", card.id);
+  await sendMessage(phone, `Cartao ${card.nome} atualizado!`, source);
 }
-
-### ERRADO (NUNCA FACA):
-{
-  "slots": {
-    "valor": 50,           // ❌ use "amount"
-    "descricao": "cafe",   // ❌ use "description"  
-    "forma_pagamento": "pix" // ❌ use "payment_method"
-  }
-}
 ```
+
+**Arquivo:** `decision/engine.ts`
+
+**Adicionar intent "card_edit" ao prompt:**
+- Detectar: "mudar limite do nubank para 5000"
+- Detectar: "alterar vencimento do itau para dia 20"
 
 ---
 
-## PARTE 4: CORRIGIR CONTAS A PAGAR (FRONTEND)
+### Melhoria 6: Corrigir Registro de Gastos Recorrentes e Contas a Pagar (Site)
 
-### Problema
-A interface permite criar conta com tipo "fixa" ou "variavel", mas a tabela `contas_pagar` espera enum com valores: `cartao`, `fixa`, `variavel`.
+**Investigacao necessaria:**
+O usuario reportou que nao consegue registrar no site. Preciso verificar:
 
-O hook `useContasPagar` na linha 98 omite campos obrigatorios.
+1. Se o `usuarioId` esta sendo resolvido corretamente
+2. Se ha erros de RLS (Row Level Security)
+3. Se os hooks estao funcionando
 
-### Solucao
+**Possivel causa:** O usuario pode nao ter vinculos corretos entre `auth.uid` e `usuarios.id`.
 
-**Modificar**: `src/pages/ContasPagar.tsx`
+**Arquivo:** `src/hooks/useUsuarioId.ts`
 
-Linha 36 - Inicializar tipo corretamente:
-```typescript
-// ANTES
-const [tipo, setTipo] = useState<'fixa' | 'variavel'>('fixa');
+**Verificar:** Se o hook esta retornando o `usuarioId` corretamente para usuarios autenticados.
 
-// DEPOIS - Incluir 'cartao' como opcao valida
-const [tipo, setTipo] = useState<'cartao' | 'fixa' | 'variavel'>('fixa');
-```
-
-Linha 131-139 - Adicionar opcao de cartao no Select:
-```typescript
-<Select value={tipo} onValueChange={(v) => setTipo(v as 'cartao' | 'fixa' | 'variavel')}>
-  <SelectTrigger className="bg-slate-800 border-white/10 text-white">
-    <SelectValue />
-  </SelectTrigger>
-  <SelectContent className="bg-slate-800 border-white/10">
-    <SelectItem value="fixa">💎 Fixa</SelectItem>
-    <SelectItem value="variavel">📊 Variavel</SelectItem>
-    <SelectItem value="cartao">💳 Cartao</SelectItem>
-  </SelectContent>
-</Select>
-```
-
-**Modificar**: `src/hooks/useContasPagar.ts`
-
-Linha 10 - Garantir interface com tipo correto (ja esta certo):
-```typescript
-tipo: 'cartao' | 'fixa' | 'variavel';
-```
-
----
-
-## PARTE 5: PADRONIZAR VISUAL DAS PAGINAS
-
-### Template Base (do Dashboard)
-
-Todas as paginas internas devem seguir:
-
-```tsx
-<AppLayout>
-  <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 p-6 lg:p-8">
-    {/* Background Effects */}
-    <div className="fixed inset-0 pointer-events-none overflow-hidden">
-      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full" />
-    </div>
-
-    {/* Grid Pattern */}
-    <div className="fixed inset-0 bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
-
-    <div className="relative z-10 max-w-[1800px] mx-auto space-y-6">
-      {/* Conteudo */}
-    </div>
-  </div>
-</AppLayout>
-```
-
-### Paginas a Modificar
-
-| Pagina | Status Atual | Acao |
-|--------|-------------|------|
-| ContasPagar.tsx | Sem background/gradiente | Aplicar template completo |
-| Eventos.tsx | Usa `bg-primary/5` (tema claro) | Mudar para `bg-indigo-600/10` |
-| Metas.tsx | Usa `bg-primary/5` (tema claro) | Mudar para `bg-indigo-600/10` |
-
-### ContasPagar.tsx - Modificacoes
-
-Adicionar wrapper com template completo (linhas 89-91):
-```tsx
-// ANTES
-return (
-  <AppLayout>
-    <div className="space-y-6">
-
-// DEPOIS
-return (
-  <AppLayout>
-    <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 p-6 lg:p-8">
-      {/* Background Effects */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full" />
-      </div>
-      
-      {/* Grid Pattern */}
-      <div className="fixed inset-0 bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
-      
-      <div className="relative z-10 max-w-[1800px] mx-auto space-y-6">
-```
-
-### Eventos.tsx e Metas.tsx - Modificacoes
-
-Mudar cores do background effects de `bg-primary/5` para cores fixas:
-```tsx
-// ANTES (Eventos linha 178-179, Metas linha 248-250)
-<div className="absolute ... bg-primary/5 ..." />
-<div className="absolute ... bg-accent/5 ..." />
-
-// DEPOIS
-<div className="absolute ... bg-indigo-600/10 ..." />
-<div className="absolute ... bg-purple-600/10 ..." />
-```
-
-Mudar grid pattern de `hsl(var(--primary)/0.03)` para cor fixa:
-```tsx
-// ANTES
-bg-[linear-gradient(hsl(var(--primary)/0.03)_1px,transparent_1px)...]
-
-// DEPOIS
-bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)]
-```
-
----
-
-## RESUMO DE ARQUIVOS A MODIFICAR
-
-### Backend (Edge Functions)
-1. **NOVO**: `supabase/functions/finax-worker/utils/parseAmount.ts`
-2. **MODIFICAR**: `supabase/functions/finax-worker/utils/multiple-expenses.ts`
-3. **MODIFICAR**: `supabase/functions/finax-worker/index.ts`
-   - Import logger + FinaxError
-   - Usar logger em ~10 pontos criticos
-   - Salvar ai_decisions apos IA
-   - Usar FinaxError no catch
-   - Atualizar PROMPT com regras de slots
-   - Usar parseBrazilianAmount
-
-### Frontend
-4. **MODIFICAR**: `src/pages/ContasPagar.tsx` - Layout + tipo cartao
-5. **MODIFICAR**: `src/pages/Eventos.tsx` - Cores fixas
-6. **MODIFICAR**: `src/pages/Metas.tsx` - Cores fixas
+**Correcao provavel:** Garantir que apos autenticacao, o sistema busca o usuario correto na tabela `usuarios` baseado no telefone ou email.
 
 ---
 
 ## ORDEM DE EXECUCAO
 
-1. Criar `parseAmount.ts` (novo arquivo)
-2. Modificar `multiple-expenses.ts` (corrigir regex + usar parser)
-3. Modificar `index.ts` (imports + logger + ai_decisions + FinaxError + prompt)
-4. Deploy edge function
-5. Modificar `ContasPagar.tsx` (layout + tipos)
-6. Modificar `Eventos.tsx` (cores)
-7. Modificar `Metas.tsx` (cores)
+| Prioridade | Tarefa | Arquivo |
+|------------|--------|---------|
+| 1 | Corrigir handlers create_bill | index.ts |
+| 2 | Implementar executeDynamicQuery | index.ts |
+| 3 | Remover override contextual | index.ts |
+| 4 | Adicionar filtro de datas | Transacoes.tsx |
+| 5 | Insights de metas | useMetas.ts + Metas.tsx |
+| 6 | Edicao de cartoes (site) | Cartoes.tsx |
+| 7 | Edicao de recorrentes (site) | Recorrentes.tsx |
+| 8 | Edicao de cartoes (WhatsApp) | index.ts + engine.ts |
+| 9 | Debug registro site | useUsuarioId.ts |
 
 ---
 
 ## TESTES DE VALIDACAO
 
+### WhatsApp
+
 | Cenario | Resultado Esperado |
 |---------|-------------------|
-| WhatsApp: "8,54 uber" | 1 gasto de R$ 8.54 |
-| WhatsApp: "101,31 internet" | 1 gasto de R$ 101.31 |
-| WhatsApp: "cafe 20, almoco 35" | 2 gastos separados |
-| Site: Criar conta fixa | Sucesso, sem erro |
-| Site: Abrir Eventos | Fundo dark consistente |
-| Site: Abrir Metas | Fundo dark consistente |
-| Site: Abrir ContasPagar | Fundo dark consistente |
-| Logs do worker | Formato JSON estruturado |
-| Tabela ai_decisions | Registros de decisoes com message_id |
+| "Quanto gastei hoje?" -> "E ontem?" | Mostra gastos de ONTEM |
+| "Quanto gastei nos ultimos 5 dias?" | Mostra periodo customizado |
+| "Paguei 100 internet" -> [Pix] -> [Sim, criar] | Pergunta dia do vencimento |
+
+### Site
+
+| Cenario | Resultado Esperado |
+|---------|-------------------|
+| Filtrar transacoes por data | Mostra apenas periodo selecionado |
+| Criar meta com prazo | Mostra insight "Guardar R$ X/mes" |
+| Clicar editar cartao | Abre dialog com campos preenchidos |
+| Editar gasto recorrente | Atualiza valor/dia corretamente |
+
+---
+
+## DETALHAMENTO TECNICO
+
+### Secao 1: Arquivo index.ts - Linhas a Modificar
+
+```
+Linha 2927: Adicionar || activeAction?.intent === "bill_suggestion"
+Linha 2946: Adicionar || activeAction?.intent === "bill_suggestion"
+Linhas 3229-3259: DELETAR bloco temporalRefs
+Linhas 4465-4496: SUBSTITUIR switch por executeDynamicQuery
+```
+
+### Secao 2: Novo Componente DateRangeFilter
+
+```typescript
+// Para src/pages/Transacoes.tsx
+interface DateRangeFilterProps {
+  dataInicio: string;
+  dataFim: string;
+  onDataInicioChange: (date: string) => void;
+  onDataFimChange: (date: string) => void;
+}
+
+const DateRangeFilter = ({ dataInicio, dataFim, onDataInicioChange, onDataFimChange }) => (
+  <div className="flex gap-2">
+    <Input
+      type="date"
+      value={dataInicio}
+      onChange={(e) => onDataInicioChange(e.target.value)}
+      className="w-40 bg-slate-800/50 border-slate-700 text-white"
+    />
+    <span className="text-slate-500 self-center">ate</span>
+    <Input
+      type="date"
+      value={dataFim}
+      onChange={(e) => onDataFimChange(e.target.value)}
+      className="w-40 bg-slate-800/50 border-slate-700 text-white"
+    />
+  </div>
+);
+```
+
+### Secao 3: Insights de Metas
+
+```typescript
+// Adicionar ao useMetas.ts
+function calcularInsightMeta(meta: Meta): string | null {
+  const diasRestantes = calcularDiasRestantes(meta.deadline);
+  if (!diasRestantes || diasRestantes <= 0) return null;
+  
+  const valorFaltante = calcularValorFaltante(meta);
+  if (valorFaltante <= 0) return null;
+  
+  const valorSemanal = valorFaltante / Math.ceil(diasRestantes / 7);
+  const valorMensal = valorFaltante / Math.ceil(diasRestantes / 30);
+  
+  if (diasRestantes <= 30) {
+    return `Guardar ${formatCurrency(valorSemanal)}/semana`;
+  }
+  return `Guardar ${formatCurrency(valorMensal)}/mes`;
+}
+```
+
+### Secao 4: Dialog de Edicao de Cartao
+
+```typescript
+// Adicionar ao Cartoes.tsx
+const [editOpen, setEditOpen] = useState(false);
+const [editingCard, setEditingCard] = useState<CartaoCredito | null>(null);
+
+// Form fields pre-populados
+useEffect(() => {
+  if (editingCard) {
+    setNome(editingCard.nome);
+    setLimiteTotal(editingCard.limite_total?.toString() || '');
+    setDiaFechamento(editingCard.dia_fechamento?.toString() || '');
+    setDiaVencimento(editingCard.dia_vencimento?.toString() || '');
+  }
+}, [editingCard]);
+
+const handleEdit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!editingCard) return;
+  
+  await updateCartao(editingCard.id, {
+    nome,
+    limite_total: limiteTotal ? parseFloat(limiteTotal) : null,
+    dia_fechamento: diaFechamento ? parseInt(diaFechamento) : null,
+    dia_vencimento: diaVencimento ? parseInt(diaVencimento) : null,
+  });
+  
+  setEditOpen(false);
+  setEditingCard(null);
+};
+```
