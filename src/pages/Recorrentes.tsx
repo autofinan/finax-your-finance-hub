@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useGastosRecorrentes } from '@/hooks/useGastosRecorrentes';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
@@ -30,7 +30,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Trash2, RefreshCcw, Calendar, DollarSign, Zap, Clock } from 'lucide-react';
+import { Plus, Trash2, RefreshCcw, Calendar, DollarSign, Zap, Clock, Pencil } from 'lucide-react';
 import { CATEGORIAS, CategoriaTransacao, GastoRecorrente } from '@/types/finance';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
@@ -40,6 +40,8 @@ const Recorrentes = () => {
   const { usuarioId } = useUsuarioId();
   const { gastos, loading, addGasto, updateGasto, deleteGasto } = useGastosRecorrentes(usuarioId || undefined);
   const [formOpen, setFormOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingGasto, setEditingGasto] = useState<GastoRecorrente | null>(null);
   const [descricao, setDescricao] = useState('');
   const [valorParcela, setValorParcela] = useState('');
   const [categoria, setCategoria] = useState<CategoriaTransacao>('outros');
@@ -47,6 +49,18 @@ const Recorrentes = () => {
   const [diaMes, setDiaMes] = useState('1');
   const [numParcelas, setNumParcelas] = useState('');
   const [formLoading, setFormLoading] = useState(false);
+  
+  // Preencher form quando abrir edição
+  useEffect(() => {
+    if (editingGasto) {
+      setDescricao(editingGasto.descricao || '');
+      setValorParcela(editingGasto.valor_parcela?.toString() || '');
+      setCategoria((editingGasto.categoria as CategoriaTransacao) || 'outros');
+      setTipoRecorrencia((editingGasto.tipo_recorrencia as 'mensal' | 'semanal' | 'parcelado') || 'mensal');
+      setDiaMes(editingGasto.dia_mes?.toString() || '1');
+      setNumParcelas(editingGasto.num_parcelas?.toString() || '');
+    }
+  }, [editingGasto]);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -85,6 +99,33 @@ const Recorrentes = () => {
     setTipoRecorrencia('mensal');
     setDiaMes('1');
     setNumParcelas('');
+    setEditingGasto(null);
+  };
+
+  const handleOpenEdit = (gasto: GastoRecorrente) => {
+    setEditingGasto(gasto);
+    setEditOpen(true);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingGasto || !valorParcela || parseFloat(valorParcela) <= 0) return;
+
+    setFormLoading(true);
+    try {
+      await updateGasto(editingGasto.id, {
+        descricao,
+        valor_parcela: parseFloat(valorParcela),
+        categoria,
+        tipo_recorrencia: tipoRecorrencia,
+        dia_mes: tipoRecorrencia === 'mensal' ? parseInt(diaMes) : null,
+        num_parcelas: tipoRecorrencia === 'parcelado' ? parseInt(numParcelas || '1') : null,
+      });
+      resetForm();
+      setEditOpen(false);
+    } finally {
+      setFormLoading(false);
+    }
   };
 
   const toggleAtivo = async (gasto: GastoRecorrente) => {
@@ -263,6 +304,15 @@ const Recorrentes = () => {
                           onCheckedChange={() => toggleAtivo(gasto)}
                           className="data-[state=checked]:bg-indigo-500"
                         />
+                        {/* Botão Editar */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleOpenEdit(gasto)}
+                          className="text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10"
+                        >
+                          <Pencil className="w-5 h-5" />
+                        </Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <Button
@@ -395,6 +445,84 @@ const Recorrentes = () => {
               disabled={formLoading}
             >
               {formLoading ? 'Salvando...' : 'Adicionar'}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de Edição */}
+      <Dialog open={editOpen} onOpenChange={(open) => {
+        setEditOpen(open);
+        if (!open) resetForm();
+      }}>
+        <DialogContent className="sm:max-w-md bg-slate-900 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-xl flex items-center gap-2">
+              <Pencil className="w-5 h-5 text-indigo-400" />
+              Editar Gasto Recorrente
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleEditSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-slate-300">Descrição</Label>
+              <Input
+                placeholder="Ex: Netflix, Aluguel..."
+                value={descricao}
+                onChange={(e) => setDescricao(e.target.value)}
+                className="bg-slate-800 border-slate-700 text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-slate-300">Valor (R$)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0,00"
+                value={valorParcela}
+                onChange={(e) => setValorParcela(e.target.value)}
+                required
+                className="bg-slate-800 border-slate-700 text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-slate-300">Categoria</Label>
+              <Select value={categoria} onValueChange={(v) => setCategoria(v as CategoriaTransacao)}>
+                <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 border-slate-700">
+                  {CATEGORIAS.filter((c) => c.value !== 'salario').map((cat) => (
+                    <SelectItem key={cat.value} value={cat.value} className="text-white">
+                      {cat.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {tipoRecorrencia === 'mensal' && (
+              <div className="space-y-2">
+                <Label className="text-slate-300">Dia do Mês</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="31"
+                  value={diaMes}
+                  onChange={(e) => setDiaMes(e.target.value)}
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+            )}
+
+            <Button 
+              type="submit" 
+              className="w-full bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90" 
+              disabled={formLoading}
+            >
+              {formLoading ? 'Salvando...' : 'Salvar Alterações'}
             </Button>
           </form>
         </DialogContent>

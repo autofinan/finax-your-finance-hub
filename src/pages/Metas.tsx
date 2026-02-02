@@ -36,6 +36,7 @@ const Metas = () => {
     getMetasConcluidas,
     calcularDiasRestantes,
     calcularValorFaltante,
+    getInsightMeta,
     formatCurrency,
   } = useMetas(usuarioId || undefined);
   
@@ -97,6 +98,7 @@ const Metas = () => {
     const diasRestantes = calcularDiasRestantes(meta.deadline);
     const valorFaltante = calcularValorFaltante(meta);
     const progress = meta.progress_percentage || 0;
+    const insightMeta = getInsightMeta(meta);
 
     return (
       <motion.div
@@ -152,6 +154,14 @@ const Metas = () => {
                   className={`h-full ${getProgressColor(progress)} rounded-full`}
                 />
               </div>
+              
+              {/* 💡 Insight: Valor necessário por período */}
+              {insightMeta && progress < 100 && (
+                <div className="flex items-center gap-2 text-sm bg-gradient-to-r from-primary/10 to-blue-500/10 rounded-lg px-3 py-2 border border-primary/20">
+                  <TrendingUp className="w-4 h-4 text-primary" />
+                  <span className="text-primary font-medium">{insightMeta}</span>
+                </div>
+              )}
             </div>
 
             {/* Valores */}

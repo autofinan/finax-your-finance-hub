@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Plus, Search, Filter, TrendingUp, TrendingDown, Wallet, ArrowUpDown } from 'lucide-react';
+import { Plus, Search, Filter, TrendingUp, TrendingDown, Wallet, ArrowUpDown, CalendarDays } from 'lucide-react';
 import { CATEGORIAS } from '@/types/finance';
 import { motion } from 'framer-motion';
 
@@ -24,6 +24,8 @@ const Transacoes = () => {
   const [search, setSearch] = useState('');
   const [filterCategoria, setFilterCategoria] = useState<string>('all');
   const [filterTipo, setFilterTipo] = useState<string>('all');
+  const [dataInicio, setDataInicio] = useState<string>('');
+  const [dataFim, setDataFim] = useState<string>('');
 
   const filteredTransacoes = useMemo(() => {
     return transacoes.filter((t) => {
@@ -34,10 +36,29 @@ const Transacoes = () => {
 
       const matchCategoria = filterCategoria === 'all' || t.categoria === filterCategoria;
       const matchTipo = filterTipo === 'all' || t.tipo === filterTipo;
+      
+      // Filtro por período de datas
+      let matchData = true;
+      if (dataInicio && dataFim) {
+        const transDate = new Date(t.data);
+        const inicio = new Date(dataInicio);
+        const fim = new Date(dataFim);
+        fim.setHours(23, 59, 59, 999); // Incluir o dia final completo
+        matchData = transDate >= inicio && transDate <= fim;
+      } else if (dataInicio) {
+        const transDate = new Date(t.data);
+        const inicio = new Date(dataInicio);
+        matchData = transDate >= inicio;
+      } else if (dataFim) {
+        const transDate = new Date(t.data);
+        const fim = new Date(dataFim);
+        fim.setHours(23, 59, 59, 999);
+        matchData = transDate <= fim;
+      }
 
-      return matchSearch && matchCategoria && matchTipo;
+      return matchSearch && matchCategoria && matchTipo && matchData;
     });
-  }, [transacoes, search, filterCategoria, filterTipo]);
+  }, [transacoes, search, filterCategoria, filterTipo, dataInicio, dataFim]);
 
   const stats = useMemo(() => {
     const entradas = filteredTransacoes.filter(t => t.tipo === 'entrada').reduce((acc, t) => acc + Number(t.valor), 0);
@@ -144,47 +165,80 @@ const Transacoes = () => {
           </motion.div>
 
           {/* Filters */}
+          {/* Filters */}
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
             className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-4"
           >
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="relative flex-1">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-                <Input
-                  placeholder="Buscar transações..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-12 h-12 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 rounded-xl focus:border-indigo-500"
-                />
+            <div className="flex flex-col gap-3">
+              {/* Linha 1: Busca e Filtros de Tipo/Categoria */}
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="relative flex-1">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+                  <Input
+                    placeholder="Buscar transações..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-12 h-12 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 rounded-xl focus:border-indigo-500"
+                  />
+                </div>
+                <Select value={filterCategoria} onValueChange={setFilterCategoria}>
+                  <SelectTrigger className="w-full sm:w-[200px] h-12 bg-slate-800/50 border-slate-700 text-white rounded-xl">
+                    <Filter className="w-4 h-4 mr-2 text-slate-500" />
+                    <SelectValue placeholder="Categoria" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-slate-700">
+                    <SelectItem value="all" className="text-white">Todas categorias</SelectItem>
+                    {CATEGORIAS.map((cat) => (
+                      <SelectItem key={cat.value} value={cat.value} className="text-white">
+                        {cat.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={filterTipo} onValueChange={setFilterTipo}>
+                  <SelectTrigger className="w-full sm:w-[160px] h-12 bg-slate-800/50 border-slate-700 text-white rounded-xl">
+                    <ArrowUpDown className="w-4 h-4 mr-2 text-slate-500" />
+                    <SelectValue placeholder="Tipo" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-slate-700">
+                    <SelectItem value="all" className="text-white">Todos</SelectItem>
+                    <SelectItem value="entrada" className="text-emerald-400">Entradas</SelectItem>
+                    <SelectItem value="saida" className="text-red-400">Saídas</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-              <Select value={filterCategoria} onValueChange={setFilterCategoria}>
-                <SelectTrigger className="w-full sm:w-[200px] h-12 bg-slate-800/50 border-slate-700 text-white rounded-xl">
-                  <Filter className="w-4 h-4 mr-2 text-slate-500" />
-                  <SelectValue placeholder="Categoria" />
-                </SelectTrigger>
-                <SelectContent className="bg-slate-900 border-slate-700">
-                  <SelectItem value="all" className="text-white">Todas categorias</SelectItem>
-                  {CATEGORIAS.map((cat) => (
-                    <SelectItem key={cat.value} value={cat.value} className="text-white">
-                      {cat.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={filterTipo} onValueChange={setFilterTipo}>
-                <SelectTrigger className="w-full sm:w-[160px] h-12 bg-slate-800/50 border-slate-700 text-white rounded-xl">
-                  <ArrowUpDown className="w-4 h-4 mr-2 text-slate-500" />
-                  <SelectValue placeholder="Tipo" />
-                </SelectTrigger>
-                <SelectContent className="bg-slate-900 border-slate-700">
-                  <SelectItem value="all" className="text-white">Todos</SelectItem>
-                  <SelectItem value="entrada" className="text-emerald-400">Entradas</SelectItem>
-                  <SelectItem value="saida" className="text-red-400">Saídas</SelectItem>
-                </SelectContent>
-              </Select>
+              
+              {/* Linha 2: Filtro por Período de Datas */}
+              <div className="flex flex-col sm:flex-row items-center gap-2">
+                <div className="flex items-center gap-2 text-slate-500">
+                  <CalendarDays className="w-4 h-4" />
+                  <span className="text-sm">Período:</span>
+                </div>
+                <Input
+                  type="date"
+                  value={dataInicio}
+                  onChange={(e) => setDataInicio(e.target.value)}
+                  className="w-full sm:w-[160px] h-10 bg-slate-800/50 border-slate-700 text-white rounded-xl focus:border-indigo-500"
+                />
+                <span className="text-slate-500 text-sm">até</span>
+                <Input
+                  type="date"
+                  value={dataFim}
+                  onChange={(e) => setDataFim(e.target.value)}
+                  className="w-full sm:w-[160px] h-10 bg-slate-800/50 border-slate-700 text-white rounded-xl focus:border-indigo-500"
+                />
+                {(dataInicio || dataFim) && (
+                  <button
+                    onClick={() => { setDataInicio(''); setDataFim(''); }}
+                    className="text-xs text-slate-400 hover:text-white underline"
+                  >
+                    Limpar
+                  </button>
+                )}
+              </div>
             </div>
           </motion.div>
 

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useCartoes } from '@/hooks/useCartoes';
 import { useFaturas } from '@/hooks/useFaturas';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
+import { CartaoCredito } from '@/types/finance';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,21 +24,33 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Plus, Trash2, CreditCard, Calendar, DollarSign, TrendingUp, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, CreditCard, Calendar, DollarSign, TrendingUp, AlertTriangle, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 
 const Cartoes = () => {
   // Usar usuarioId do WhatsApp (não auth.uid)
   const { usuarioId } = useUsuarioId();
-  const { cartoes, loading, addCartao, deleteCartao } = useCartoes(usuarioId || undefined);
+  const { cartoes, loading, addCartao, updateCartao, deleteCartao } = useCartoes(usuarioId || undefined);
   const { faturasEmAberto } = useFaturas(usuarioId || undefined);
   const [formOpen, setFormOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingCard, setEditingCard] = useState<CartaoCredito | null>(null);
   const [nome, setNome] = useState('');
   const [limiteTotal, setLimiteTotal] = useState('');
   const [diaFechamento, setDiaFechamento] = useState('');
   const [diaVencimento, setDiaVencimento] = useState('');
   const [formLoading, setFormLoading] = useState(false);
+  
+  // Preencher form quando abrir edição
+  useEffect(() => {
+    if (editingCard) {
+      setNome(editingCard.nome || '');
+      setLimiteTotal(editingCard.limite_total?.toString() || '');
+      setDiaFechamento(editingCard.dia_fechamento?.toString() || '');
+      setDiaVencimento(editingCard.dia_vencimento?.toString() || '');
+    }
+  }, [editingCard]);
 
   const formatCurrency = (value: number | null) => {
     if (value === null) return 'R$ 0,00';
@@ -70,6 +83,31 @@ const Cartoes = () => {
     setLimiteTotal('');
     setDiaFechamento('');
     setDiaVencimento('');
+    setEditingCard(null);
+  };
+
+  const handleOpenEdit = (cartao: CartaoCredito) => {
+    setEditingCard(cartao);
+    setEditOpen(true);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCard || !nome) return;
+
+    setFormLoading(true);
+    try {
+      await updateCartao(editingCard.id, {
+        nome,
+        limite_total: limiteTotal ? parseFloat(limiteTotal) : null,
+        dia_fechamento: diaFechamento ? parseInt(diaFechamento) : null,
+        dia_vencimento: diaVencimento ? parseInt(diaVencimento) : null,
+      });
+      resetForm();
+      setEditOpen(false);
+    } finally {
+      setFormLoading(false);
+    }
   };
 
   const getFaturaAberta = (cartaoId: string) => {
@@ -198,34 +236,46 @@ const Cartoes = () => {
                       <div className="p-4 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 group-hover:from-indigo-500/30 group-hover:to-purple-500/30 transition-all">
                         <CreditCard className="w-8 h-8 text-indigo-400" />
                       </div>
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="text-slate-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent className="bg-slate-900 border-slate-700">
-                          <AlertDialogHeader>
-                            <AlertDialogTitle className="text-white">Excluir cartão?</AlertDialogTitle>
-                            <AlertDialogDescription className="text-slate-400">
-                              Esta ação não pode ser desfeita.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel className="bg-slate-800 border-slate-700 text-white">Cancelar</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={() => deleteCartao(cartao.id)}
-                              className="bg-red-500 hover:bg-red-600"
+                      <div className="flex items-center gap-1">
+                        {/* Botão Editar */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleOpenEdit(cartao)}
+                          className="text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <Pencil className="w-5 h-5" />
+                        </Button>
+                        {/* Botão Excluir */}
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="text-slate-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity"
                             >
-                              Excluir
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+                              <Trash2 className="w-5 h-5" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent className="bg-slate-900 border-slate-700">
+                            <AlertDialogHeader>
+                              <AlertDialogTitle className="text-white">Excluir cartão?</AlertDialogTitle>
+                              <AlertDialogDescription className="text-slate-400">
+                                Esta ação não pode ser desfeita.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel className="bg-slate-800 border-slate-700 text-white">Cancelar</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => deleteCartao(cartao.id)}
+                                className="bg-red-500 hover:bg-red-600"
+                              >
+                                Excluir
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
                     </div>
 
                     <h3 className="font-bold text-xl text-white mb-4">{cartao.nome || 'Sem nome'}</h3>
@@ -356,6 +406,81 @@ const Cartoes = () => {
               disabled={formLoading}
             >
               {formLoading ? 'Salvando...' : 'Adicionar Cartão'}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de Edição */}
+      <Dialog open={editOpen} onOpenChange={(open) => {
+        setEditOpen(open);
+        if (!open) resetForm();
+      }}>
+        <DialogContent className="sm:max-w-md bg-slate-900 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-xl flex items-center gap-2">
+              <Pencil className="w-5 h-5 text-indigo-400" />
+              Editar Cartão
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleEditSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-slate-300">Nome do Cartão</Label>
+              <Input
+                placeholder="Ex: Nubank, Itaú..."
+                value={nome}
+                onChange={(e) => setNome(e.target.value)}
+                required
+                className="bg-slate-800 border-slate-700 text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-slate-300">Limite Total (R$)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0,00"
+                value={limiteTotal}
+                onChange={(e) => setLimiteTotal(e.target.value)}
+                className="bg-slate-800 border-slate-700 text-white"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-slate-300">Dia Fechamento</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="31"
+                  placeholder="Ex: 15"
+                  value={diaFechamento}
+                  onChange={(e) => setDiaFechamento(e.target.value)}
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-slate-300">Dia Vencimento</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="31"
+                  placeholder="Ex: 25"
+                  value={diaVencimento}
+                  onChange={(e) => setDiaVencimento(e.target.value)}
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+            </div>
+
+            <Button 
+              type="submit" 
+              className="w-full bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90" 
+              disabled={formLoading}
+            >
+              {formLoading ? 'Salvando...' : 'Salvar Alterações'}
             </Button>
           </form>
         </DialogContent>
