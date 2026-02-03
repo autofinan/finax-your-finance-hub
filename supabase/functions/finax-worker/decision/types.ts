@@ -25,7 +25,9 @@ export type ActionType =
   | "set_context"   // definir contexto (viagem, evento)
   | "edit"          // edição/correção rápida
   | "chat"          // conversa livre
-  | "goal"          // metas de economia (criar, atualizar, consultar)
+  | "goal"          // metas de economia (criar nova)
+  | "list_goals"    // listar metas existentes
+  | "add_goal_progress" // adicionar valor a meta existente
   | "purchase_advice" // assistente de compras contextual
   | "unknown";      // não identificado
 

@@ -213,6 +213,57 @@ function fillPendingSlot(
     };
   }
   
+  // ========================================================================
+  // 🔢 CASO ESPECIAL: Seleção de cartão por número
+  // ========================================================================
+  if (pendingSlot === "card") {
+    // Verificar se o usuário enviou um número (seleção de lista)
+    const numMatch = rawMessage.trim().match(/^(\d+)$/);
+    
+    if (numMatch) {
+      const cardOptions = activeAction.slots.card_options as Array<{ id: string; nome: string }> | undefined;
+      
+      if (cardOptions && cardOptions.length > 0) {
+        const selectedIndex = parseInt(numMatch[1]) - 1; // 1-indexed
+        
+        if (selectedIndex >= 0 && selectedIndex < cardOptions.length) {
+          const selectedCard = cardOptions[selectedIndex];
+          console.log(`✅ [FSM] Cartão selecionado por número: ${selectedIndex + 1} → ${selectedCard.nome}`);
+          
+          return {
+            handled: true,
+            shouldContinue: false,
+            filledSlot: "card",
+            slotValue: selectedCard.nome,
+            updatedSlots: {
+              ...activeAction.slots,
+              card: selectedCard.nome,
+              card_id: selectedCard.id
+            },
+            readyToConfirm: true, // Cartão é geralmente o último slot
+            readyToExecute: false // Precisa confirmar ainda
+          };
+        } else {
+          return {
+            handled: true,
+            shouldContinue: false,
+            message: `Número inválido. Escolha entre 1 e ${cardOptions.length} 💳`
+          };
+        }
+      }
+      
+      // Não tem lista de opções mas usuário enviou número
+      // Esse caso não deveria acontecer, mas trata gracefully
+      return {
+        handled: true,
+        shouldContinue: false,
+        message: `Qual o nome do cartão? (ex: Nubank, Inter...) 💳`
+      };
+    }
+    
+    // Não é número → continuar com extração normal (nome do cartão)
+  }
+  
   // Tentar extrair valor baseado no tipo de slot
   const extractedValue = extractSlotValue(rawMessage, normalized, pendingSlot);
   
