@@ -92,9 +92,21 @@ const SEMANTIC_PATTERNS = {
     contexts: ["esse mes", "este mês", "essa semana", "hoje"],
     weight: 0.9
   },
-  // 🎯 METAS DE ECONOMIA
+  // 📋 LISTAR METAS - PRIORIDADE ALTA
+  list_goals: {
+    verbs: ["quais metas", "minhas metas", "ver metas", "listar metas", "metas ativas", "tenho meta", "metas tenho"],
+    contexts: [],
+    weight: 0.98
+  },
+  // 💰 ADICIONAR À META
+  add_goal_progress: {
+    verbs: ["adicionar na meta", "adiciona na meta", "guardar na meta", "depositar na meta", "colocar na meta", "contribuir meta", "adicionar 200 na meta", "adicionar 100 na meta"],
+    contexts: [],
+    weight: 0.97
+  },
+  // 🎯 METAS DE ECONOMIA (criar nova)
   goal: {
-    verbs: ["meta", "metas", "criar meta", "nova meta", "adiciona na meta", "contribuir meta"],
+    verbs: ["criar meta", "nova meta", "quero uma meta", "meta de"],
     contexts: ["economizar", "juntar", "guardar", "poupar", "objetivo"],
     weight: 0.9
   },
@@ -335,6 +347,8 @@ function mapIntentToActionType(intent: string): ActionType {
   if (intent.includes("card") || intent === "update_card") return "card_event";
   if (intent.includes("cancel")) return "cancel";
   if (intent.includes("resumo") || intent.includes("query")) return "query";
+  if (intent.includes("list_goals") || intent.includes("listar_metas")) return "list_goals";
+  if (intent.includes("add_goal") || intent.includes("adicionar_meta")) return "add_goal_progress";
   if (intent.includes("meta") || intent.includes("goal")) return "goal";
   if (intent.includes("comprar") || intent.includes("purchase") || intent.includes("vale a pena")) return "purchase_advice";
   return "unknown";
@@ -588,7 +602,19 @@ EXEMPLOS:
      }
    }
 
-4) Usuário: "semana passada"
+4) Usuário: "quanto gastei no dia 31/01" ou "gastos do dia 31"
+   Retornar:
+   {
+     "tipo_operacao": "consulta",
+     "dados_extraidos": {
+       "query_scope": "expenses",
+       "start_date": "2026-01-31T00:00:00.000Z",  // Dia específico
+       "end_date": "2026-01-31T23:59:59.999Z",
+       "time_range": "custom"
+     }
+   }
+
+5) Usuário: "semana passada"
    Retornar:
    {
      "tipo_operacao": "consulta",

@@ -68,7 +68,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "installment" | "purchase" | "unknown";
+type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "list_goals" | "add_goal_progress" | "installment" | "purchase" | "unknown";
 
 interface JobPayload {
   phoneNumber: string;
@@ -3675,7 +3675,12 @@ async function processarJob(job: any): Promise<void> {
           if (!creditResult.success) {
             // Precisa perguntar qual cartão ou não tem cartões
             if (creditResult.missingSlot === "card") {
-              await createAction(userId, "expense", "expense", slots, "card", payload.messageId);
+              // ✅ Salvar card_options nos slots para seleção numérica posterior
+              const slotsWithOptions = {
+                ...slots,
+                card_options: creditResult.cardOptions || []
+              };
+              await createAction(userId, "expense", "expense", slotsWithOptions, "card", payload.messageId);
               
               if (creditResult.cardButtons) {
                 await sendButtons(payload.phoneNumber, creditResult.message, creditResult.cardButtons, payload.messageSource);
@@ -4158,7 +4163,85 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     }
     
     // ========================================================================
-    // 🎯 GOAL - Metas de Poupança (savings_goals)
+    // 📋 LIST_GOALS - Listar metas do usuário
+    // ========================================================================
+    if (decision.actionType === "list_goals") {
+      console.log(`📋 [LIST_GOALS] Listando metas do usuário`);
+      const { listGoals } = await import("./intents/goals.ts");
+      const result = await listGoals(userId);
+      await sendMessage(payload.phoneNumber, result, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // 💰 ADD_GOAL_PROGRESS - Adicionar valor à meta existente
+    // ========================================================================
+    if (decision.actionType === "add_goal_progress") {
+      const slots = decision.slots;
+      console.log(`💰 [ADD_GOAL] Adicionando à meta: ${JSON.stringify(slots)}`);
+      
+      const { listGoals, addToGoal } = await import("./intents/goals.ts");
+      
+      // ✅ BUSCAR METAS ATIVAS
+      const { data: metasAtivas } = await supabase
+        .from("savings_goals")
+        .select("id, name, current_amount, target_amount")
+        .eq("user_id", userId)
+        .eq("status", "active");
+      
+      if (!metasAtivas || metasAtivas.length === 0) {
+        await sendButtons(payload.phoneNumber, 
+          "📋 Você ainda não tem metas ativas!\n\nQuer criar uma agora?",
+          [
+            { id: "goal_create_yes", title: "✅ Criar meta" },
+            { id: "goal_create_no", title: "❌ Agora não" }
+          ],
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // Se só tem 1 meta → adicionar direto
+      if (metasAtivas.length === 1 && slots.amount) {
+        const meta = metasAtivas[0];
+        const valorAdicionado = slots.amount;
+        
+        const result = await addToGoal(userId, meta.id, valorAdicionado);
+        await sendMessage(payload.phoneNumber, result, payload.messageSource);
+        return;
+      }
+      
+      // Se tem valor mas precisa escolher meta
+      if (slots.amount && metasAtivas.length > 1) {
+        const lista = metasAtivas.map((m, i) => 
+          `${i + 1}. ${m.name} (R$ ${Number(m.current_amount).toFixed(2)} / R$ ${Number(m.target_amount).toFixed(2)})`
+        ).join("\n");
+        
+        await sendMessage(payload.phoneNumber,
+          `📊 *Suas metas ativas:*\n\n${lista}\n\n_Em qual meta você quer adicionar R$ ${slots.amount.toFixed(2)}? (responda o número)_`,
+          payload.messageSource
+        );
+        
+        await createAction(userId, "add_goal_progress", "goal", {
+          ...slots,
+          goal_options: metasAtivas.map(m => ({ id: m.id, name: m.name }))
+        }, "goal_id", payload.messageId);
+        
+        return;
+      }
+      
+      // Falta valor
+      if (!slots.amount) {
+        await sendMessage(payload.phoneNumber, "💰 Quanto você quer adicionar à meta?", payload.messageSource);
+        await createAction(userId, "add_goal_progress", "goal", slots, "amount", payload.messageId);
+        return;
+      }
+      
+      return;
+    }
+    
+    // ========================================================================
+    // 🎯 GOAL - Metas de Poupança (savings_goals) - CRIAR NOVA
     // ========================================================================
     if (decision.actionType === "goal") {
       const slots = decision.slots;
@@ -4169,21 +4252,12 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       
       const normalized = normalizeText(conteudoProcessado);
       
-      // Listar metas
+      // Listar metas (fallback - prioridade é list_goals)
       if (normalized.includes("minhas metas") || normalized.includes("ver metas") || 
-          (normalized.includes("meta") && !slots.amount)) {
+          normalized.includes("quais metas") || normalized.includes("metas tenho")) {
         const result = await listGoals(userId);
         await sendMessage(payload.phoneNumber, result, payload.messageSource);
         return;
-      }
-      
-      // Adicionar à meta existente
-      if (normalized.includes("adiciona") || normalized.includes("guardar") || normalized.includes("deposita")) {
-        if (slots.amount && slots.description) {
-          const result = await addToGoal(userId, slots.description, slots.amount);
-          await sendMessage(payload.phoneNumber, result, payload.messageSource);
-          return;
-        }
       }
       
       // Criar nova meta
