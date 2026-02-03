@@ -64,7 +64,7 @@ export async function executeDynamicQuery(params: QueryParams): Promise<string> 
   // ============================================================================
   let query = supabase
     .from("transacoes")
-    .select("valor, descricao, categoria, data, meio_pagamento")
+    .select("valor, descricao, categoria, data, forma_pagamento")
     .eq("usuario_id", userId)
     .gte("data", queryStartDate)
     .lte("data", queryEndDate)
