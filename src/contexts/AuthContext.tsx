@@ -76,12 +76,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       console.log('🔄 [AUTH] Validando sessão...');
-      const { data, error: invokeError } = await supabase.functions.invoke('validate-session', {
+      const response = await supabase.functions.invoke('validate-session', {
         body: { token },
       });
 
-      // Tratar 401 como sessão inválida (não é erro, é esperado)
-      if (invokeError || !data || !data.valid || !data.user) {
+      // Se há erro ou resposta inválida, limpar sessão
+      if (response.error || !response.data?.valid || !response.data?.user) {
         console.log('⚠️ [AUTH] Sessão inválida ou expirada, limpando dados locais...');
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
@@ -92,18 +92,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // Sessão válida
-      console.log('✅ [AUTH] Sessão válida:', data.user.nome);
-      localStorage.setItem(USER_KEY, JSON.stringify(data.user));
-      setUser(data.user);
+      console.log('✅ [AUTH] Sessão válida:', response.data.user.nome);
+      localStorage.setItem(USER_KEY, JSON.stringify(response.data.user));
+      setUser(response.data.user);
+      setLoading(false);
       
     } catch (err) {
       console.error('❌ [AUTH] Erro ao validar sessão:', err);
-      // Limpar dados corrompidos
+      // Em caso de erro de rede ou qualquer exceção, limpar sessão
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
       localStorage.removeItem(REFRESH_TOKEN_KEY);
       setUser(null);
-    } finally {
       setLoading(false);
     }
   }, []);
