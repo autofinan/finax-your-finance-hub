@@ -15,13 +15,20 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { classifyDeterministic } from "./decision/classifier.ts";
 import { detectMultipleExpenses, formatExpensesList, calculateTotal } from "./utils/multiple-expenses.ts";
-import { parseRelativeDate, getBrasiliaDate } from "./utils/date-helpers.ts";
+import { 
+  parseRelativeDate, 
+  getBrasiliaDate, 
+  formatBrasiliaDateTime, 
+  formatBrasiliaDate,
+  getBrasiliaISO,
+  formatTimeAgo 
+} from "./utils/date-helpers.ts";
 import { queueMessage, markMessageProcessed, countPendingMessages } from "./utils/message-queue.ts";
 import { logger } from "./utils/logger.ts";
 import { FinaxError, FinaxErrorCode } from "./utils/errors.ts";
 import { parseBrazilianAmount } from "./utils/parseAmount.ts";
 import { getConversationContext, updateConversationContext, clearConversationContext, scopeToTopic } from "./utils/conversation-context.ts";
-import { formatTimeAgo } from "./utils/date-helpers.ts";
+import { saveAIDecision, markAsExecuted, markAsIncorrect } from "./utils/ai-decisions.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
@@ -108,6 +115,7 @@ interface DecisionOutput {
   shouldAsk: boolean;
   question: string | null;
   buttons: Array<{ id: string; title: string }> | null;
+  decisionId?: string | null;
 }
 
 interface ActiveAction {
@@ -589,6 +597,7 @@ interface SemanticResult {
   slots: ExtractedSlots;
   reason: string;
   canExecuteDirectly: boolean;
+  decisionId?: string | null;
 }
 
 // ============================================================================
@@ -1233,21 +1242,18 @@ async function decisionEngine(
     history
   );
   
-  // SALVAR DECISÃO DA IA PARA ANALYTICS
-  try {
-    await supabase.from("ai_decisions").insert({
-      user_id: userId,
-      message: message.slice(0, 500),
-      message_type: "text",
-      ai_classification: aiResult.actionType,
-      ai_confidence: aiResult.confidence,
-      ai_slots: aiResult.slots,
-      ai_reasoning: aiResult.reason?.slice(0, 500),
-      model_version: "gemini-2.5-flash"
-    });
-  } catch (trackError) {
-    logger.warn({ component: "ai_tracker" }, "Falha ao salvar decisao IA");
-  }
+  // ✅ SALVAR DECISÃO DA IA COM SISTEMA MODULAR
+  const decisionId = await saveAIDecision({
+    userId,
+    messageId: `msg_${Date.now()}`,
+    message,
+    messageType: "text",
+    aiClassification: aiResult.actionType,
+    aiConfidence: aiResult.confidence,
+    aiSlots: aiResult.slots,
+    aiReasoning: aiResult.reason,
+    aiSource: "ai"
+  });
   
   logger.info({
     component: "ai_classifier",
@@ -1267,7 +1273,8 @@ async function decisionEngine(
     return {
       result: {
         ...aiResult,
-        canExecuteDirectly: missing.length === 0
+        canExecuteDirectly: missing.length === 0,
+        decisionId
       },
       shouldBlockLegacyFlow: true
     };
@@ -1284,7 +1291,8 @@ async function decisionEngine(
   return {
     result: {
       ...aiResult,
-      canExecuteDirectly: missingLowConf.length === 0
+      canExecuteDirectly: missingLowConf.length === 0,
+      decisionId
     },
     shouldBlockLegacyFlow: aiResult.confidence >= 0.5
   };
@@ -3492,7 +3500,8 @@ async function processarJob(job: any): Promise<void> {
       shouldExecute: semanticResult.canExecuteDirectly || false,
       shouldAsk: !semanticResult.canExecuteDirectly,
       question: null,
-      buttons: null
+      buttons: null,
+      decisionId: semanticResult.decisionId
     };
     shouldBlockLegacyFlow = engineResult.shouldBlockLegacyFlow;
     
@@ -3619,6 +3628,12 @@ async function processarJob(job: any): Promise<void> {
           .update({ status: "done" })
           .eq("user_id", userId)
           .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+        
+        // ✅ Marcar decisão como executada
+        if (decision.decisionId) {
+          await markAsExecuted(decision.decisionId, true);
+        }
+        
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         return;
       }
@@ -3707,6 +3722,12 @@ async function processarJob(job: any): Promise<void> {
           .update({ status: "done" })
           .eq("user_id", userId)
           .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+        
+        // ✅ Marcar decisão como executada
+        if (decision.decisionId) {
+          await markAsExecuted(decision.decisionId, result.success ?? true);
+        }
+        
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         
         // ✅ APÓS registrar expense que foi reclassificado de pay_bill → oferecer criar fatura
@@ -4035,6 +4056,12 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         console.log(`🔄 [RECURRING] Execução direta: R$ ${slots.amount} - ${slots.description}`);
         const actionId = activeAction?.intent === "recurring" ? activeAction.id : undefined;
         const result = await registerRecurring(userId, slots, actionId);
+        
+        // ✅ Marcar decisão como executada
+        if (decision.decisionId) {
+          await markAsExecuted(decision.decisionId, result.success ?? true);
+        }
+        
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         return;
       }
@@ -4101,6 +4128,12 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             .update({ status: "done" })
             .eq("user_id", userId)
             .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+          
+          // ✅ Marcar decisão como executada
+          if (decision.decisionId) {
+            await markAsExecuted(decision.decisionId, true);
+          }
+          
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
           return;
         }
@@ -4549,7 +4582,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           
           const totalEntradas = entradas.reduce((sum: number, e: any) => sum + Number(e.valor), 0);
           const listaEntradas = entradas.slice(0, 10).map((e: any) => {
-            const dataStr = new Date(e.data).toLocaleDateString("pt-BR");
+            const dataStr = formatBrasiliaDate(e.data);
             return `💰 R$ ${Number(e.valor).toFixed(2)} - ${e.descricao || "Entrada"} (${dataStr})`;
           }).join("\n");
           
