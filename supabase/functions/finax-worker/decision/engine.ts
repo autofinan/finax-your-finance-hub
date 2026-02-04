@@ -52,9 +52,15 @@ const SEMANTIC_PATTERNS = {
   },
   // 📄 FATURA/CONTA A PAGAR - PRIORIDADE ALTA
   bill: {
-    verbs: ["conta de", "fatura de", "fatura", "vence dia", "vencimento dia", "criar fatura", "nova fatura"],
-    contexts: ["agua", "água", "luz", "energia", "internet", "gas", "gás", "telefone", "aluguel", "condominio", "condomínio"],
-    weight: 0.95
+    verbs: ["conta de", "fatura de", "fatura", "vence dia", "vencimento dia", "criar fatura", "nova fatura", "me lembre", "me lembra", "lembrar de pagar", "avisar quando", "alerta de"],
+    contexts: ["agua", "água", "luz", "energia", "internet", "gas", "gás", "telefone", "aluguel", "condominio", "condomínio", "academia"],
+    weight: 0.96
+  },
+  // 🔄 GASTO RECORRENTE - Assinaturas fixas
+  recurring: {
+    verbs: ["assinatura", "todo mes pago", "todo mês pago", "mensalidade", "pago fixo", "desconto automatico", "desconto automático"],
+    contexts: ["netflix", "spotify", "disney", "amazon", "gym", "academia mensal", "prime", "hbo", "youtube premium"],
+    weight: 0.92
   },
   // 💸 PAGAR FATURA - Mais restrito (exige "conta de" ou "fatura de" explícito)
   pay_bill: {

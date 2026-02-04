@@ -17,7 +17,7 @@ export interface AIDecisionInput {
   messageType: "text" | "audio" | "image";
   aiClassification: string;
   aiConfidence: number;
-  aiSlots: Record;
+  aiSlots: Record<string, unknown>;
   aiReasoning?: string;
   aiSource?: "ai" | "deterministic" | "contextual";
 }
@@ -26,7 +26,7 @@ export interface AIDecisionInput {
  * Salva decisão da IA (silenciosamente, em background)
  * Retorna ID para atualizar depois
  */
-export async function saveAIDecision(data: AIDecisionInput): Promise {
+export async function saveAIDecision(data: AIDecisionInput): Promise<string | null> {
   try {
     const { data: record, error } = await supabase
       .from("ai_decisions")
@@ -66,7 +66,7 @@ export async function saveAIDecision(data: AIDecisionInput): Promise {
 export async function markAsExecuted(
   decisionId: string | null,
   success: boolean
-): Promise {
+): Promise<void> {
   if (!decisionId) return;
   
   try {
@@ -88,7 +88,7 @@ export async function markAsIncorrect(
   decisionId: string | null,
   correctType: string,
   feedback: string
-): Promise {
+): Promise<void> {
   if (!decisionId) return;
   
   try {
@@ -121,7 +121,7 @@ export async function getQualityMetrics(days: number = 7) {
     total: data.length,
     executed: data.filter(d => d.was_executed).length,
     success_rate: 0,
-    by_type: {} as Record
+    by_type: {} as Record<string, number>
   };
   
   const successful = data.filter(d => d.execution_result === "success").length;

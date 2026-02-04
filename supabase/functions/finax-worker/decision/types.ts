@@ -142,7 +142,7 @@ export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: s
   bill: { required: ["bill_name", "due_day"], optional: ["estimated_value"] },
   pay_bill: { required: ["bill_name", "amount"], optional: [] },
   installment: { required: ["amount", "installments", "description"], optional: ["category", "card"] },
-  recurring: { required: ["amount", "description", "recurrence_type"], optional: ["category", "day_of_month"] },
+  recurring: { required: ["amount", "description"], optional: ["category", "day_of_month", "recurrence_type"] },
   goal: { required: ["goal_name", "target_amount"], optional: ["deadline", "category"] },
   purchase_advice: { required: ["item_description", "item_value"], optional: ["category"] },
 };

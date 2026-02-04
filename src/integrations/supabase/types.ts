@@ -173,7 +173,14 @@ export type Database = {
           ai_confidence: number
           ai_reasoning: string | null
           ai_slots: Json
+          ai_source: string | null
+          confirmed_at: string | null
+          correct_classification: string | null
+          correction_details: Json | null
           created_at: string | null
+          executed_at: string | null
+          execution_error: string | null
+          execution_result: string | null
           feedback: string | null
           id: string
           message: string
@@ -181,7 +188,9 @@ export type Database = {
           message_type: string | null
           model_version: string | null
           user_confirmed: boolean | null
+          user_feedback: string | null
           user_id: string
+          was_executed: boolean | null
         }
         Insert: {
           actual_classification?: string | null
@@ -189,7 +198,14 @@ export type Database = {
           ai_confidence: number
           ai_reasoning?: string | null
           ai_slots?: Json
+          ai_source?: string | null
+          confirmed_at?: string | null
+          correct_classification?: string | null
+          correction_details?: Json | null
           created_at?: string | null
+          executed_at?: string | null
+          execution_error?: string | null
+          execution_result?: string | null
           feedback?: string | null
           id?: string
           message: string
@@ -197,7 +213,9 @@ export type Database = {
           message_type?: string | null
           model_version?: string | null
           user_confirmed?: boolean | null
+          user_feedback?: string | null
           user_id: string
+          was_executed?: boolean | null
         }
         Update: {
           actual_classification?: string | null
@@ -205,7 +223,14 @@ export type Database = {
           ai_confidence?: number
           ai_reasoning?: string | null
           ai_slots?: Json
+          ai_source?: string | null
+          confirmed_at?: string | null
+          correct_classification?: string | null
+          correction_details?: Json | null
           created_at?: string | null
+          executed_at?: string | null
+          execution_error?: string | null
+          execution_result?: string | null
           feedback?: string | null
           id?: string
           message?: string
@@ -213,7 +238,9 @@ export type Database = {
           message_type?: string | null
           model_version?: string | null
           user_confirmed?: boolean | null
+          user_feedback?: string | null
           user_id?: string
+          was_executed?: boolean | null
         }
         Relationships: [
           {
@@ -1563,6 +1590,89 @@ export type Database = {
           user_message?: string | null
         }
         Relationships: []
+      }
+      logs_sistema: {
+        Row: {
+          action_type: string | null
+          component: string
+          confidence: number | null
+          duration_ms: number | null
+          error_message: string | null
+          error_name: string | null
+          error_stack: string | null
+          id: string
+          level: string
+          message: string | null
+          message_id: string | null
+          metadata: Json | null
+          slots: Json | null
+          timestamp: string | null
+          user_id: string | null
+        }
+        Insert: {
+          action_type?: string | null
+          component: string
+          confidence?: number | null
+          duration_ms?: number | null
+          error_message?: string | null
+          error_name?: string | null
+          error_stack?: string | null
+          id?: string
+          level: string
+          message?: string | null
+          message_id?: string | null
+          metadata?: Json | null
+          slots?: Json | null
+          timestamp?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          action_type?: string | null
+          component?: string
+          confidence?: number | null
+          duration_ms?: number | null
+          error_message?: string | null
+          error_name?: string | null
+          error_stack?: string | null
+          id?: string
+          level?: string
+          message?: string | null
+          message_id?: string | null
+          metadata?: Json | null
+          slots?: Json | null
+          timestamp?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "logs_sistema_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "logs_sistema_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "logs_sistema_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "logs_sistema_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
       }
       media_analysis: {
         Row: {

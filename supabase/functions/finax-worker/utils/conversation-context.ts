@@ -60,12 +60,10 @@ export async function getConversationContext(
       return null;
     }
     
-    // ✅ Incrementar contador de uso (para métricas)
-    supabase.from("conversation_context")
+    // ✅ Incrementar contador de uso (para métricas) - Fire-and-forget
+    void supabase.from("conversation_context")
       .update({ interaction_count: (data.interaction_count || 0) + 1 })
-      .eq("user_id", userId)
-      .then(() => {})
-      .catch(() => {}); // Fire-and-forget
+      .eq("user_id", userId);
     
     logger.debug({ 
       component: "context", 
@@ -134,7 +132,7 @@ export async function updateConversationContext(
       component: "context", 
       userId,
       topic: updates.currentTopic,
-      intent: updates.lastIntent
+      intent: updates.lastIntent ?? undefined
     }, "Contexto atualizado");
   } catch (error) {
     logger.error({ component: "context", userId }, "Erro ao atualizar contexto");

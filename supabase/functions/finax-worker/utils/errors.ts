@@ -10,7 +10,7 @@
 // ✅ Estatísticas de erros
 // ============================================================================
 
-import { logger } from "./logger.ts";
+import { logger, LogAnalytics } from "./logger.ts";
 
 export enum FinaxErrorCode {
   // User errors
@@ -300,15 +300,15 @@ export class FinaxError extends Error {
   // 📈 ESTATÍSTICAS DE ERROS (últimas 24h)
   // ========================================================================
   static async getErrorStats(hours: number = 24): Promise<Record<string, number>> {
-    const errors = await logger.LogAnalytics.getRecentErrors(1000);
+    const errors = await LogAnalytics.getRecentErrors(1000);
     
     const since = Date.now() - hours * 60 * 60 * 1000;
-    const recentErrors = errors.filter(log => 
+    const recentErrors = errors.filter((log: any) => 
       new Date(log.timestamp).getTime() > since
     );
     
     const stats: Record<string, number> = {};
-    recentErrors.forEach(log => {
+    recentErrors.forEach((log: any) => {
       const code = log.error_name || 'UNKNOWN';
       stats[code] = (stats[code] || 0) + 1;
     });
