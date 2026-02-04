@@ -112,6 +112,7 @@ export interface DecisionOutput {
   shouldAsk: boolean;
   question: string | null;
   buttons: Array<{ id: string; title: string }> | null;
+  decisionId?: string | null;
 }
 
 export interface ActiveAction {

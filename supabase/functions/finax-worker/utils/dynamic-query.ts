@@ -6,6 +6,7 @@
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { formatBrasiliaDate, getBrasiliaDate } from "./date-helpers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -50,13 +51,12 @@ export async function executeDynamicQuery(params: QueryParams): Promise<string> 
     queryStartDate = start_date;
     queryEndDate = end_date;
   } else {
-    // ⚠️ IA não passou - calcular mês atual como fallback
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
+    // ⚠️ IA não passou - calcular mês atual como fallback (BRASILIA)
+    const brasiliaNow = getBrasiliaDate();
+    const startOfMonth = new Date(brasiliaNow.getFullYear(), brasiliaNow.getMonth(), 1, 0, 0, 0, 0);
     
     queryStartDate = startOfMonth.toISOString();
-    queryEndDate = new Date().toISOString();
+    queryEndDate = brasiliaNow.toISOString();
   }
   
   // ============================================================================
@@ -140,7 +140,8 @@ function formatQueryResult(transactions: any[], options: FormatOptions): string 
   const lista = transactions.slice(0, maxItems).map(t => {
     const emoji = scope === "expenses" ? "💸" : "💰";
     const descricao = t.descricao || t.categoria || "Sem descrição";
-    return `${emoji} R$ ${Number(t.valor).toFixed(2)} - ${descricao}`;
+    const dataFormatada = t.data ? formatBrasiliaDate(t.data) : "";
+    return `${emoji} R$ ${Number(t.valor).toFixed(2)} - ${descricao}${dataFormatada ? ` (${dataFormatada})` : ""}`;
   }).join("\n");
   
   const textoAdicional = transactions.length > maxItems 
