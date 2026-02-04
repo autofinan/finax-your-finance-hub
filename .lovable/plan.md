@@ -1,329 +1,351 @@
 
-# Plano de Correcao e Melhorias Profissionais - Finax
+
+# Plano de Correcoes Completas - Finax index.ts e Sistema de Datas
 
 ## Resumo Executivo
 
-Este plano resolve **11 erros de build** identificados e implementa **5 melhorias principais** para transformar o Finax em um assistente financeiro de classe mundial.
+Este plano cobre **4 areas criticas** que faltaram ser implementadas:
+
+1. **Integracao do Sistema AI Decisions Tracking** no index.ts
+2. **Correcao do salvamento inline** (substituir por funcoes do modulo)
+3. **Padronizacao de datas para timezone Brasilia** em todas as respostas
+4. **Imports faltantes** no index.ts
 
 ---
 
-## PARTE 1: CORRECAO DOS ERROS DE BUILD (URGENTE)
+## PARTE 1: IMPORTS FALTANTES NO INDEX.TS
 
-### 1.1 Erro em `ai-decisions.ts` - Tipos Genericos
+### 1.1 Adicionar Import do Modulo AI Decisions
 
-**Arquivos:** `supabase/functions/finax-worker/utils/ai-decisions.ts`
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Linha:** Apos linha 24 (proximo aos outros imports de utils)
 
-**Problema:** Os tipos genericos `Record` e `Promise` estao sem argumentos de tipo.
-
-**Erros:**
-- Linha 20: `aiSlots: Record;` - Falta `<string, any>`
-- Linha 29: `Promise` sem tipo de retorno
-- Linha 69 e 91: `Promise` sem tipo de retorno
-- Linha 124: `Record` sem tipos
-
-**Solucao:** Adicionar os tipos genericos corretos:
-
+**Adicionar:**
 ```typescript
-// Linha 20
-aiSlots: Record<string, unknown>;
+import { saveAIDecision, markAsExecuted, markAsIncorrect } from "./utils/ai-decisions.ts";
+```
 
-// Linhas 29, 69, 91
-Promise<string | null>
-Promise<void>
+### 1.2 Adicionar Imports de Date Helpers Faltantes
 
-// Linha 124
-by_type: {} as Record<string, number>
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Linha 18:** Atualizar import existente
+
+**De:**
+```typescript
+import { parseRelativeDate, getBrasiliaDate } from "./utils/date-helpers.ts";
+```
+
+**Para:**
+```typescript
+import { 
+  parseRelativeDate, 
+  getBrasiliaDate, 
+  formatBrasiliaDateTime, 
+  formatBrasiliaDate,
+  getBrasiliaISO,
+  getPaymentEmoji 
+} from "./utils/date-helpers.ts";
 ```
 
 ---
 
-### 1.2 Erro em `conversation-context.ts` - Catch e Tipos
+## PARTE 2: SUBSTITUIR SALVAMENTO INLINE POR FUNCAO MODULAR
 
-**Arquivo:** `supabase/functions/finax-worker/utils/conversation-context.ts`
+### 2.1 Substituir Bloco de Salvamento (Linhas 1236-1250)
 
-**Problema:** `.catch()` nao existe no tipo PromiseLike e `null` nao e assignavel a `string | undefined`.
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Linhas:** 1236-1250
 
-**Erros:**
-- Linha 68: `.catch(() => {})` em fire-and-forget
-- Linha 137: `intent: updates.lastIntent` pode ser `null`
-
-**Solucao:**
-
+**DELETAR:**
 ```typescript
-// Linha 64-68 - Usar try/catch em vez de .catch()
+// SALVAR DECISÃO DA IA PARA ANALYTICS
 try {
-  supabase.from("conversation_context")
-    .update({ interaction_count: (data.interaction_count || 0) + 1 })
-    .eq("user_id", userId);
-} catch {}
-
-// Linha 137 - Converter null para undefined
-intent: updates.lastIntent ?? undefined
+  await supabase.from("ai_decisions").insert({
+    user_id: userId,
+    message: message.slice(0, 500),
+    message_type: "text",
+    ai_classification: aiResult.actionType,
+    ai_confidence: aiResult.confidence,
+    ai_slots: aiResult.slots,
+    ai_reasoning: aiResult.reason?.slice(0, 500),
+    model_version: "gemini-2.5-flash"
+  });
+} catch (trackError) {
+  logger.warn({ component: "ai_tracker" }, "Falha ao salvar decisao IA");
+}
 ```
 
----
-
-### 1.3 Erro em `errors.ts` - LogAnalytics inexistente
-
-**Arquivo:** `supabase/functions/finax-worker/utils/errors.ts`
-
-**Problema:** `logger.LogAnalytics` nao existe - LogAnalytics e uma classe exportada separadamente.
-
-**Erros:**
-- Linha 303: `logger.LogAnalytics` nao existe
-- Linhas 306, 311: Parametro `log` implicitamente `any`
-
-**Solucao:**
-
+**SUBSTITUIR POR:**
 ```typescript
-// Linha 303 - Importar LogAnalytics diretamente
-import { logger, LogAnalytics } from "./logger.ts";
-
-// Linha 303 - Usar classe diretamente
-const errors = await LogAnalytics.getRecentErrors(1000);
-
-// Linhas 306, 311 - Tipar o parametro
-const recentErrors = errors.filter((log: any) =>
-recentErrors.forEach((log: any) => {
-```
-
----
-
-### 1.4 Erro em `logger.ts` - Catch
-
-**Arquivo:** `supabase/functions/finax-worker/utils/logger.ts`
-
-**Problema:** `.catch()` nao existe no tipo PromiseLike.
-
-**Erro:** Linha 120: `.catch(() => {})`
-
-**Solucao:** A chamada `.then().catch()` precisa ser ajustada para usar void operator ou try/catch:
-
-```typescript
-// Linhas 104-122 - Usar void para fire-and-forget
-void supabase.from("logs_sistema").insert({
-  level,
-  component: context.component,
-  // ... resto dos campos
-}).then(({ error }) => {
-  if (error) console.error("Falha ao salvar log");
+// ✅ SALVAR DECISÃO DA IA COM SISTEMA MODULAR
+const decisionId = await saveAIDecision({
+  userId,
+  messageId: messageId || `msg_${Date.now()}`,
+  message,
+  messageType: "text",
+  aiClassification: aiResult.actionType,
+  aiConfidence: aiResult.confidence,
+  aiSlots: aiResult.slots,
+  aiReasoning: aiResult.reason,
+  aiSource: "ai"
 });
 ```
 
----
-
-## PARTE 2: MELHORIAS PRINCIPAIS
-
-### 2.1 Sistema de Aprendizado Continuo (AI Decisions)
-
-**Status:** Arquivo ja criado, apenas precisa correcao de tipos
-
-**O que faz:**
-- Salva silenciosamente cada decisao da IA
-- Marca como executada apos sucesso
-- Marca como incorreta quando usuario cancela
-- Dashboard de metricas em tempo real
-
-**Integracao no index.ts:**
-1. Importar funcoes do arquivo corrigido
-2. Substituir salvamento inline existente
-3. Chamar `markAsExecuted()` apos operacoes bem-sucedidas
-4. Chamar `markAsIncorrect()` quando usuario cancela
+**NOTA:** O `messageId` precisa ser passado para a funcao `getDecisionFromMessage`. Verificar se ja esta disponivel no escopo.
 
 ---
 
-### 2.2 Correcao Bug `recurrence_type`
+## PARTE 3: INTEGRAR markAsExecuted APOS OPERACOES BEM-SUCEDIDAS
 
-**Arquivo:** `supabase/functions/finax-worker/decision/types.ts`
+### 3.1 No Handler de EXPENSE (Linha ~3705)
 
-**Problema:** Sistema pergunta "Qual o recurrence_type?" em vez de inferir.
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Localizacao:** Apos `registerExpense` retornar sucesso
 
-**Solucao:**
-
+**Adicionar apos linha 3710:**
 ```typescript
-// SLOT_REQUIREMENTS.recurring
-recurring: { 
-  required: ["amount", "description"],  // REMOVER recurrence_type
-  optional: ["category", "day_of_month", "recurrence_type"] 
+// ✅ Marcar decisao como executada
+if (typeof decisionId !== 'undefined' && decisionId) {
+  await markAsExecuted(decisionId, result.success ?? true);
 }
 ```
 
-**E no handler de recurring no index.ts:**
+### 3.2 No Handler de INCOME (Linha ~3617)
 
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Localizacao:** Apos `registerIncome` retornar sucesso
+
+**Adicionar apos linha 3622:**
 ```typescript
-// Inferir automaticamente
-if (!slots.recurrence_type) {
-  slots.recurrence_type = slots.day_of_month ? "mensal" : 
-                          slots.day_of_week ? "semanal" : "mensal";
+// ✅ Marcar decisao como executada
+if (typeof decisionId !== 'undefined' && decisionId) {
+  await markAsExecuted(decisionId, true);
 }
 ```
 
----
+### 3.3 No Handler de RECURRING (Linha ~4037)
 
-### 2.3 Diferenciacao Fatura vs Recorrente
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Localizacao:** Apos `registerRecurring` retornar sucesso
 
-**Arquivo:** `supabase/functions/finax-worker/decision/engine.ts`
-
-**Problema:** IA confunde "criar fatura" com "gasto recorrente".
-
-**Solucao:** Adicionar ao prompt da IA (bloco SEMANTIC_PATTERNS):
-
+**Adicionar apos linha 4038:**
 ```typescript
-// Adicionar ao bill (linha ~51-57)
-bill: {
-  verbs: [
-    "conta de", "fatura de", "fatura", "vence dia", "vencimento dia", 
-    "criar fatura", "nova fatura",
-    "me lembre", "me lembra", "lembrar de pagar", "avisar quando", "alerta de"
-  ],
-  contexts: ["agua", "água", "luz", "energia", "internet", "gas", "gás", 
-             "telefone", "aluguel", "condominio", "condomínio", "academia"],
-  weight: 0.96
-},
+// ✅ Marcar decisao como executada
+if (typeof decisionId !== 'undefined' && decisionId) {
+  await markAsExecuted(decisionId, result.success ?? true);
+}
+```
 
-// Adicionar novo pattern para recurring
-recurring: {
-  verbs: ["assinatura", "todo mes pago", "mensalidade", "pago fixo", "desconto automatico"],
-  contexts: ["netflix", "spotify", "disney", "amazon", "gym", "academia mensal"],
-  weight: 0.92
+### 3.4 No Handler de INSTALLMENT (Linha ~4099)
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Localizacao:** Apos `registerInstallment` retornar sucesso
+
+**Adicionar apos linha 4104:**
+```typescript
+// ✅ Marcar decisao como executada
+if (typeof decisionId !== 'undefined' && decisionId) {
+  await markAsExecuted(decisionId, true);
 }
 ```
 
 ---
 
-### 2.4 Mobile Responsivo - Site Interno
+## PARTE 4: INTEGRAR markAsIncorrect QUANDO USUARIO CANCELA
 
-**Arquivos afetados:**
-- `src/components/layout/AppLayout.tsx`
-- `src/components/layout/Sidebar.tsx`
-- `src/components/layout/MobileNav.tsx`
-- `src/pages/Dashboard.tsx`
-- `src/pages/Transacoes.tsx`
-- `src/pages/Cartoes.tsx`
-- `src/pages/Metas.tsx`
-- `src/pages/Recorrentes.tsx`
+### 4.1 No Handler de CANCELAMENTO (procurar `cancelAction`)
 
-**O que o site ja tem:**
-- AppLayout com Sidebar (desktop) e MobileNav (mobile)
-- Classes responsive em varias paginas (grid-cols-1 sm:grid-cols-2 lg:grid-cols-3)
-- Todas as paginas ja tem gradientes e backgrounds responsivos
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Localizacao:** Onde o usuario cancela uma acao ativa
 
-**Melhorias necessarias:**
-
-1. **AppLayout.tsx** - Ajustar margem da sidebar:
+**Adicionar antes de `cancelAction(userId)`:**
 ```typescript
-// Linha 13 - Garantir que funciona em todos os tamanhos
-<main className="lg:ml-72 pb-20 lg:pb-0 min-h-screen">
+// ✅ Marcar decisao como incorreta (usuario cancelou)
+if (activeAction && typeof decisionId !== 'undefined' && decisionId) {
+  await markAsIncorrect(
+    decisionId,
+    "cancelled_by_user",
+    `Usuario cancelou ${activeAction.intent}`
+  );
+}
 ```
-
-2. **Sidebar.tsx** - Ja esta `hidden lg:flex` (correto)
-
-3. **MobileNav.tsx** - Verificar safe-area para iPhone:
-```typescript
-// Adicionar padding bottom para iPhones com notch
-className="lg:hidden fixed bottom-0 ... safe-area-inset-bottom"
-```
-
-4. **Dashboard.tsx** - Stats cards ja sao responsivos (grid-cols-1 sm:grid-cols-2 lg:grid-cols-4)
-
-5. **Transacoes.tsx** - Filtros ja sao responsivos (flex-col sm:flex-row)
-
-6. **Cartoes.tsx** - Cards ja sao responsivos (grid-cols-1 md:grid-cols-2 lg:grid-cols-3)
-
-7. **Metas.tsx** - Cards ja sao responsivos (md:grid-cols-2 lg:grid-cols-3)
-
-8. **Recorrentes.tsx** - Lista ja e responsiva (space-y-3)
-
-**Conclusao:** O site ja esta 95% responsivo. Apenas pequenos ajustes sao necessarios.
 
 ---
 
-### 2.5 Verificacao da Tabela `ai_decisions`
+## PARTE 5: CORRECAO DE DATAS - PADRONIZAR PARA BRASILIA
 
-**Verificacao necessaria:** Confirmar se a tabela existe no banco.
+### 5.1 Corrigir Formatacao de Data no Query de INCOME (Linha 4552)
 
-Se nao existir, criar migracao:
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Linha:** 4552
 
-```sql
-CREATE TABLE IF NOT EXISTS ai_decisions (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  user_id UUID REFERENCES usuarios(id),
-  message_id TEXT,
-  message TEXT,
-  message_type TEXT DEFAULT 'text',
-  ai_classification TEXT,
-  ai_confidence DECIMAL(3,2),
-  ai_slots JSONB,
-  ai_reasoning TEXT,
-  ai_source TEXT DEFAULT 'ai',
-  model_version TEXT,
-  was_executed BOOLEAN DEFAULT FALSE,
-  execution_result TEXT,
-  executed_at TIMESTAMPTZ,
-  user_confirmed BOOLEAN,
-  correct_classification TEXT,
-  user_feedback TEXT,
-  confirmed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_ai_decisions_user ON ai_decisions(user_id);
-CREATE INDEX idx_ai_decisions_created ON ai_decisions(created_at);
+**De:**
+```typescript
+const dataStr = new Date(e.data).toLocaleDateString("pt-BR");
 ```
+
+**Para:**
+```typescript
+const dataStr = formatBrasiliaDate(e.data);
+```
+
+### 5.2 Corrigir dynamic-query.ts - Usar Timezone Brasilia
+
+**Arquivo:** `supabase/functions/finax-worker/utils/dynamic-query.ts`
+**Linha 54-59:** Calcular datas com timezone correto
+
+**De:**
+```typescript
+} else {
+  // ⚠️ IA não passou - calcular mês atual como fallback
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+  
+  queryStartDate = startOfMonth.toISOString();
+  queryEndDate = new Date().toISOString();
+}
+```
+
+**Para:**
+```typescript
+} else {
+  // ⚠️ IA não passou - calcular mês atual como fallback (BRASILIA)
+  const now = new Date();
+  // Ajustar para Brasília (UTC-3)
+  const brasiliaOffset = -3 * 60; // -3 horas em minutos
+  const localOffset = now.getTimezoneOffset();
+  const diff = brasiliaOffset - localOffset;
+  now.setMinutes(now.getMinutes() + diff);
+  
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  
+  queryStartDate = startOfMonth.toISOString();
+  queryEndDate = now.toISOString();
+}
+```
+
+### 5.3 Adicionar Import no dynamic-query.ts
+
+**Arquivo:** `supabase/functions/finax-worker/utils/dynamic-query.ts`
+**Linha 8:** Adicionar import
+
+**Adicionar:**
+```typescript
+import { formatBrasiliaDate, formatBrasiliaDateTime } from "./date-helpers.ts";
+```
+
+### 5.4 Usar formatBrasiliaDate na Formatacao de Resultados
+
+**Arquivo:** `supabase/functions/finax-worker/utils/dynamic-query.ts`
+**Linha 143:** Melhorar formatacao da lista
+
+**De:**
+```typescript
+const lista = transactions.slice(0, maxItems).map(t => {
+  const emoji = scope === "expenses" ? "💸" : "💰";
+  const descricao = t.descricao || t.categoria || "Sem descrição";
+  return `${emoji} R$ ${Number(t.valor).toFixed(2)} - ${descricao}`;
+}).join("\n");
+```
+
+**Para:**
+```typescript
+const lista = transactions.slice(0, maxItems).map(t => {
+  const emoji = scope === "expenses" ? "💸" : "💰";
+  const descricao = t.descricao || t.categoria || "Sem descrição";
+  const dataFormatada = t.data ? formatBrasiliaDate(t.data) : "";
+  return `${emoji} R$ ${Number(t.valor).toFixed(2)} - ${descricao}${dataFormatada ? ` (${dataFormatada})` : ""}`;
+}).join("\n");
+```
+
+---
+
+## PARTE 6: PROPAGAR decisionId PARA TODO O FLUXO
+
+### 6.1 Problema Identificado
+
+O `decisionId` e gerado dentro da funcao `getDecisionFromMessage`, mas precisa ser acessivel em todo o fluxo principal para chamar `markAsExecuted` e `markAsIncorrect`.
+
+### 6.2 Solucao: Retornar decisionId no Resultado
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
+**Modificar a interface de retorno de `getDecisionFromMessage`:**
+
+**Na linha ~1267-1273, modificar o retorno:**
+```typescript
+return {
+  result: {
+    ...aiResult,
+    canExecuteDirectly: missing.length === 0,
+    decisionId  // ← ADICIONAR
+  },
+  shouldBlockLegacyFlow: true
+};
+```
+
+**E na linha ~1284-1290:**
+```typescript
+return {
+  result: {
+    ...aiResult,
+    canExecuteDirectly: missingLowConf.length === 0,
+    decisionId  // ← ADICIONAR
+  },
+  shouldBlockLegacyFlow: aiResult.confidence >= 0.5
+};
+```
+
+### 6.3 Usar decisionId no Fluxo Principal
+
+**No fluxo principal (onde chama `getDecisionFromMessage`), extrair o decisionId:**
+
+**Procurar onde `getDecisionFromMessage` e chamado e adicionar:**
+```typescript
+const { result: decision, shouldBlockLegacyFlow } = await getDecisionFromMessage(...);
+const decisionId = decision.decisionId; // ← EXTRAIR
+```
+
+---
+
+## RESUMO DAS ALTERACOES
+
+| Arquivo | Alteracao | Linhas |
+|---------|-----------|--------|
+| index.ts | Adicionar import ai-decisions | ~25 |
+| index.ts | Atualizar import date-helpers | 18 |
+| index.ts | Substituir salvamento inline | 1236-1250 |
+| index.ts | Retornar decisionId | 1267, 1284 |
+| index.ts | markAsExecuted em expense | ~3710 |
+| index.ts | markAsExecuted em income | ~3622 |
+| index.ts | markAsExecuted em recurring | ~4038 |
+| index.ts | markAsExecuted em installment | ~4104 |
+| index.ts | markAsIncorrect em cancel | Onde cancela |
+| index.ts | Formatar data income | 4552 |
+| dynamic-query.ts | Import date-helpers | 8 |
+| dynamic-query.ts | Timezone Brasilia | 54-59 |
+| dynamic-query.ts | Formatar datas na lista | 143 |
 
 ---
 
 ## ORDEM DE EXECUCAO
 
-| Prioridade | Tarefa | Arquivos | Impacto |
-|------------|--------|----------|---------|
-| 1 | Corrigir tipos em ai-decisions.ts | utils/ai-decisions.ts | Build |
-| 2 | Corrigir catch em conversation-context.ts | utils/conversation-context.ts | Build |
-| 3 | Corrigir LogAnalytics em errors.ts | utils/errors.ts | Build |
-| 4 | Corrigir catch em logger.ts | utils/logger.ts | Build |
-| 5 | Corrigir SLOT_REQUIREMENTS | decision/types.ts | UX |
-| 6 | Adicionar patterns bill/recurring | decision/engine.ts | IA |
-| 7 | Ajustar AppLayout mobile | AppLayout.tsx | UX |
-| 8 | Deploy edge function | finax-worker | Producao |
+1. Adicionar imports no index.ts
+2. Modificar retorno de getDecisionFromMessage para incluir decisionId
+3. Substituir salvamento inline por saveAIDecision
+4. Adicionar markAsExecuted em cada handler de sucesso
+5. Adicionar markAsIncorrect no handler de cancel
+6. Corrigir formatacao de datas no index.ts e dynamic-query.ts
+7. Deploy e testar
 
 ---
 
 ## TESTES DE VALIDACAO
 
-### Build
-
-- Rodar `npm run build` sem erros
-- Edge function deploya sem erros
-
-### Funcionalidade
-
 | Cenario | Resultado Esperado |
 |---------|-------------------|
-| "Netflix R$ 30 mensal" | Cria gasto recorrente (nao fatura) |
-| "Crie fatura de internet" | Cria fatura (nao recorrente) |
-| "Todo mês pago R$ 50 do Spotify" | Cria recorrente sem perguntar recurrence_type |
-| "Me lembre de pagar a luz" | Cria fatura |
+| "Pizza 30 pix" | ai_decisions salva com was_executed=true |
+| "Cancelar" apos registrar | ai_decisions atualiza user_confirmed=false |
+| "Quanto gastei ontem?" | Datas no formato DD/MM/YYYY |
+| "Recebi 500 pix" | Data no timezone Brasilia (nao UTC) |
 
-### Mobile
-
-| Teste | Resultado Esperado |
-|-------|-------------------|
-| Dashboard em iPhone | Stats empilhados, sem overflow |
-| Transacoes em Android | Filtros empilhados, lista legivel |
-| Sidebar em tablet | Visible, nav funcional |
-
----
-
-## RESUMO DAS CORRECOES
-
-| Arquivo | Linhas | Tipo de Correcao |
-|---------|--------|------------------|
-| ai-decisions.ts | 20, 29, 69, 91, 124 | Tipos genericos |
-| conversation-context.ts | 64-68, 137 | catch e null handling |
-| errors.ts | 303, 306, 311 | Import e tipagem |
-| logger.ts | 104-122 | Fire-and-forget |
-| types.ts | 145 | SLOT_REQUIREMENTS |
-| engine.ts | 51-57 | SEMANTIC_PATTERNS |
-| AppLayout.tsx | 13 | Margem sidebar |
-
-**Total:** 7 arquivos, 11 erros corrigidos, 5 melhorias implementadas
