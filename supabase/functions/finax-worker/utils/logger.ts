@@ -101,7 +101,7 @@ function persistLog(
   if (level === 'debug') return;
   
   // Fire-and-forget: não bloqueia execução
-  supabase.from("logs_sistema").insert({
+  void supabase.from("logs_sistema").insert({
     level,
     component: context.component,
     message,
@@ -117,8 +117,6 @@ function persistLog(
     metadata: context
   }).then(({ error }) => {
     if (error) console.error("❌ [LOGGER] Falha ao salvar:", error);
-  }).catch(() => {
-    // Silencioso - não quebrar aplicação
   });
 }
 
