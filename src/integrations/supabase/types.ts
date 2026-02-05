@@ -909,6 +909,7 @@ export type Database = {
           created_at: string | null
           current_topic: string | null
           expires_at: string | null
+          interaction_count: number | null
           last_card_id: string | null
           last_category: string | null
           last_goal_id: string | null
@@ -922,6 +923,7 @@ export type Database = {
           created_at?: string | null
           current_topic?: string | null
           expires_at?: string | null
+          interaction_count?: number | null
           last_card_id?: string | null
           last_category?: string | null
           last_goal_id?: string | null
@@ -935,6 +937,7 @@ export type Database = {
           created_at?: string | null
           current_topic?: string | null
           expires_at?: string | null
+          interaction_count?: number | null
           last_card_id?: string | null
           last_category?: string | null
           last_goal_id?: string | null
