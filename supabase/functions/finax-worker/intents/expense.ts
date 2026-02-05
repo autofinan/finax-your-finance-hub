@@ -16,7 +16,7 @@ import { checkImmediateAlerts } from "../intents/alerts.ts";
 import { getDecisionConfig, recordMetric } from "../governance/config.ts";
 import { categorizeDescription, type CategorizationResult } from "../ai/categorizer.ts";
 import { getBrasiliaDate, getBrasiliaISO, formatBrasiliaDateTime, getPaymentEmoji } from "../utils/date-helpers.ts";
-import { markAsExecuted } from "../ai-decisions.ts";  // ✅ ADICIONAR IMPORT
+ import { markAsExecuted } from "../utils/ai-decisions.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
