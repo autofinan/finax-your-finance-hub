@@ -206,7 +206,7 @@ export async function registerExpense(
     `📂 ${category}\n` +
     (slots.description ? `📝 ${slots.description}\n` : "") +
     `${paymentEmoji} ${slots.payment_method}\n` +
-    `📅 ${formatBrasiliaDateTime(new Date())}\n\n` +
+    `📅 ${formatBrasiliaDateTime(transactionDate)}\n\n` +
     `_Responda "cancelar" se foi engano!_`;
   
   console.log(`✅ [EXPENSE] Registrado: ${transaction.id}`);
