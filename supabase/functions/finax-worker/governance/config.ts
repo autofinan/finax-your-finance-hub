@@ -158,3 +158,64 @@ export function invalidateConfigCache(): void {
   cacheExpiry = 0;
   console.log(`🔄 [GOVERNANCE] Cache invalidado`);
 }
+
+// ============================================================================
+// 📝 GET ACTIVE PROMPT
+// ============================================================================
+// Busca prompt ativo do banco com fallback seguro
+// A tabela ai_prompts já existe - apenas usar quando quiser testar
+// ============================================================================
+
+// Fallback padrão (prompt atual hardcoded no engine.ts)
+const DEFAULT_FINAX_PROMPT = "FALLBACK_PROMPT";
+
+// Cache de prompts
+const promptCache: Map<string, { content: string; expiry: number }> = new Map();
+const PROMPT_CACHE_TTL_MS = 300000; // 5 minutos
+
+export async function getActivePrompt(name: string, fallback?: string): Promise<string> {
+  const now = Date.now();
+  
+  // Verificar cache
+  const cached = promptCache.get(name);
+  if (cached && now < cached.expiry) {
+    return cached.content;
+  }
+  
+  try {
+    const { data, error } = await supabase
+      .from("ai_prompts")
+      .select("content")
+      .eq("name", name)
+      .eq("active", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .single();
+    
+    if (error || !data?.content) {
+      console.log(`⚠️ [PROMPTS] Prompt "${name}" não encontrado, usando fallback`);
+      return fallback || DEFAULT_FINAX_PROMPT;
+    }
+    
+    // Cachear resultado
+    promptCache.set(name, { content: data.content, expiry: now + PROMPT_CACHE_TTL_MS });
+    console.log(`📝 [PROMPTS] Prompt "${name}" carregado do banco`);
+    
+    return data.content;
+    
+  } catch (err) {
+    console.warn(`⚠️ [PROMPTS] Erro ao buscar prompt "${name}", usando fallback:`, err);
+    return fallback || DEFAULT_FINAX_PROMPT;
+  }
+}
+
+// Invalidar cache de prompt específico
+export function invalidatePromptCache(name?: string): void {
+  if (name) {
+    promptCache.delete(name);
+    console.log(`🔄 [PROMPTS] Cache de "${name}" invalidado`);
+  } else {
+    promptCache.clear();
+    console.log(`🔄 [PROMPTS] Cache de prompts limpo`);
+  }
+}

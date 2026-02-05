@@ -273,6 +273,42 @@ export type Database = {
           },
         ]
       }
+      ai_prompts: {
+        Row: {
+          active: boolean | null
+          content: string
+          created_at: string | null
+          created_by: string | null
+          id: string
+          name: string
+          performance: Json | null
+          status: string | null
+          version: number
+        }
+        Insert: {
+          active?: boolean | null
+          content: string
+          created_at?: string | null
+          created_by?: string | null
+          id?: string
+          name: string
+          performance?: Json | null
+          status?: string | null
+          version?: number
+        }
+        Update: {
+          active?: boolean | null
+          content?: string
+          created_at?: string | null
+          created_by?: string | null
+          id?: string
+          name?: string
+          performance?: Json | null
+          status?: string | null
+          version?: number
+        }
+        Relationships: []
+      }
       alert_feedback: {
         Row: {
           alert_id: string | null
