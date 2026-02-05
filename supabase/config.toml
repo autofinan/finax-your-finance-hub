@@ -32,3 +32,6 @@ verify_jwt = false
 
 [functions.ciclo-fatura]
 verify_jwt = false
+
+[functions.finax-insights]
+verify_jwt = false

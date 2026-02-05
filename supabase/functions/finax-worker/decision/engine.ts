@@ -23,6 +23,7 @@ import {
   SLOT_PROMPTS 
 } from "./types.ts";
 import { classifyDeterministic } from "./classifier.ts";
+import { getActivePrompt } from "../governance/config.ts";
 
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
@@ -444,6 +445,16 @@ function buildDecision(
 // 🤖 CHAMADA À IA (CASOS COMPLEXOS)
 // ============================================================================
 
+// Prompt fallback (hardcoded como backup se não houver no banco)
+const FALLBACK_CLASSIFIER_PROMPT = `Você é Finax — um analisador semântico financeiro. Seu papel é interpretar INTENÇÕES humanas e extrair dados relevantes para o Decision Engine. Você NÃO executa ações, não registra dados e não decide fluxos: seu output é apenas uma interpretação semântica estruturada que será avaliada pelo Decision Engine.
+
+⚖️ PRINCÍPIOS INEGOCIÁVEIS:
+1) PRECEDÊNCIA ABSOLUTA: Se a mensagem contém um VERBO ou TERMO semântico que indique claramente uma intenção (ex.: recebi, caiu, entrou, ganhei, gastei, paguei, comprei, limite, fatura, cancela, quanto), essa intenção é considerada DEFINIDA e soberana.
+2) NÚMERO ISOLADO: Considere "numero_isolado" somente quando o texto contiver APENAS um número.
+3) CONFLITOS SEMÂNTICOS: Se houver sinais conflitantes claros, classifique como "desconhecido".
+
+Retorne SEMPRE JSON válido com: tipo_operacao, acao, confianca, dados_extraidos, dados_faltantes, explicacao_interna.`;
+
 async function callAIForDecision(
   message: string, 
   context: DecisionInput["context"]
@@ -482,74 +493,16 @@ ${cc.lastCategory ? `- Última categoria: ${cc.lastCategory}` : ""}
 - "mesma categoria" → usar categoria ${cc.lastCategory || "anterior"}
 
 Você DEVE interpretar essas referências com base no contexto.
-Exemplo: Se última query foi "gastos de hoje" e usuário diz "e ontem?", retorne:
-  tipo_operacao: "consulta", query_scope: "expenses", time_range: "yesterday"
 `;
     }
     
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content: `Você é Finax — um analisador semântico financeiro. Seu papel é interpretar INTENÇÕES humanas e extrair dados relevantes para o Decision Engine. Você NÃO executa ações, não registra dados e não decide fluxos: seu output é apenas uma interpretação semântica estruturada que será avaliada pelo Decision Engine.
-
-═══════════════════════════════════════════════════════════════
-⚖️ PRINCÍPIOS INEGOCIÁVEIS (LEIS DE PRECEDÊNCIA)
-═══════════════════════════════════════════════════════════════
-
-1) PRECEDÊNCIA ABSOLUTA: Se a mensagem contém um VERBO ou TERMO semântico que indique claramente uma intenção (ex.: recebi, caiu, entrou, ganhei, gastei, paguei, comprei, limite, fatura, cancela, quanto), essa intenção é considerada DEFINIDA e soberana. NESTE CASO, NÚMEROS NÃO INVALIDAM A INTENÇÃO e NUNCA devem causar a pergunta "gasto ou entrada".
-
-2) NÚMERO ISOLADO (exceção única): Considere "numero_isolado" somente quando o texto, após normalização (remoção de pontuação e símbolos), contiver APENAS um número (ex.: "100" ou "100,00") e não houver verbos, nem substantivos, nem palavras-chave de domínio. Neste único cenário, retorne tipo_operacao = "numero_isolado".
-
-3) CONFLITOS SEMÂNTICOS: Se houver sinais conflitantes claros (palavras de entrada e de gasto simultâneas sem resolução), classifique como "desconhecido" e explique a ambiguidade; não force execução.
-
-═══════════════════════════════════════════════════════════════
-🧠 COMO PENSAR (ORDEM DE AVALIAÇÃO)
-═══════════════════════════════════════════════════════════════
-
-A. Normalizar texto (lowercase, remover emojis irrelevantes, tokenizar).
-B. Detectar SINAIS DE INTENÇÃO (verbos e keywords de domínio). Se encontrado → atribuir tipo_operacao conforme sinal. Pare aqui.
-C. Extrair números e entidades (valor, cartão, estabelecimento, forma_pagamento, periodicidade).
-D. Inferir categoria sempre que possível.
-E. Verificar completude dos slots obrigatórios para a intent detectada.
-F. Gerar OUTPUT JSON estrito (modelo abaixo). Nunca gere texto livre em vez do JSON.
-
-═══════════════════════════════════════════════════════════════
-🌍 DOMÍNIOS FINANCEIROS (MUNDOS ISOLADOS)
-═══════════════════════════════════════════════════════════════
-
-💰 ENTRADA = Dinheiro ENTRANDO
-   Sinais: recebi, caiu, entrou, ganhei, pix recebido, pagamento recebido, salário, vender
-
-💸 GASTO = Dinheiro SAINDO
-   Sinais: gastei, comprei, paguei, custou, passei no cartão, foi, perdi
-
-🏦 CARTAO = Cartões e contratos (NÃO é transação!)
-   Sinais: limite, fatura, vencimento, aumento, diminuição, bloqueio + nome de banco/cartão
-
-🔎 CONSULTA = Dúvidas e análises
-   Sinais: quanto tenho, resumo, saldo, quanto gastei, posso gastar, total do mês
-
-🚫 CANCELAMENTO = Correções
-   Sinais: cancela, errei, apaga, esquece, deixa pra lá, não foi isso, não quero
-
-❓ DESCONHECIDO = Ambiguidade REAL (não forçar!)
-
-═══════════════════════════════════════════════════════════════
-⚠️ REGRAS DE INCERTEZA
-═══════════════════════════════════════════════════════════════
-
-- Se intent foi definida por verbo/keyword claro, confiança = 1.0
-- Se intent for inferida por sinais fracos, confiança < 1.0 e explique
-- Nunca force confiança 1.0 se houver conflito
-- NUNCA CRIE AMBIGUIDADE ONDE O HUMANO FOI CLARO
+    // =========================================================================
+    // 📝 BUSCAR PROMPT DO BANCO (COM FALLBACK)
+    // =========================================================================
+    const basePrompt = await getActivePrompt("finax_classifier", FALLBACK_CLASSIFIER_PROMPT);
+    
+    // Construir prompt final com contexto dinâmico
+    const systemPrompt = `${basePrompt}
 
 ═══════════════════════════════════════════════════════════════
 📊 CONTEXTO ATIVO
@@ -561,82 +514,16 @@ ${contextInfo || "Nenhum contexto ativo."}
 ═══════════════════════════════════════════════════════════════
 
 Quando tipo_operacao = "consulta", você DEVE SEMPRE retornar no dados_extraidos:
-
 - query_scope: "expenses" | "income" | "all"
-- start_date: data inicial em formato ISO 8601 (ex: "2026-01-31T00:00:00.000Z")
-- end_date: data final em formato ISO 8601 (ex: "2026-01-31T23:59:59.999Z")  
-- time_range: "today" | "yesterday" | "week" | "month" | "custom" (apenas para formatação)
+- start_date: data inicial em formato ISO 8601
+- end_date: data final em formato ISO 8601
+- time_range: "today" | "yesterday" | "week" | "month" | "custom"
 
 DATA ATUAL DE REFERÊNCIA: ${new Date().toISOString()}
 
-EXEMPLOS:
-
-1) Usuário: "Quanto gastei hoje?"
-   Retornar:
-   {
-     "tipo_operacao": "consulta",
-     "dados_extraidos": {
-       "query_scope": "expenses",
-       "start_date": "2026-02-01T00:00:00.000Z",
-       "end_date": "2026-02-01T23:59:59.999Z",
-       "time_range": "today"
-     }
-   }
-
-2) Contexto anterior: { lastQueryScope: "expenses", lastTimeRange: "today" }
-   Usuário: "e ontem?"
-   Retornar:
-   {
-     "tipo_operacao": "consulta",
-     "dados_extraidos": {
-       "query_scope": "expenses",        // ← MANTÉM do contexto
-       "start_date": "2026-01-31T00:00:00.000Z",
-       "end_date": "2026-01-31T23:59:59.999Z",
-       "time_range": "yesterday"
-     }
-   }
-
-3) Usuário: "últimos 5 dias"
-   Retornar:
-   {
-     "tipo_operacao": "consulta",
-     "dados_extraidos": {
-       "query_scope": "expenses",
-       "start_date": "2026-01-27T00:00:00.000Z",  // 5 dias atrás
-       "end_date": "2026-02-01T23:59:59.999Z",
-       "time_range": "custom"
-     }
-   }
-
-4) Usuário: "quanto gastei no dia 31/01" ou "gastos do dia 31"
-   Retornar:
-   {
-     "tipo_operacao": "consulta",
-     "dados_extraidos": {
-       "query_scope": "expenses",
-       "start_date": "2026-01-31T00:00:00.000Z",  // Dia específico
-       "end_date": "2026-01-31T23:59:59.999Z",
-       "time_range": "custom"
-     }
-   }
-
-5) Usuário: "semana passada"
-   Retornar:
-   {
-     "tipo_operacao": "consulta",
-     "dados_extraidos": {
-       "query_scope": "expenses",
-       "start_date": "2026-01-25T00:00:00.000Z",  // Segunda-feira anterior
-       "end_date": "2026-01-31T23:59:59.999Z",    // Domingo anterior
-       "time_range": "custom"
-     }
-   }
-   
 ═══════════════════════════════════════════════════════════════
 📤 SAÍDA OBRIGATÓRIA (JSON)
 ═══════════════════════════════════════════════════════════════
-
-Devolva SEMPRE este JSON válido (campos null quando apropriado, sem markdown):
 
 {
   "tipo_operacao": "entrada|gasto|recorrente|parcelamento|cartao|consulta|cancelamento|numero_isolado|desconhecido",
@@ -651,34 +538,25 @@ Devolva SEMPRE este JSON válido (campos null quando apropriado, sem markdown):
     "fonte": null ou string,
     "nome_cartao": null ou string,
     "num_parcelas": null ou integer,
-    "valor_parcela": null ou number,
-    "dia_referencia": null ou integer ou string
+    "query_scope": null ou string,
+    "start_date": null ou string,
+    "end_date": null ou string,
+    "time_range": null ou string
   },
   "dados_faltantes": ["lista", "de", "campos"],
-  "proximo_dado": null ou string,
-  "mensagem_usuario": null ou string,
-  "usar_botoes": false ou true,
-  "botoes": null ou [{"id":"pix","texto":"Pix"}, ...],
-  "explicacao_interna": "Breve razão da decisão (frase curta)"
-}
+  "explicacao_interna": "Breve razão da decisão"
+}`;
 
-═══════════════════════════════════════════════════════════════
-📝 EXEMPLOS DE COMPORTAMENTO
-═══════════════════════════════════════════════════════════════
-
-"Recebi 100 no pix" → tipo_operacao="entrada", acao="registrar", confianca=1.0 (verbo "recebi")
-"100" → tipo_operacao="numero_isolado", acao="coletar", confianca=0.5, mensagem_usuario="Isso foi um Gasto ou uma Entrada?"
-"Gastei 50 no mercado" → tipo_operacao="gasto", acao="coletar", confianca=1.0, dados_faltantes=["forma_pagamento"]
-"Limite do Nubank 6400" → tipo_operacao="cartao", acao="atualizar", confianca=1.0
-
-═══════════════════════════════════════════════════════════════
-🛡️ REGRAS DE SEGURANÇA
-═══════════════════════════════════════════════════════════════
-
-- Não tente executar, registrar ou validar slots finais. Output é apenas interpretação.
-- Marque claramente em "dados_faltantes" o que falta; pergunte apenas UM slot por vez.
-- Se detectar mudança de intenção no meio da conversa, inclua: "mudanca_intencao_detectada".`
-          },
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: systemPrompt },
           { role: "user", content: message }
         ],
       }),
@@ -704,23 +582,23 @@ Devolva SEMPRE este JSON válido (campos null quando apropriado, sem markdown):
     
     const actionType = typeMap[parsed.tipo_operacao] || parsed.type || "unknown";
     
-const slots: ExtractedSlots = {};
-if (parsed.dados_extraidos) {
-  if (parsed.dados_extraidos.valor) slots.amount = parsed.dados_extraidos.valor;
-  if (parsed.dados_extraidos.descricao) slots.description = parsed.dados_extraidos.descricao;
-  if (parsed.dados_extraidos.forma_pagamento) slots.payment_method = parsed.dados_extraidos.forma_pagamento;
-  if (parsed.dados_extraidos.fonte) slots.source = parsed.dados_extraidos.fonte;
-  if (parsed.dados_extraidos.nome_cartao) slots.card = parsed.dados_extraidos.nome_cartao;
-  if (parsed.dados_extraidos.categoria) slots.category = parsed.dados_extraidos.categoria;
-  
-  // ✅ Mapear campos de query dinâmica
-  if (parsed.dados_extraidos.query_scope) slots.query_scope = parsed.dados_extraidos.query_scope;
-  if (parsed.dados_extraidos.start_date) slots.start_date = parsed.dados_extraidos.start_date;
-  if (parsed.dados_extraidos.end_date) slots.end_date = parsed.dados_extraidos.end_date;
-  if (parsed.dados_extraidos.time_range) slots.time_range = parsed.dados_extraidos.time_range;
-} else if (parsed.slots) {
-  Object.assign(slots, parsed.slots);
-}
+    const slots: ExtractedSlots = {};
+    if (parsed.dados_extraidos) {
+      if (parsed.dados_extraidos.valor) slots.amount = parsed.dados_extraidos.valor;
+      if (parsed.dados_extraidos.descricao) slots.description = parsed.dados_extraidos.descricao;
+      if (parsed.dados_extraidos.forma_pagamento) slots.payment_method = parsed.dados_extraidos.forma_pagamento;
+      if (parsed.dados_extraidos.fonte) slots.source = parsed.dados_extraidos.fonte;
+      if (parsed.dados_extraidos.nome_cartao) slots.card = parsed.dados_extraidos.nome_cartao;
+      if (parsed.dados_extraidos.categoria) slots.category = parsed.dados_extraidos.categoria;
+      
+      // ✅ Mapear campos de query dinâmica
+      if (parsed.dados_extraidos.query_scope) slots.query_scope = parsed.dados_extraidos.query_scope;
+      if (parsed.dados_extraidos.start_date) slots.start_date = parsed.dados_extraidos.start_date;
+      if (parsed.dados_extraidos.end_date) slots.end_date = parsed.dados_extraidos.end_date;
+      if (parsed.dados_extraidos.time_range) slots.time_range = parsed.dados_extraidos.time_range;
+    } else if (parsed.slots) {
+      Object.assign(slots, parsed.slots);
+    }
     
     console.log(`🤖 [DE AI] ${parsed.tipo_operacao || parsed.type} → ${actionType} (${((parsed.confianca || parsed.confidence || 0.5) * 100).toFixed(0)}%)`);
     console.log(`📋 [DE AI] Evidências: ${JSON.stringify(parsed.evidencias_encontradas || [])}`);

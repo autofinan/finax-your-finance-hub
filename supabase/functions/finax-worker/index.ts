@@ -3667,10 +3667,12 @@ async function processarJob(job: any): Promise<void> {
       
       // ========================================================================
       // 📅 ADICIONAR DATA RELATIVA AOS SLOTS (se detectada)
+      // CORREÇÃO: Usar getBrasiliaISO() para evitar conversão UTC (+3h)
       // ========================================================================
       if (transactionDate) {
-        slots.transaction_date = transactionDate.toISOString();
-        console.log(`📅 [EXPENSE] Data relativa aplicada: ${transactionDate.toISOString().split('T')[0]}`);
+        const { dateISO } = getBrasiliaISO(transactionDate);
+        slots.transaction_date = dateISO;
+        console.log(`📅 [EXPENSE] Data relativa aplicada: ${dateISO.split('T')[0]} (Brasília)`);
       }
       
       const missing = getMissingSlots("expense", slots);
