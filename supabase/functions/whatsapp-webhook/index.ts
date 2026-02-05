@@ -25,8 +25,79 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const WHATSAPP_VERIFY_TOKEN = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
 const WHATSAPP_ACCESS_TOKEN = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
 const WHATSAPP_PHONE_NUMBER_ID = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+const WHATSAPP_APP_SECRET = Deno.env.get("WHATSAPP_APP_SECRET");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// ============================================================================
+// 🔐 WEBHOOK SIGNATURE VERIFICATION (X-Hub-Signature-256)
+// ============================================================================
+
+async function verifyWebhookSignature(
+  payload: string,
+  signature: string | null
+): Promise<boolean> {
+  // If no app secret configured, skip verification (development mode)
+  if (!WHATSAPP_APP_SECRET) {
+    console.warn("⚠️ [SECURITY] WHATSAPP_APP_SECRET not configured - skipping signature verification");
+    return true;
+  }
+  
+  // Signature required when secret is configured
+  if (!signature) {
+    console.error("❌ [SECURITY] Missing X-Hub-Signature-256 header");
+    return false;
+  }
+  
+  try {
+    const expectedSignature = signature.replace('sha256=', '');
+    
+    // Import the secret key for HMAC-SHA256
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(WHATSAPP_APP_SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    
+    // Compute HMAC signature
+    const signatureBytes = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(payload)
+    );
+    
+    // Convert to hex string
+    const computedSignature = Array.from(new Uint8Array(signatureBytes))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+    
+    // Constant-time comparison to prevent timing attacks
+    if (computedSignature.length !== expectedSignature.length) {
+      console.error("❌ [SECURITY] Signature length mismatch");
+      return false;
+    }
+    
+    let result = true;
+    for (let i = 0; i < computedSignature.length; i++) {
+      if (computedSignature[i] !== expectedSignature[i]) {
+        result = false;
+      }
+    }
+    
+    if (!result) {
+      console.error("❌ [SECURITY] Invalid webhook signature");
+    } else {
+      console.log("✅ [SECURITY] Webhook signature verified");
+    }
+    
+    return result;
+  } catch (error) {
+    console.error("❌ [SECURITY] Signature verification error:", error);
+    return false;
+  }
+}
 
 // ============================================================================
 // 📱 RESPOSTA RÁPIDA (FEEDBACK IMEDIATO AO USUÁRIO)
@@ -356,7 +427,21 @@ serve(async (req) => {
   // TRY/CATCH GLOBAL - SEMPRE 200
   // ============================================================================
   try {
-    const json = await req.json();
+    // Read raw body for signature verification
+    const rawBody = await req.text();
+    const signature = req.headers.get("X-Hub-Signature-256");
+    
+    // 🔐 VERIFY WEBHOOK SIGNATURE BEFORE PROCESSING
+    if (!await verifyWebhookSignature(rawBody, signature)) {
+      console.error("❌ [WEBHOOK] Invalid signature - rejecting request");
+      return new Response(
+        JSON.stringify({ status: "ok", error: "invalid_signature" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    // Parse the verified payload
+    const json = JSON.parse(rawBody);
     console.log("📨 [WEBHOOK] Payload recebido");
 
     // 1. Parse payload
