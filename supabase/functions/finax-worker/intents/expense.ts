@@ -16,13 +16,14 @@ import { checkImmediateAlerts } from "../intents/alerts.ts";
 import { getDecisionConfig, recordMetric } from "../governance/config.ts";
 import { categorizeDescription, type CategorizationResult } from "../ai/categorizer.ts";
 import { getBrasiliaDate, getBrasiliaISO, formatBrasiliaDateTime, getPaymentEmoji } from "../utils/date-helpers.ts";
+import { markAsExecuted } from "../ai-decisions.ts";  // ✅ ADICIONAR IMPORT
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ============================================================================
-// 📝 REGISTRAR TRANSAÇÃO
+// 💰 REGISTRAR TRANSAÇÃO
 // ============================================================================
 
 export interface ExpenseResult {
@@ -108,9 +109,6 @@ export async function registerExpense(
   // ========================================================================
   // 🕒 USAR TIMEZONE BRASÍLIA PARA DATA/HORA
   // ========================================================================
-  // Se o usuário disse "ontem", usar a data passada via slots.transaction_date
-  // Caso contrário, usar a data/hora atual de Brasília
-  // ========================================================================
   const transactionDate = slots.transaction_date 
     ? new Date(slots.transaction_date) 
     : getBrasiliaDate();
@@ -136,10 +134,35 @@ export async function registerExpense(
   
   if (error) {
     console.error("❌ [EXPENSE] Erro:", error);
+    
+    // ✅ Marcar decisão como falha
+    if (actionId) {
+      const { data: action } = await supabase
+        .from("actions")
+        .select("meta")
+        .eq("id", actionId)
+        .single();
+      
+      const decisionId = action?.meta?.decision_id;
+      await markAsExecuted(decisionId, false);
+    }
+    
     return {
       success: false,
       message: "Ops, algo deu errado ao registrar 😕"
     };
+  }
+  
+  // ✅ Marcar decisão como executada com sucesso
+  if (actionId) {
+    const { data: action } = await supabase
+      .from("actions")
+      .select("meta")
+      .eq("id", actionId)
+      .single();
+    
+    const decisionId = action?.meta?.decision_id;
+    await markAsExecuted(decisionId, true);
   }
   
   // Fechar action se existir
@@ -197,7 +220,9 @@ export async function registerExpense(
     payment_method: slots.payment_method || "unknown"
   });
   
-  // Formatar resposta amigável usando timezone Brasília
+  // ========================================================================
+  // 📅 FORMATAR RESPOSTA COM DATA CORRETA
+  // ========================================================================
   const formattedDateTime = formatBrasiliaDateTime(transactionDate);
   const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
   
@@ -206,7 +231,7 @@ export async function registerExpense(
     `📂 ${category}\n` +
     (slots.description ? `📝 ${slots.description}\n` : "") +
     `${paymentEmoji} ${slots.payment_method}\n` +
-    `📅 ${formatBrasiliaDateTime(transactionDate)}\n\n` +
+    `📅 ${formattedDateTime}\n\n` +  // ✅ CORRIGIDO: usar formattedDateTime
     `_Responda "cancelar" se foi engano!_`;
   
   console.log(`✅ [EXPENSE] Registrado: ${transaction.id}`);
