@@ -3863,34 +3863,25 @@ export type Database = {
       }
       vw_status_plano: {
         Row: {
-          alerta_trial: string | null
+          ativo: boolean | null
           dias_restantes_trial: number | null
-          nome: string | null
-          phone_number: string | null
           plano: string | null
-          status_plano: string | null
           trial_fim: string | null
           trial_inicio: string | null
           usuario_id: string | null
         }
         Insert: {
-          alerta_trial?: never
+          ativo?: never
           dias_restantes_trial?: never
-          nome?: string | null
-          phone_number?: string | null
           plano?: string | null
-          status_plano?: never
           trial_fim?: string | null
           trial_inicio?: string | null
           usuario_id?: string | null
         }
         Update: {
-          alerta_trial?: never
+          ativo?: never
           dias_restantes_trial?: never
-          nome?: string | null
-          phone_number?: string | null
           plano?: string | null
-          status_plano?: never
           trial_fim?: string | null
           trial_inicio?: string | null
           usuario_id?: string | null
