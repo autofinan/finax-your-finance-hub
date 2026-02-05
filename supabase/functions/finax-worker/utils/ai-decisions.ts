@@ -41,12 +41,20 @@ export async function saveAIDecision(data: AIDecisionInput): Promise<string | nu
         ai_reasoning: data.aiReasoning?.slice(0, 500),
         ai_source: data.aiSource || "ai",
         model_version: "gemini-2.5-flash",
-        execution_result: "pending"
+        execution_result: "pending",
+        was_executed: false  // ✅ ADICIONAR ESTA LINHA
       })
       .select("id")
       .single();
     
-    if (error) return null;
+    if (error) {
+      logger.warn({ 
+        component: "ai_tracker", 
+        userId: data.userId,
+        error: error.message
+      }, "Falha ao salvar decisão");
+      return null;
+    }
     
     logger.debug({ 
       component: "ai_tracker", 
@@ -55,7 +63,11 @@ export async function saveAIDecision(data: AIDecisionInput): Promise<string | nu
     }, "Decisão salva");
     
     return record.id;
-  } catch {
+  } catch (error) {
+    logger.error({ 
+      component: "ai_tracker", 
+      userId: data.userId 
+    }, "Exceção ao salvar decisão");
     return null;
   }
 }
@@ -78,7 +90,17 @@ export async function markAsExecuted(
         executed_at: new Date().toISOString()
       })
       .eq("id", decisionId);
-  } catch {}
+    
+    logger.debug({ 
+      component: "ai_tracker", 
+      decisionId 
+    }, `Marcado como ${success ? 'sucesso' : 'falha'}`);
+  } catch (error) {
+    logger.error({ 
+      component: "ai_tracker", 
+      decisionId 
+    }, "Erro ao marcar como executado");
+  }
 }
 
 /**
@@ -101,7 +123,18 @@ export async function markAsIncorrect(
         confirmed_at: new Date().toISOString()
       })
       .eq("id", decisionId);
-  } catch {}
+    
+    logger.info({ 
+      component: "ai_tracker", 
+      decisionId,
+      correctType 
+    }, "Marcado como incorreto");
+  } catch (error) {
+    logger.error({ 
+      component: "ai_tracker", 
+      decisionId 
+    }, "Erro ao marcar como incorreto");
+  }
 }
 
 /**
@@ -135,3 +168,10 @@ export async function getQualityMetrics(days: number = 7) {
   
   return stats;
 }
+
+export default {
+  saveAIDecision,
+  markAsExecuted,
+  markAsIncorrect,
+  getQualityMetrics
+};
