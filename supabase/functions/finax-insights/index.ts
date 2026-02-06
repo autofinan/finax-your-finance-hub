@@ -76,10 +76,7 @@ interface AlertFromDB {
   message: string;
   severity: string;
   utility_score: number;
-  usuarios: {
-    telefone: string;
-    nome: string;
-  };
+  usuarios: Array<{ telefone: string; nome: string }>;
 }
 
 async function processAlerts(): Promise<{ sent: number; failed: number; skipped: number }> {
@@ -115,7 +112,8 @@ async function processAlerts(): Promise<{ sent: number; failed: number; skipped:
     const alert = alertRaw as unknown as AlertFromDB;
     
     // Verificar se usuário tem telefone
-    const telefone = alert.usuarios?.telefone;
+    const user = alert.usuarios?.[0];
+    const telefone = user?.telefone;
     if (!telefone) {
       console.log(`⏭️ [INSIGHTS] Usuário sem telefone: ${alert.user_id.slice(0, 8)}`);
       skipped++;
@@ -143,7 +141,7 @@ async function processAlerts(): Promise<{ sent: number; failed: number; skipped:
         .eq("id", alert.id);
       
       sent++;
-      console.log(`✅ [INSIGHTS] Alerta ${alert.alert_type} enviado para ${alert.usuarios?.nome || "usuário"}`);
+      console.log(`✅ [INSIGHTS] Alerta ${alert.alert_type} enviado para ${user?.nome || "usuário"}`);
     } else {
       // Marcar como falha (mas não bloquear re-tentativa futura)
       await supabase
