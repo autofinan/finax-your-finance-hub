@@ -1338,7 +1338,7 @@ function extractSlotValue(message: string, slotType: string): any {
 // ============================================================================
 // ⏱️ TTL CONFIGURÁVEL PARA ACTIONS (15 minutos)
 // ============================================================================
-const ACTION_TTL_MINUTES = 15;
+const ACTION_TTL_MINUTES = 30;
 
 async function getActiveAction(userId: string): Promise<ActiveAction | null> {
   const ttlAgo = new Date(Date.now() - ACTION_TTL_MINUTES * 60 * 1000).toISOString();
@@ -1347,14 +1347,14 @@ async function getActiveAction(userId: string): Promise<ActiveAction | null> {
     .from("actions")
     .update({ status: "expired" })
     .eq("user_id", userId)
-    .in("status", ["collecting", "awaiting_input", "pending_selection"])
+    .in("status", ["collecting", "awaiting_input", "pending_selection", "awaiting_confirmation"])
     .lt("updated_at", ttlAgo);
   
   const { data: action } = await supabase
     .from("actions")
     .select("*")
     .eq("user_id", userId)
-    .in("status", ["collecting", "awaiting_input", "pending_selection"])
+    .in("status", ["collecting", "awaiting_input", "pending_selection", "awaiting_confirmation"])
     .order("created_at", { ascending: false })
     .limit(1)
     .single();

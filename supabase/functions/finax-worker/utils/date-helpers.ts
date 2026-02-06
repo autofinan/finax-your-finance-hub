@@ -169,7 +169,16 @@ export function getBrasiliaDateParts(date?: Date | string): {
  * @returns Objeto com dateISO e timeString
  */
 export function getBrasiliaISO(date?: Date | string): { dateISO: string; timeString: string } {
+  const d = date ? (typeof date === 'string' ? new Date(date) : date) : getBrasiliaDate();
+  
+  console.log(`🕐 [BRASILIA_ISO] Input: ${d.toISOString()}`);
+  console.log(`🕐 [BRASILIA_ISO] Input toString: ${d.toString()}`);
+  
   const result = getBrasiliaDateParts(date);
+  
+  console.log(`🕐 [BRASILIA_ISO] Output: ${result.dataISO}`);
+  console.log(`🕐 [BRASILIA_ISO] Time: ${result.hora}`);
+  
   return {
     dateISO: result.dataISO,
     timeString: result.hora
