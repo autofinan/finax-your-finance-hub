@@ -16,15 +16,11 @@ import { checkImmediateAlerts } from "../intents/alerts.ts";
 import { getDecisionConfig, recordMetric } from "../governance/config.ts";
 import { categorizeDescription, type CategorizationResult } from "../ai/categorizer.ts";
 import { getBrasiliaDate, getBrasiliaISO, formatBrasiliaDateTime, getPaymentEmoji } from "../utils/date-helpers.ts";
- import { markAsExecuted } from "../utils/ai-decisions.ts";
+import { markAsExecuted } from "../utils/ai-decisions.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-// ============================================================================
-// 💰 REGISTRAR TRANSAÇÃO
-// ============================================================================
 
 export interface ExpenseResult {
   success: boolean;
@@ -41,7 +37,6 @@ export async function registerExpense(
 ): Promise<ExpenseResult> {
   console.log(`💸 [EXPENSE] Registrando: ${JSON.stringify(slots)}`);
   
-  // Verificar slots obrigatórios
   const requirements = SLOT_REQUIREMENTS.expense;
   for (const required of requirements.required) {
     if (!slots[required]) {
@@ -52,7 +47,6 @@ export async function registerExpense(
     }
   }
   
-  // Gerar hash de deduplicação
   const dedupeHash = generateDedupeHash(
     userId,
     slots.amount,
@@ -60,11 +54,9 @@ export async function registerExpense(
     slots.payment_method
   );
   
-  // Verificar duplicação
   const { isDuplicate, existingTx, minutesAgo } = await checkDuplicate(userId, dedupeHash);
   
   if (isDuplicate) {
-    // Criar action de confirmação de duplicado
     await createAction(userId, "duplicate_confirm", "duplicate_expense", {
       ...slots,
       original_tx_id: existingTx.id
@@ -77,9 +69,6 @@ export async function registerExpense(
     };
   }
   
-  // ========================================================================
-  // 🧠 CATEGORIZAÇÃO IA-FIRST COM AUTOAPRENDIZADO
-  // ========================================================================
   const categoryResult = await categorizeDescription(
     slots.description || "",
     slots.category
@@ -92,9 +81,6 @@ export async function registerExpense(
     console.log(`   └─ 🧠 Termo "${categoryResult.keyTerm}" aprendido para futuras transações!`);
   }
   
-  // ========================================================================
-  // 📍 BUSCAR CONTEXTO ATIVO (viagem, evento, etc.)
-  // ========================================================================
   const { data: activeContext } = await supabase
     .from("user_contexts")
     .select("id, label")
@@ -107,13 +93,34 @@ export async function registerExpense(
   }
   
   // ========================================================================
-  // 🕒 USAR TIMEZONE BRASÍLIA PARA DATA/HORA
+  // ✅ CORREÇÃO CRÍTICA: Preservar timezone ao converter transaction_date
   // ========================================================================
-  const transactionDate = slots.transaction_date 
-    ? new Date(slots.transaction_date) 
-    : getBrasiliaDate();
+  let transactionDate: Date;
+  let dateISO: string;
+  let timeString: string;
   
-  const { dateISO, timeString } = getBrasiliaISO(transactionDate);
+  if (slots.transaction_date) {
+    // Veio dos slots (ex: "uber 10 ontem")
+    // NÃO converter para new Date() diretamente pois perde timezone
+    const slotDate = new Date(slots.transaction_date);
+    
+    // Forçar interpretação como horário de Brasília
+    const result = getBrasiliaISO(slotDate);
+    dateISO = result.dateISO;
+    timeString = result.timeString;
+    transactionDate = slotDate;
+    
+    console.log(`📅 [EXPENSE] Data dos slots: ${slots.transaction_date}`);
+    console.log(`📅 [EXPENSE] Convertido para: ${dateISO} (${timeString})`);
+  } else {
+    // Data atual de Brasília
+    transactionDate = getBrasiliaDate();
+    const result = getBrasiliaISO(transactionDate);
+    dateISO = result.dateISO;
+    timeString = result.timeString;
+    
+    console.log(`📅 [EXPENSE] Data atual: ${dateISO} (${timeString})`);
+  }
   
   const { data: transaction, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
@@ -135,7 +142,6 @@ export async function registerExpense(
   if (error) {
     console.error("❌ [EXPENSE] Erro:", error);
     
-    // ✅ Marcar decisão como falha
     if (actionId) {
       const { data: action } = await supabase
         .from("actions")
@@ -153,7 +159,6 @@ export async function registerExpense(
     };
   }
   
-  // ✅ Marcar decisão como executada com sucesso
   if (actionId) {
     const { data: action } = await supabase
       .from("actions")
@@ -165,12 +170,10 @@ export async function registerExpense(
     await markAsExecuted(decisionId, true);
   }
   
-  // Fechar action se existir
   if (actionId) {
     await closeAction(actionId, transaction.id);
   }
   
-  // Log
   await supabase.from("finax_logs").insert({
     user_id: userId,
     action_type: "registrar_gasto",
@@ -179,13 +182,8 @@ export async function registerExpense(
     new_data: { ...slots, category }
   });
   
-  // ========================================================================
-  // 🧠 ELITE INTEGRATIONS (pós-registro)
-  // ========================================================================
-  
   const config = await getDecisionConfig();
   
-  // 1. MEMORY LAYER: Aprender padrão do merchant (se habilitado)
   if (config.auto_apply_patterns && slots.description) {
     try {
       await learnMerchantPattern({
@@ -203,7 +201,6 @@ export async function registerExpense(
     }
   }
   
-  // 2. PROACTIVE AI: Verificar alertas imediatos (silencioso)
   try {
     await checkImmediateAlerts(userId, {
       valor: slots.amount!,
@@ -214,14 +211,13 @@ export async function registerExpense(
     console.error(`🚨 [ALERTS] Erro ao verificar alertas:`, err);
   }
   
-  // 3. Registrar métrica
   await recordMetric("expense_registered", slots.amount || 0, {
     category,
     payment_method: slots.payment_method || "unknown"
   });
   
   // ========================================================================
-  // 📅 FORMATAR RESPOSTA COM DATA CORRETA
+  // ✅ USAR DATA CORRETA NA MENSAGEM
   // ========================================================================
   const formattedDateTime = formatBrasiliaDateTime(transactionDate);
   const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
@@ -231,10 +227,12 @@ export async function registerExpense(
     `📂 ${category}\n` +
     (slots.description ? `📝 ${slots.description}\n` : "") +
     `${paymentEmoji} ${slots.payment_method}\n` +
-    `📅 ${formattedDateTime}\n\n` +  // ✅ CORRIGIDO: usar formattedDateTime
+    `📅 ${formattedDateTime}\n\n` +
     `_Responda "cancelar" se foi engano!_`;
   
   console.log(`✅ [EXPENSE] Registrado: ${transaction.id}`);
+  console.log(`📅 [EXPENSE] Salvo no banco: ${dateISO}`);
+  console.log(`📅 [EXPENSE] Mostrado ao usuário: ${formattedDateTime}`);
   
   return {
     success: true,
@@ -242,10 +240,6 @@ export async function registerExpense(
     transactionId: transaction.id
   };
 }
-
-// ============================================================================
-// 🔧 HELPERS
-// ============================================================================
 
 export function getMissingExpenseSlots(slots: ExtractedSlots): string[] {
   const requirements = SLOT_REQUIREMENTS.expense;
