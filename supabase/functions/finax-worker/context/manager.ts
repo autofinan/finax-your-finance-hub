@@ -30,7 +30,7 @@ export async function getActiveAction(userId: string): Promise<ActiveAction | nu
     .from("actions")
     .select("*")
     .eq("user_id", userId)
-    .in("status", ["collecting", "awaiting_input", "pending_selection"])
+    .in("status", ["collecting", "awaiting_input", "pending_selection", "awaiting_confirmation"])
     .order("created_at", { ascending: false })
     .limit(1)
     .single();
