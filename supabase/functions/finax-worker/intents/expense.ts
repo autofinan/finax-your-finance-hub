@@ -1,5 +1,5 @@
 // ============================================================================
-// 💸 INTENT: EXPENSE (Registrar Gasto) - VERSÃO CORRIGIDA
+// 💸 INTENT: EXPENSE (Registrar Gasto)
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -8,19 +8,14 @@ import {
   closeAction, 
   generateDedupeHash, 
   checkDuplicate,
-  createAction
+  createAction,
+  updateAction
 } from "../context/manager.ts";
 import { learnMerchantPattern } from "../memory/patterns.ts";
 import { checkImmediateAlerts } from "../intents/alerts.ts";
 import { getDecisionConfig, recordMetric } from "../governance/config.ts";
-import { categorizeDescription } from "../ai/categorizer.ts";
-import { 
-  getBrasiliaDate, 
-  getBrasiliaISO, 
-  formatBrasiliaDateTime, 
-  getPaymentEmoji,
-  getCategoryEmoji 
-} from "../utils/date-helpers.ts";
+import { categorizeDescription, type CategorizationResult } from "../ai/categorizer.ts";
+import { getBrasiliaDate, getBrasiliaISO, formatBrasiliaDateTime, getPaymentEmoji } from "../utils/date-helpers.ts";
 import { markAsExecuted } from "../utils/ai-decisions.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -40,10 +35,8 @@ export async function registerExpense(
   eventoId: string | null,
   actionId?: string
 ): Promise<ExpenseResult> {
-  console.log(`💸 [EXPENSE] ============================================`);
   console.log(`💸 [EXPENSE] Registrando: ${JSON.stringify(slots)}`);
   
-  // Verificar slots obrigatórios
   const requirements = SLOT_REQUIREMENTS.expense;
   for (const required of requirements.required) {
     if (!slots[required]) {
@@ -54,7 +47,6 @@ export async function registerExpense(
     }
   }
   
-  // Gerar hash de deduplicação
   const dedupeHash = generateDedupeHash(
     userId,
     slots.amount,
@@ -62,7 +54,6 @@ export async function registerExpense(
     slots.payment_method
   );
   
-  // Verificar duplicação
   const { isDuplicate, existingTx, minutesAgo } = await checkDuplicate(userId, dedupeHash);
   
   if (isDuplicate) {
@@ -78,7 +69,6 @@ export async function registerExpense(
     };
   }
   
-  // Categorização IA-First
   const categoryResult = await categorizeDescription(
     slots.description || "",
     slots.category
@@ -88,10 +78,9 @@ export async function registerExpense(
   console.log(`📂 [EXPENSE] Categorização: "${slots.description}" → ${category}`);
   console.log(`   └─ Fonte: ${categoryResult.source}, Confiança: ${categoryResult.confidence}`);
   if (categoryResult.learned) {
-    console.log(`   └─ 🧠 Termo "${categoryResult.keyTerm}" aprendido!`);
+    console.log(`   └─ 🧠 Termo "${categoryResult.keyTerm}" aprendido para futuras transações!`);
   }
   
-  // Buscar contexto ativo
   const { data: activeContext } = await supabase
     .from("user_contexts")
     .select("id, label")
@@ -100,51 +89,39 @@ export async function registerExpense(
     .single();
   
   if (activeContext) {
-    console.log(`📍 [EXPENSE] Contexto ativo: ${activeContext.label}`);
+    console.log(`📍 [EXPENSE] Contexto ativo: ${activeContext.label} (${activeContext.id})`);
   }
   
   // ========================================================================
-  // ✅ CORREÇÃO DEFINITIVA: Processar data corretamente
+  // ✅ CORREÇÃO CRÍTICA: Preservar timezone ao converter transaction_date
   // ========================================================================
-  let finalDate: Date;
+  let transactionDate: Date;
   let dateISO: string;
   let timeString: string;
   
   if (slots.transaction_date) {
-    // ✅ Usuário especificou data ("ontem", "dia 15", etc)
-    console.log(`📅 [EXPENSE] ========================================`);
-    console.log(`📅 [EXPENSE] SLOTS TEM TRANSACTION_DATE!`);
-    console.log(`📅 [EXPENSE] Valor recebido: ${slots.transaction_date}`);
+    // Veio dos slots (ex: "uber 10 ontem")
+    // NÃO converter para new Date() diretamente pois perde timezone
+    const slotDate = new Date(slots.transaction_date);
     
-    // Converter string ISO para Date
-    finalDate = new Date(slots.transaction_date);
-    console.log(`📅 [EXPENSE] Convertido para Date: ${finalDate.toISOString()}`);
-    
-    // Converter para ISO Brasília
-    const result = getBrasiliaISO(finalDate);
+    // Forçar interpretação como horário de Brasília
+    const result = getBrasiliaISO(slotDate);
     dateISO = result.dateISO;
     timeString = result.timeString;
+    transactionDate = slotDate;
     
-    console.log(`📅 [EXPENSE] Final ISO: ${dateISO}`);
-    console.log(`📅 [EXPENSE] Final Time: ${timeString}`);
-    console.log(`📅 [EXPENSE] ========================================`);
-    
+    console.log(`📅 [EXPENSE] Data dos slots: ${slots.transaction_date}`);
+    console.log(`📅 [EXPENSE] Convertido para: ${dateISO} (${timeString})`);
   } else {
-    // ✅ Usuário NÃO especificou data → usar AGORA
-    console.log(`📅 [EXPENSE] ========================================`);
-    console.log(`📅 [EXPENSE] SEM TRANSACTION_DATE - usando data atual`);
-    
-    finalDate = getBrasiliaDate();
-    const result = getBrasiliaISO(finalDate);
+    // Data atual de Brasília
+    transactionDate = getBrasiliaDate();
+    const result = getBrasiliaISO(transactionDate);
     dateISO = result.dateISO;
     timeString = result.timeString;
     
-    console.log(`📅 [EXPENSE] Data atual Brasília: ${dateISO}`);
-    console.log(`📅 [EXPENSE] Hora atual: ${timeString}`);
-    console.log(`📅 [EXPENSE] ========================================`);
+    console.log(`📅 [EXPENSE] Data atual: ${dateISO} (${timeString})`);
   }
   
-  // Salvar no banco
   const { data: transaction, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
     valor: slots.amount,
@@ -163,7 +140,7 @@ export async function registerExpense(
   }).select("id").single();
   
   if (error) {
-    console.error("❌ [EXPENSE] Erro ao salvar:", error);
+    console.error("❌ [EXPENSE] Erro:", error);
     
     if (actionId) {
       const { data: action } = await supabase
@@ -182,7 +159,6 @@ export async function registerExpense(
     };
   }
   
-  // Marcar decisão como executada
   if (actionId) {
     const { data: action } = await supabase
       .from("actions")
@@ -194,12 +170,10 @@ export async function registerExpense(
     await markAsExecuted(decisionId, true);
   }
   
-  // Fechar action
   if (actionId) {
     await closeAction(actionId, transaction.id);
   }
   
-  // Log
   await supabase.from("finax_logs").insert({
     user_id: userId,
     action_type: "registrar_gasto",
@@ -208,7 +182,6 @@ export async function registerExpense(
     new_data: { ...slots, category }
   });
   
-  // Elite integrations
   const config = await getDecisionConfig();
   
   if (config.auto_apply_patterns && slots.description) {
@@ -244,13 +217,12 @@ export async function registerExpense(
   });
   
   // ========================================================================
-  // ✅ FORMATAR MENSAGEM COM DATA CORRETA
+  // ✅ USAR DATA CORRETA NA MENSAGEM
   // ========================================================================
-  const formattedDateTime = formatBrasiliaDateTime(finalDate);
+  const formattedDateTime = formatBrasiliaDateTime(transactionDate);
   const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
-  const categoryEmoji = getCategoryEmoji(category);
   
-  const message = `${categoryEmoji} *Gasto registrado!*\n\n` +
+  const message = `✅ *Gasto registrado!*\n\n` +
     `💸 *-R$ ${slots.amount?.toFixed(2)}*\n` +
     `📂 ${category}\n` +
     (slots.description ? `📝 ${slots.description}\n` : "") +
@@ -258,11 +230,9 @@ export async function registerExpense(
     `📅 ${formattedDateTime}\n\n` +
     `_Responda "cancelar" se foi engano!_`;
   
-  console.log(`✅ [EXPENSE] ============================================`);
   console.log(`✅ [EXPENSE] Registrado: ${transaction.id}`);
-  console.log(`✅ [EXPENSE] Salvo no banco: ${dateISO}`);
-  console.log(`✅ [EXPENSE] Mostrado ao usuário: ${formattedDateTime}`);
-  console.log(`✅ [EXPENSE] ============================================`);
+  console.log(`📅 [EXPENSE] Salvo no banco: ${dateISO}`);
+  console.log(`📅 [EXPENSE] Mostrado ao usuário: ${formattedDateTime}`);
   
   return {
     success: true,
