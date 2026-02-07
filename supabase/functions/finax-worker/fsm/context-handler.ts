@@ -303,8 +303,8 @@ function fillPendingSlot(
     filledSlot: pendingSlot,
     slotValue: extractedValue,
     updatedSlots,
-    readyToConfirm: false, // Confirmação só em casos excepcionais
-    readyToExecute: missingSlots.length === 0 // Executa direto quando todos slots preenchidos
+    readyToConfirm: missingSlots.length === 0,
+    readyToExecute: missingSlots.length === 0 // Executa direto quando completo
   };
 }
 

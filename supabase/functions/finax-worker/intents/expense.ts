@@ -217,13 +217,7 @@ export async function registerExpense(
   // ========================================================================
   // ✅ USAR DATA CORRETA NA MENSAGEM
   // ========================================================================
-  // ✅ CORREÇÃO DEFINITIVA: Parsear dateISO direto (já tem data/hora corretas de Brasília)
-  // NÃO usar formatBrasiliaDateTime(transactionDate) que causa double-shift!
-  const [_datePart] = dateISO.split('T');
-  const [_y, _m, _d] = _datePart.split('-');
-  const _time = dateISO.substring(11, 16);
-  const formattedDateTime = `${_d}/${_m}/${_y} às ${_time}`;
-  
+  const formattedDateTime = formatBrasiliaDateTime(transactionDate);
   const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
   
   const message = `✅ *Gasto registrado!*\n\n` +
