@@ -100,18 +100,16 @@ export async function registerExpense(
   let timeString: string;
   
   if (slots.transaction_date) {
-    // Veio dos slots (ex: "uber 10 ontem")
-    // NÃO converter para new Date() diretamente pois perde timezone
-    const slotDate = new Date(slots.transaction_date);
+    // ✅ A data dos slots JÁ VEM CORRETA do parseRelativeDate()
+    // NÃO chamar getBrasiliaISO() - evita double-shift de -3h!
+    dateISO = slots.transaction_date;
+    transactionDate = new Date(slots.transaction_date);
     
-    // Forçar interpretação como horário de Brasília
-    const result = getBrasiliaISO(slotDate);
-    dateISO = result.dateISO;
-    timeString = result.timeString;
-    transactionDate = slotDate;
+    // Extrair só a hora (HH:mm) da string ISO
+    timeString = dateISO.substring(11, 16);
     
-    console.log(`📅 [EXPENSE] Data dos slots: ${slots.transaction_date}`);
-    console.log(`📅 [EXPENSE] Convertido para: ${dateISO} (${timeString})`);
+    console.log(`📅 [EXPENSE] Data dos slots (SEM CONVERTER): ${dateISO}`);
+    console.log(`📅 [EXPENSE] Hora extraída: ${timeString}`);
   } else {
     // Data atual de Brasília
     transactionDate = getBrasiliaDate();
