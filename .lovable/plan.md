@@ -1,266 +1,206 @@
 
-# Plano de Correcao - 3 Bugs Criticos + Insights
+# Correcao Definitiva - Data/Hora, Multi-Expense, e Confirmacao
 
-## Bug 1: "Sim" Nao Confirma Gasto (CAUSA RAIZ ENCONTRADA)
+## Diagnostico Completo (Causa Raiz de CADA Bug)
 
-1️⃣ REGRA DE OURO DO FINAX (OFICIAL)
+### Bug 1: Data "ontem" mostra 07/02 em vez de 06/02 + hora 18:53
 
-Você definiu algo muito importante — e isso vira regra de sistema:
+**Causa raiz**: A funcao `formatBrasiliaDateTime(transactionDate)` na linha 220 do expense.ts usa `Intl.DateTimeFormat` com `timeZone: 'America/Sao_Paulo'`. Porem, o `transactionDate` vem de `getBrasiliaDate()` que JA cria um Date com valores de Brasilia armazenados como UTC. Quando o Intl aplica a conversao de timezone NOVAMENTE, ocorre double-shift de -3h.
 
-Se a intenção estiver clara → REGISTRA DIRETO.
-Só perguntar quando houver dúvida real.
-Se já foi entendido, NÃO CONFIRMA.
+Alem disso, quando `slots.transaction_date` NAO esta definido (else branch), o `transactionDate = getBrasiliaDate()` produz um Date cujo valor UTC interno ja esta com valores de Brasilia. O `formatBrasiliaDateTime` aplica timezone de novo, gerando hora errada.
 
-Ou seja:
+**Solucao DEFINITIVA**: Nao usar `formatBrasiliaDateTime(transactionDate)` para a mensagem. Em vez disso, parsear a string `dateISO` diretamente (que JA contem data e hora corretas de Brasilia):
 
-❌ Confirmação não é etapa padrão
+```text
+// dateISO = "2026-02-06T15:53:00-03:00"
+// Extrair direto da string:
+const [datePart] = dateISO.split('T');
+const [year, month, day] = datePart.split('-');
+const time = dateISO.substring(11, 16); // "15:53"
+const formattedDateTime = `${day}/${month}/${year} as ${time}`;
+// Resultado: "06/02/2026 as 15:53"
+```
 
-❌ “Sim” não deveria ser necessário na maioria dos casos
-
-✅ Confirmação só existe como fallback de ambiguidade
-
-✅ E quando existir, tem que resolver, nunca gerar resumo mensal
-
-Isso está 100% alinhado com produto sério (WhatsApp-first).
-
-2️⃣ O QUE ESTÁ ERRADO HOJE (DE VERDADE)
-
-Vamos analisar o seu exemplo real:
-
-Fluxo:
-Cortei meu cabelo 35 reais paguei no crédito
-→ escolhe cartão
-→ sistema pede confirmação
-→ "Sim"
-→ resumo mensal (ERRADO)
-
-⚠️ Problemas reais (são DOIS, não um)
-❌ PROBLEMA A — Confirmação desnecessária
-
-Depois que:
-
-descrição ✔
-
-valor ✔
-
-meio ✔
-
-cartão ✔
-
-👉 Não existe mais ambiguidade
-👉 Não deveria existir estado awaiting_confirmation
-
-📌 Aqui o erro é de decisão, não de status.
-
-❌ PROBLEMA B — Quando a confirmação existe, ela quebra
-
-Esse você já diagnosticou corretamente:
-
-O status awaiting_confirmation não é recuperado
-
-O “Sim” cai no Decision Engine
-
-O engine responde qualquer coisa (resumo mensal)
-
-👉 Esse bug é real, mas não é a raiz do problema de UX
-
-3️⃣ O QUE SUBSTITUI O “BUG 1 – SIM NÃO CONFIRMA GASTO”
-
-Você pediu explicitamente:
-
-“Me dê algo para substituir isso”
-
-Então aqui está a versão correta, alinhada com seu produto 👇
-
-🔁 NOVO BUG 1 (CORRETO)
-🐞 Bug 1: Confirmação criada indevidamente após resolução completa da ação
-Diagnóstico (causa raiz real):
-
-O Finax entra em estado awaiting_confirmation mesmo quando todas as informações obrigatórias já foram resolvidas, incluindo:
-
-valor
-
-descrição
-
-meio de pagamento
-
-cartão específico
-
-Isso gera uma etapa redundante de confirmação, quebrando o princípio de registro direto quando a intenção é clara.
-
-Correção (arquitetural — e melhor):
-✅ REGRA NOVA (OBRIGATÓRIA):
-
-Se todos os campos obrigatórios estiverem preenchidos com alta confiança, o gasto DEVE ser registrado imediatamente.
-
-🔧 Correção técnica proposta (substitui o bug antigo):
-1. Eliminar awaiting_confirmation como estado padrão
-
-Ele só pode ser usado se:
-
-houver ambiguidade restante
-
-ou conflito de inferência
-
-2. Após escolha de cartão → registrar direto
-
-Arquivo:
-supabase/functions/finax-worker/intents/expense.ts
-
-Pseudo-regra:
-
-if (
-  expense.valor &&
-  expense.descricao &&
-  expense.metodo_pagamento &&
-  expense.cartao_id
-) {
-  return registerExpenseDirectly();
-}
-
-
-👉 Não cria confirmação
-👉 Não espera “Sim”
-👉 Não cria action pendente
-
-3. Estado awaiting_confirmation passa a ser EXCEÇÃO
-
-Exemplos válidos:
-
-Dois cartões igualmente prováveis
-
-Categoria conflitante
-
-Texto ambíguo (“paguei 50”)
-
-4. (Opcional, mas bom)
-
-Se existir confirmação:
-
-Ela tem botões
-
-E o “Sim” executa ação direta, nunca vai ao Decision Engine
+Isso elimina QUALQUER conversao de timezone e usa os valores que ja estao corretos.
 
 ---
 
-## Bug 2: Data "Ontem" e Horario Errado (+3h)
+### Bug 2: "ANTES DE ONTEM" nao detectado como data
 
-**Diagnostico**: A funcao `getBrasiliaDate()` cria um Date com valores de Brasilia mas no timezone local do servidor (UTC). Quando `parseRelativeDate` faz operacoes como `setDate(getDate() - 1)`, o Date ja esta "deslocado". Depois, `getBrasiliaISO()` aplica a conversao de timezone NOVAMENTE, causando duplo-offset.
+**Causa raiz**: O parseRelativeDate em date-helpers.ts tem o padrao `anteontem` (regex: `/\banteontem\b/`) mas NAO tem "antes de ontem" (com espacos).
 
-**Correcao**: Reescrever `getBrasiliaISO()` para usar `Intl.DateTimeFormat` com locale `sv-SE` (formato ISO nativo) em vez de `pt-BR`, e adicionar logs de debug. Tambem adicionar logs no `expense.ts` para rastrear o fluxo completo.
-
-Arquivos:
-- `supabase/functions/finax-worker/utils/date-helpers.ts` - Adicionar logs em `getBrasiliaISO`
-- `supabase/functions/finax-worker/intents/expense.ts` - Ja esta correto (correcao anterior aplicada), apenas adicionar mais logs
+**Solucao**: Adicionar padrao `antes_de_ontem` com regex `/\bantes\s+de\s+ontem\b/i` ANTES do padrao "anteontem" na lista de padroes.
 
 ---
 
-## Bug 3: Insights - Tipagem `usuarios` como Array
+### Bug 3: "DIA 05/02 COMPREI UMA AGUA DE 5" detectado como 2 gastos
 
-**Diagnostico**: Supabase retorna joins como arrays. O codigo atual assume `alert.usuarios.telefone` (objeto), mas recebe `alert.usuarios[{telefone}]` (array).
+**Causa raiz**: A deteccao de multiplos gastos (linha 3421) roda ANTES da deteccao de datas (linha 3454). A funcao `detectMultipleExpenses` encontra "05" (da data) e "5" (do valor) e interpreta como 2 gastos separados.
 
-**Correcao**: Acessar como `alert.usuarios?.[0]?.telefone` no finax-insights.
+**Solucao**: Adicionar um guard de DATA ao `shouldSkipMultiDetection`:
 
-Arquivo: `supabase/functions/finax-insights/index.ts`
+```text
+const DATE_PATTERN = /\b\d{1,2}\/\d{1,2}\b|dia\s+\d{1,2}|ontem|anteontem|antes\s+de\s+ontem/i;
+```
+
+Se a mensagem contem um padrao de data, pular a deteccao de multiplos gastos.
 
 ---
 
-## Detalhes Tecnicos
+### Bug 4: Confirmacao desnecessaria apos todos os slots preenchidos
 
-### 1. index.ts - getActiveAction() (Linhas 1346-1360)
+**Causa raiz**: No context-handler.ts, quando o ultimo slot e preenchido (ex: selecao de cartao), a funcao `fillPendingSlot` retorna `readyToConfirm: true` e `readyToExecute: true` (linha 306-307). O index.ts verifica `readyToConfirm` PRIMEIRO (linha 3358) e envia mensagem de confirmacao, ignorando o `readyToExecute`.
 
-ANTES:
-```text
-.in("status", ["collecting", "awaiting_input", "pending_selection"])  // linha 1350
-.in("status", ["collecting", "awaiting_input", "pending_selection"])  // linha 1357
-```
+**Solucao**: No context-handler.ts, quando todos os slots estao preenchidos, retornar APENAS `readyToExecute: true` e `readyToConfirm: false`. A confirmacao so deve ocorrer em casos excepcionais (valor > R$ 500 ou confianca baixa).
 
-DEPOIS:
-```text
-.in("status", ["collecting", "awaiting_input", "pending_selection", "awaiting_confirmation"])
-.in("status", ["collecting", "awaiting_input", "pending_selection", "awaiting_confirmation"])
-```
-
-### 2. date-helpers.ts - getBrasiliaISO() (Linha 171)
-
-Adicionar logs de debug para rastrear a conversao:
-```text
-export function getBrasiliaISO(date?: Date | string) {
-  const d = date ? (typeof date === 'string' ? new Date(date) : date) : getBrasiliaDate();
-  
-  console.log(`[BRASILIA_ISO] Input: ${d.toISOString()}`);
-  console.log(`[BRASILIA_ISO] Input toString: ${d.toString()}`);
-  
-  const result = getBrasiliaDateParts(date);
-  
-  console.log(`[BRASILIA_ISO] Output: ${result.dataISO}`);
-  console.log(`[BRASILIA_ISO] Time: ${result.hora}`);
-  
-  return { dateISO: result.dataISO, timeString: result.hora };
-}
-```
-
-### 3. finax-insights/index.ts - Tipagem usuarios
-
-ANTES:
-```text
-interface AlertFromDB {
-  usuarios: { telefone: string; nome: string; };
-}
-// alert.usuarios?.telefone
-```
-
-DEPOIS:
-```text
-interface AlertFromDB {
-  usuarios: Array<{ telefone: string; nome: string; }>;
-}
-// const user = alert.usuarios?.[0];
-// const telefone = user?.telefone;
-```
-
-### 4. Aumentar TTL das actions
-
-Mudar `ACTION_TTL_MINUTES` de 15 para 30 minutos (linha 1341) para dar mais tempo ao usuario para responder confirmacoes.
+No index.ts, adicionar tratamento para `readyToExecute` (sem status awaiting_confirmation) ANTES de verificar `readyToConfirm` no CASO 3.
 
 ---
 
 ## Arquivos a Modificar
 
+### 1. `supabase/functions/finax-worker/intents/expense.ts` (linhas 217-229)
+
+Substituir `formatBrasiliaDateTime(transactionDate)` por parsing direto de `dateISO`:
+
 ```text
-1. supabase/functions/finax-worker/index.ts
-   - Linha 1341: ACTION_TTL_MINUTES = 30
-   - Linha 1350: Adicionar "awaiting_confirmation" ao filtro de expiracao
-   - Linha 1357: Adicionar "awaiting_confirmation" ao filtro de busca
+// ANTES (linha 220):
+const formattedDateTime = formatBrasiliaDateTime(transactionDate);
 
-2. supabase/functions/finax-worker/utils/date-helpers.ts
-   - Linha 171-177: Adicionar logs de debug em getBrasiliaISO()
-
-3. supabase/functions/finax-insights/index.ts
-   - Linha 72-83: Corrigir interface AlertFromDB para array
-   - Linhas 118, 130, 146: Acessar usuarios como array
+// DEPOIS:
+// Parsear dateISO direto (ja tem data/hora corretas de Brasilia)
+const [_datePart] = dateISO.split('T');
+const [_y, _m, _d] = _datePart.split('-');
+const _time = dateISO.substring(11, 16);
+const formattedDateTime = `${_d}/${_m}/${_y} as ${_time}`;
 ```
+
+Tambem adicionar logs no final:
+
+```text
+console.log(`[EXPENSE] Registrado: ${transaction.id}`);
+console.log(`[EXPENSE] Salvo no banco: ${dateISO}`);
+console.log(`[EXPENSE] Mostrado ao usuario: ${formattedDateTime}`);
+```
+
+### 2. `supabase/functions/finax-worker/utils/date-helpers.ts` (linha 282)
+
+Adicionar padrao "antes_de_ontem" ANTES de "anteontem":
+
+```text
+// INSERIR ANTES do padrao "anteontem" (linha 282):
+{
+  name: "antes_de_ontem",
+  regex: /\bantes\s+de\s+ontem\b/i,
+  transform: (d) => {
+    const result = new Date(d);
+    result.setDate(result.getDate() - 2);
+    console.log(`[DATE] Antes de ontem: ${formatBrasiliaDate(result)}`);
+    return result;
+  }
+},
+```
+
+### 3. `supabase/functions/finax-worker/index.ts` (linhas 3412-3419)
+
+Adicionar guard de data para evitar falso positivo no multi-expense:
+
+```text
+// ADICIONAR ao shouldSkipMultiDetection:
+const DATE_PATTERN = /\b\d{1,2}\/\d{1,2}\b|\bdia\s+\d{1,2}\b|\bontem\b|\banteontem\b|\bantes\s+de\s+ontem\b/i;
+
+const shouldSkipMultiDetection =
+  INSTALLMENT_PATTERN.test(conteudoProcessado) ||
+  CARD_PATTERN.test(conteudoProcessado) ||
+  BILL_PATTERN.test(conteudoProcessado) ||
+  DATE_PATTERN.test(conteudoProcessado);
+```
+
+### 4. `supabase/functions/finax-worker/fsm/context-handler.ts` (linhas 300-308)
+
+Mudar para executar direto quando slots completos (sem confirmacao):
+
+```text
+// ANTES (linhas 306-307):
+readyToConfirm: missingSlots.length === 0,
+readyToExecute: missingSlots.length === 0
+
+// DEPOIS:
+readyToConfirm: false,
+readyToExecute: missingSlots.length === 0
+```
+
+### 5. `supabase/functions/finax-worker/index.ts` (linhas 3346-3383)
+
+Adicionar CASO 3A para executar direto quando readyToExecute sem awaiting_confirmation:
+
+```text
+// CASO 3: SLOT PREENCHIDO
+if (contextResult.handled && contextResult.filledSlot) {
+  await updateAction(activeAction.id, {
+    slots: contextResult.updatedSlots,
+    pending_slot: null
+  });
+
+  // CASO 3A: PRONTO PARA EXECUTAR DIRETO (sem confirmacao)
+  if (contextResult.readyToExecute) {
+    const slots = contextResult.updatedSlots as ExtractedSlots;
+    let result;
+
+    switch (activeAction.intent) {
+      case "expense":
+        result = await registerExpense(userId, slots, activeAction.id);
+        break;
+      case "income":
+        result = await registerIncome(userId, slots, activeAction.id);
+        break;
+      // ... outros intents
+    }
+
+    await supabase.from("actions")
+      .update({ status: "done" })
+      .eq("user_id", userId)
+      .in("status", ["collecting","awaiting_input","awaiting_confirmation"]);
+
+    await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+    return;
+  }
+
+  // Se readyToConfirm (casos excepcionais) → pedir confirmacao
+  if (contextResult.readyToConfirm) { ... }
+
+  // Ainda falta slot → perguntar proximo
+  ...
+}
+```
+
+---
 
 ## Ordem de Implementacao
 
 ```text
-1. Corrigir getActiveAction() - adicionar "awaiting_confirmation" (BUG CRITICO)
-2. Aumentar TTL de 15 para 30 minutos
-3. Adicionar logs em getBrasiliaISO() para debug
-4. Corrigir tipagem de usuarios no finax-insights
-5. Deploy finax-worker + finax-insights
-6. Testar confirmacao "Sim"
-7. Testar "uber 10 ontem" e verificar logs
+1. date-helpers.ts → Adicionar "antes de ontem"
+2. expense.ts → Parsear dateISO direto (bypass formatBrasiliaDateTime)
+3. index.ts → Adicionar DATE_PATTERN guard no multi-expense
+4. context-handler.ts → readyToExecute=true, readyToConfirm=false
+5. index.ts → CASO 3A: executar direto quando readyToExecute
+6. Deploy finax-worker
 ```
 
-## Testes de Validacao
+## Testes Esperados
 
 ```text
+Teste 1: "ontem comprei um cafe de 1,50"
+  → Pix → Registrado com 06/02/2026 as HH:MM (hora correta)
 
-Teste 2 (Data ontem):
-  "uber 10 ontem" → Pix → Registrado com data de ontem
-  Verificar logs: [BRASILIA_ISO] Output deve ser data de ontem
+Teste 2: "ANTES DE ONTEM COMPREI UMA AGUA DE 5 NO CREDITO"
+  → Detecta cartao → Registra DIRETO (sem confirmacao)
+  → Data: 05/02/2026
 
-Teste 3 (Insights):
-  Inserir alerta manual → Executar finax-insights → Verificar envio
+Teste 3: "DIA 05/02 COMPREI UMA AGUA DE 5 NO CREDITO"
+  → NAO detecta como 2 gastos
+  → Detecta 1 gasto de R$ 5 no dia 05/02
+
+Teste 4: "Pizza 30 pix"
+  → Registra direto (sem confirmacao, confianca alta)
 ```
