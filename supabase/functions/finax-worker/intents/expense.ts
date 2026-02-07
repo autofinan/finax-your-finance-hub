@@ -215,18 +215,16 @@ export async function registerExpense(
   });
   
   // ========================================================================
-  // ✅ USAR DATA CORRETA NA MENSAGEM
+  // ✅ FORMATAR DATA/HORA DIRETO DA STRING ISO (SEM converter Date)
   // ========================================================================
-  const formattedDateTime = formatBrasiliaDateTime(transactionDate);
-  const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
+  // dateISO já contém data/hora corretas de Brasília (ex: "2026-02-06T15:33:52-03:00")
+  // NUNCA usar new Date() + Intl/toLocaleString — causa double-shift de timezone
+  const [_datePart] = dateISO.split('T');
+  const [_y, _m, _d] = _datePart.split('-');
+  const _time = dateISO.substring(11, 16); // "15:33"
+  const formattedDateTime = `${_d}/${_m}/${_y} às ${_time}`;
   
-  const message = `✅ *Gasto registrado!*\n\n` +
-    `💸 *-R$ ${slots.amount?.toFixed(2)}*\n` +
-    `📂 ${category}\n` +
-    (slots.description ? `📝 ${slots.description}\n` : "") +
-    `${paymentEmoji} ${slots.payment_method}\n` +
-    `📅 ${formattedDateTime}\n\n` +
-    `_Responda "cancelar" se foi engano!_`;
+  const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
   
   console.log(`✅ [EXPENSE] Registrado: ${transaction.id}`);
   console.log(`📅 [EXPENSE] Salvo no banco: ${dateISO}`);
