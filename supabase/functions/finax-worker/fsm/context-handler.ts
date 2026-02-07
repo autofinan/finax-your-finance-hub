@@ -235,13 +235,13 @@ function fillPendingSlot(
             shouldContinue: false,
             filledSlot: "card",
             slotValue: selectedCard.nome,
+            readyToExecute: true,
+            readyToConfirm: false,
             updatedSlots: {
               ...activeAction.slots,
               card: selectedCard.nome,
               card_id: selectedCard.id
-            },
-            readyToConfirm: true, // Cartão é geralmente o último slot
-            readyToExecute: false // Precisa confirmar ainda
+            }
           };
         } else {
           return {
@@ -303,8 +303,8 @@ function fillPendingSlot(
     filledSlot: pendingSlot,
     slotValue: extractedValue,
     updatedSlots,
-    readyToConfirm: missingSlots.length === 0,
-    readyToExecute: missingSlots.length === 0 // Executa direto quando completo
+    readyToConfirm: false, // NUNCA pedir confirmação — executa direto
+    readyToExecute: missingSlots.length === 0
   };
 }
 

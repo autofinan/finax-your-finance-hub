@@ -3354,7 +3354,43 @@ async function processarJob(job: any): Promise<void> {
           pending_slot: null
         });
         
-        // Se pronto para confirmar → pedir confirmação
+        // ================================================================
+        // CASO 3A: PRONTO PARA EXECUTAR DIRETO (sem confirmação)
+        // ================================================================
+        if (contextResult.readyToExecute) {
+          console.log(`🚀 [FSM] Todos os slots preenchidos → EXECUTAR DIRETO`);
+          const execSlots = contextResult.updatedSlots as ExtractedSlots;
+          let execResult: any;
+          
+          switch (activeAction.intent) {
+            case "expense":
+              execResult = await registerExpense(userId, execSlots, activeAction.origin_message_id || null, activeAction.id);
+              break;
+            case "income":
+              execResult = await registerIncome(userId, execSlots, activeAction.id);
+              break;
+            default:
+              console.log(`⚠️ [FSM] Intent "${activeAction.intent}" não suporta execução direta`);
+              // Fallback: pedir confirmação
+              const { generateConfirmationMessage, setActionAwaitingConfirmation } = await import("./fsm/context-handler.ts");
+              await setActionAwaitingConfirmation(activeAction.id, execSlots);
+              const confirmMsg = generateConfirmationMessage(activeAction.intent, execSlots);
+              await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
+              return;
+          }
+          
+          // Limpar action
+          await supabase.from("actions")
+            .update({ status: "done", updated_at: new Date().toISOString() })
+            .eq("id", activeAction.id);
+          
+          await sendMessage(payload.phoneNumber, execResult.message, payload.messageSource);
+          return;
+        }
+        
+        // ================================================================
+        // CASO 3B: PEDIR CONFIRMAÇÃO (casos excepcionais de ambiguidade)
+        // ================================================================
         if (contextResult.readyToConfirm) {
           const { generateConfirmationMessage, setActionAwaitingConfirmation } = await import("./fsm/context-handler.ts");
           
@@ -3413,10 +3449,14 @@ async function processarJob(job: any): Promise<void> {
     const CARD_PATTERN = /(adicionar|registrar|cadastrar|novo|meu)\s*cart[aã]o/i;
     const BILL_PATTERN = /(conta\s+de|fatura|vence\s+dia|vencimento)/i;
     
+    // 📅 Guard de data: se tem data explícita/relativa → é UM gasto, não multi
+    const DATE_PATTERN = /\b\d{1,2}\/\d{1,2}\b|\bdia\s+\d{1,2}\b|\bontem\b|\banteontem\b|\bantes\s+de\s+ontem\b/i;
+    
     const shouldSkipMultiDetection = 
       INSTALLMENT_PATTERN.test(conteudoProcessado) ||
       CARD_PATTERN.test(conteudoProcessado) ||
-      BILL_PATTERN.test(conteudoProcessado);
+      BILL_PATTERN.test(conteudoProcessado) ||
+      DATE_PATTERN.test(conteudoProcessado);
     
     if (payload.messageType === "text" && !activeAction && !shouldSkipMultiDetection) {
       const multipleExpenses = detectMultipleExpenses(conteudoProcessado);
