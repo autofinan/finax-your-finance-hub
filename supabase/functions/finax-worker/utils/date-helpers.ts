@@ -279,6 +279,17 @@ export function parseRelativeDate(message: string, baseDate?: Date): Date | null
         return result;
       }
     },
+    // Antes de ontem (com espaços)
+    {
+      name: "antes_de_ontem",
+      regex: /\bantes\s+de\s+ontem\b/i,
+      transform: (d: Date) => {
+        const result = new Date(d);
+        result.setDate(result.getDate() - 2);
+        console.log(`📅 [DATE] Antes de ontem: ${formatBrasiliaDate(result)}`);
+        return result;
+      }
+    },
     // Anteontem
     {
       name: "anteontem",

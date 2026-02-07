@@ -3354,7 +3354,60 @@ async function processarJob(job: any): Promise<void> {
           pending_slot: null
         });
         
-        // Se pronto para confirmar → pedir confirmação
+      // CASO 3A: PRONTO PARA EXECUTAR DIRETO (sem confirmação desnecessária)
+        if (contextResult.readyToExecute) {
+          console.log(`✅ [FSM] Todos slots preenchidos - executando ${activeAction.intent} DIRETO`);
+          
+          const slots = contextResult.updatedSlots as ExtractedSlots;
+          let result: { message: string; success?: boolean };
+          
+          switch (activeAction.intent) {
+            case "expense":
+              result = await registerExpense(userId, slots, activeAction.id);
+              break;
+            case "income":
+              result = await registerIncome(userId, slots, activeAction.id);
+              break;
+            case "recurring":
+              result = await registerRecurring(userId, slots, activeAction.id);
+              break;
+            case "installment": {
+              const { registerInstallment } = await import("./intents/installment.ts");
+              result = await registerInstallment(userId, slots as any, activeAction.id);
+              break;
+            }
+            case "add_card": {
+              const { createCard } = await import("./intents/card.ts");
+              result = await createCard(userId, slots as any);
+              break;
+            }
+            case "bill": {
+              const { createBill } = await import("./intents/bills.ts");
+              const billResult = await createBill({
+                userId,
+                nome: slots.bill_name || slots.description || "Conta",
+                diaVencimento: Number(slots.due_day || 1),
+                valorEstimado: slots.estimated_value ? Number(slots.estimated_value) : undefined,
+                tipo: "fixa"
+              });
+              result = { message: billResult, success: true };
+              break;
+            }
+            default:
+              result = { message: "✅ Feito!", success: true };
+          }
+          
+          // Limpar TODAS as actions pendentes
+          await supabase.from("actions")
+            .update({ status: "done" })
+            .eq("user_id", userId)
+            .in("status", ["collecting", "awaiting_input", "pending_selection", "awaiting_confirmation"]);
+          
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+        
+        // Se readyToConfirm (casos excepcionais) → pedir confirmação
         if (contextResult.readyToConfirm) {
           const { generateConfirmationMessage, setActionAwaitingConfirmation } = await import("./fsm/context-handler.ts");
           
@@ -3412,11 +3465,13 @@ async function processarJob(job: any): Promise<void> {
     const INSTALLMENT_PATTERN = /\d+\s*(x|vezes|parcelas?)\s*(de\s*\d+)?/i;
     const CARD_PATTERN = /(adicionar|registrar|cadastrar|novo|meu)\s*cart[aã]o/i;
     const BILL_PATTERN = /(conta\s+de|fatura|vence\s+dia|vencimento)/i;
+    const DATE_PATTERN = /\b\d{1,2}\/\d{1,2}\b|\bdia\s+\d{1,2}\b|\bontem\b|\banteontem\b|\bantes\s+de\s+ontem\b/i;
     
     const shouldSkipMultiDetection = 
       INSTALLMENT_PATTERN.test(conteudoProcessado) ||
       CARD_PATTERN.test(conteudoProcessado) ||
-      BILL_PATTERN.test(conteudoProcessado);
+      BILL_PATTERN.test(conteudoProcessado) ||
+      DATE_PATTERN.test(conteudoProcessado);
     
     if (payload.messageType === "text" && !activeAction && !shouldSkipMultiDetection) {
       const multipleExpenses = detectMultipleExpenses(conteudoProcessado);
