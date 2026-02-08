@@ -1,223 +1,158 @@
 
-# Correcao Definitiva: 4 Bugs Criticos
 
-## Diagnostico Completo
+# Correcao Definitiva do Horario + Melhorias Estruturais
 
-### Bug 1: Horario ERRADO (mostra 00:23 em vez de 21:23)
+## 1. Bug do Horario: Causa Raiz DEFINITIVA
 
-**Causa raiz**: Existem DUAS funcoes `registerExpense` no projeto:
-- Uma em `index.ts` (linha 1623) — esta e a que REALMENTE e chamada pelos handlers de botao
-- Uma em `intents/expense.ts` (linha 32) — esta NUNCA e chamada porque a local em index.ts a "esconde" (shadowing)
-
-A funcao em `index.ts` usa `new Date()` (UTC do servidor) para registrar a data:
+O problema esta 100% claro agora. Existe um "double-shift" de -3h causado por uma cadeia de funcoes:
 
 ```text
-// index.ts linha 1680-1687
-const agora = new Date();  // UTC do servidor!
-data: agora.toISOString(),  // Salva em UTC
+parseRelativeDate("ontem")
+  └─ usa getBrasiliaDate() como base
+     └─ pega UTC real (ex: 19:46Z)
+     └─ converte para Brasilia (16:46)
+     └─ cria Date com 16:46 como se fosse UTC
+  └─ retorna Date com getHours()=16 mas .toISOString()="16:46Z"
+
+getBrasiliaISO(aquele Date)
+  └─ chama getBrasiliaDateParts()
+     └─ usa Intl.DateTimeFormat com timeZone:'America/Sao_Paulo'
+     └─ Intl ve 16:46 UTC → converte para 13:46 Brasilia  ← DOUBLE SHIFT
+  └─ retorna "T13:46:18-03:00"
+
+Resultado: mostra 13:46 em vez de 16:46
 ```
 
-Depois formata com `toLocaleDateString("pt-BR")` sem timezone, mostrando horario UTC.
+A hora real de Brasilia era 16:46. Mas o sistema mostra 13:46 porque aplica -3h DUAS VEZES.
 
-Todas as correcoes feitas em `intents/expense.ts` (parseamento de dateISO, bypass de formatBrasiliaDateTime) sao INUTEIS porque essa funcao nunca e chamada.
+### Correcao (3 pontos)
 
-**Correcao**: Corrigir a funcao `registerExpense` DENTRO do `index.ts` (linha 1680-1753) para:
-1. Usar `getBrasiliaISO()` em vez de `new Date().toISOString()`
-2. Usar `slots.transaction_date` quando disponivel
-3. Formatar data/hora parseando a string ISO direto
+**A) `getBrasiliaISO()` — Remover `getBrasiliaDate()` como default**
 
-### Bug 2: Multi-expense "Separado" so registra o PRIMEIRO gasto
-
-**Causa raiz**: Quando o usuario clica "Separado" (linha 2760-2786), o sistema:
-1. Pega o primeiro gasto
-2. Cria uma action `multi_expense_queue` com `remaining_expenses`
-3. Pede forma de pagamento para o primeiro
-
-Quando o usuario seleciona a forma de pagamento (pay_pix, etc), o handler da linha 2862 registra o gasto e fecha TODAS as actions:
+Linha 172 de `date-helpers.ts`:
 
 ```text
-// linha 2872-2875
-await supabase.from("actions")
-  .update({ status: "done" })
-  .eq("user_id", userId)
-  .in("status", ["collecting", "awaiting_input"]);
+// ANTES:
+const d = date ? (...) : getBrasiliaDate();  // Fake-UTC!
+
+// DEPOIS:
+const d = date ? (...) : new Date();  // UTC real → Intl converte UMA vez
 ```
 
-Os `remaining_expenses` sao simplesmente DESCARTADOS. Nao existe logica para processar o proximo gasto da fila.
+Isso resolve o caso "hora atual" (sem data relativa).
 
-**Correcao**: Apos registrar cada gasto no handler `pay_*`, verificar se existem `remaining_expenses` nos slots da action. Se sim, criar nova action para o proximo gasto e perguntar a forma de pagamento. Repetir ate acabar a fila.
+**B) `index.ts` linha 3771 — NAO passar Date de `parseRelativeDate` para `getBrasiliaISO`**
 
-### Bug 3: Total duplicado na mensagem multi-expense
-
-**Causa raiz**: A funcao `formatExpensesList` (multiple-expenses.ts linha 195-203) ja inclui o total na string retornada:
+`parseRelativeDate` retorna um Date com valores de Brasilia como se fossem UTC. Se passarmos para `getBrasiliaISO`, o Intl aplica -3h de novo.
 
 ```text
-return `${lista}\n\n💰 *Total: R$ ${total.toFixed(2)}*`;
+// ANTES:
+if (transactionDate) {
+  const { dateISO } = getBrasiliaISO(transactionDate);
+  slots.transaction_date = dateISO;
+}
+
+// DEPOIS:
+if (transactionDate) {
+  // transactionDate ja tem valores de Brasilia como componentes locais
+  const y = transactionDate.getFullYear();
+  const m = String(transactionDate.getMonth() + 1).padStart(2, '0');
+  const d = String(transactionDate.getDate()).padStart(2, '0');
+  const h = String(transactionDate.getHours()).padStart(2, '0');
+  const min = String(transactionDate.getMinutes()).padStart(2, '0');
+  const sec = String(transactionDate.getSeconds()).padStart(2, '0');
+  slots.transaction_date = `${y}-${m}-${d}T${h}:${min}:${sec}-03:00`;
+}
 ```
 
-E o chamador em index.ts (linha 3472) tambem adiciona o total:
+Isso constroi o ISO string direto dos componentes, sem passar pelo Intl.
 
-```text
-`Vi ${multipleExpenses.length} gastos:\n\n${lista}\n\n💰 Total: R$ ${total.toFixed(2)}\n\nComo quer registrar?`
-```
+**C) Mesma correcao em `intents/expense.ts` (linha 114-118) e `intents/installment.ts` (linha 151-153)**
 
-Resultado: total aparece duas vezes.
+Onde houver `getBrasiliaISO(getBrasiliaDate())`, substituir por `getBrasiliaISO()` (sem argumento, agora usa `new Date()` direto).
 
-**Correcao**: Remover o total de `formatExpensesList` — a funcao deve retornar apenas a lista numerada. O total e responsabilidade do chamador.
+**D) `registerIncome` (index.ts linha 1796-1828) — Mesmo bug do registerExpense**
 
-### Bug 4: Data "ontem" funciona nos logs mas nao no banco
-
-**Causa raiz**: Mesma do Bug 1. A funcao `registerExpense` do `index.ts` (que e a chamada) ignora `slots.transaction_date` e usa `new Date()`:
-
-```text
-const agora = new Date();
-data: agora.toISOString()
-```
-
-**Correcao**: Incluida na correcao do Bug 1.
+Usa `new Date()` e `toLocaleDateString` sem timezone. Aplicar a mesma logica: usar `getBrasiliaISO()` e parsear a string ISO direto.
 
 ---
 
-## Detalhes Tecnicos
+## 2. Tabelas/Estruturas Subutilizadas no Banco
 
-### 1. index.ts — registerExpense inline (linhas 1623-1771)
+O banco tem 60+ tabelas. Varias estao dormentes ou subutilizadas:
 
-Correcoes necessarias:
+| Tabela | Status | Potencial |
+|---|---|---|
+| `savings_goals` | Dormante | Metas de economia via WhatsApp |
+| `spending_alerts` | Parcial | Alertas proativos ja existem mas sao pouco usados |
+| `bank_connections` | Dormante | Open Banking futuro |
+| `employees` | Dormante | Multi-usuario/empresa |
+| `perfil_cliente` | Possivel redundancia | Verificar se duplica `usuarios` |
+| `shared_reports` | Dormante | Compartilhar relatorios |
+| `chart_cache` | Verificar | Cache de graficos |
+| `erros_interpretacao` | Verificar | Log de erros de NLU |
+| `hipoteses_registro` | Verificar | Hipoteses de registro |
 
-**Linha 1680**: Substituir `const agora = new Date()` por logica que usa `slots.transaction_date` quando disponivel:
+Estas estruturas podem ser ativadas incrementalmente sem mudar a arquitetura.
 
-```text
-// ANTES:
-const agora = new Date();
+---
 
-// DEPOIS:
-let dateISO: string;
-let timeString: string;
+## 3. index.ts com 5358 linhas — Precisa de Refatoracao
 
-if (slots.transaction_date) {
-  dateISO = slots.transaction_date;
-  timeString = dateISO.substring(11, 16);
-} else {
-  const result = getBrasiliaISO();
-  dateISO = result.dateISO;
-  timeString = result.timeString;
-}
-```
+O `index.ts` concentra logica demais. Funcoes que deveriam estar em modulos separados:
 
-**Linha 1681-1692**: Usar `dateISO` em vez de `agora.toISOString()`:
+| Funcao/Bloco | Linhas aprox. | Destino sugerido |
+|---|---|---|
+| `registerExpense` (inline) | 1623-1794 | `intents/expense.ts` (unificar com a existente) |
+| `registerIncome` (inline) | 1796-1828 | `intents/income.ts` (unificar) |
+| `getMonthlySummary` | 1830-1870 | `intents/query.ts` |
+| Handlers de botao (pay_*, multi_*) | 2760-2950 | `fsm/button-handlers.ts` |
+| Decision Engine + roteamento | 3560-3900 | `decision/router.ts` |
+| Slot prompts / SLOT_PROMPTS | ~200 linhas | `ui/slot-prompts.ts` |
 
-```text
-data: dateISO,
-data_transacao: dateISO,
-hora_transacao: timeString,
-```
-
-**Linhas 1752-1753**: Substituir `toLocaleDateString/toLocaleTimeString` por parsing direto da string ISO:
-
-```text
-// ANTES:
-const dataFormatada = agora.toLocaleDateString("pt-BR");
-const horaFormatada = agora.toLocaleTimeString("pt-BR", {...});
-
-// DEPOIS:
-const [_dp] = dateISO.split('T');
-const [_yy, _mm, _dd] = _dp.split('-');
-const dataFormatada = `${_dd}/${_mm}/${_yy}`;
-const horaFormatada = dateISO.substring(11, 16);
-```
-
-### 2. index.ts — Handler pay_* (linhas 2862-2878)
-
-Apos registrar o gasto com sucesso, verificar e processar `remaining_expenses`:
-
-```text
-// Apos sendMessage do resultado...
-
-// Verificar se ha gastos pendentes da fila multi-expense
-const remainingExpenses = activeAction.slots.remaining_expenses as Array<{amount: number; description: string}> | undefined;
-
-if (remainingExpenses && remainingExpenses.length > 0) {
-  const nextExpense = remainingExpenses[0];
-  const nextRemaining = remainingExpenses.slice(1);
-
-  // Criar action para o proximo gasto
-  await createAction(userId, "multi_expense_queue", "expense", {
-    amount: nextExpense.amount,
-    description: nextExpense.description,
-    remaining_expenses: nextRemaining
-  }, "payment_method", payload.messageId);
-
-  // Perguntar forma de pagamento
-  await sendButtons(
-    payload.phoneNumber,
-    `💸 R$ ${nextExpense.amount.toFixed(2)} - ${nextExpense.description}\n\nComo voce pagou?`,
-    SLOT_PROMPTS.payment_method.buttons!,
-    payload.messageSource
-  );
-}
-```
-
-### 3. multiple-expenses.ts — formatExpensesList (linhas 195-203)
-
-Remover o total duplicado:
-
-```text
-// ANTES:
-export function formatExpensesList(expenses: DetectedExpense[]): string {
-  const lista = expenses.map((e, i) =>
-    `${i + 1}. ${e.description}: R$ ${e.amount.toFixed(2)}`
-  ).join("\n");
-
-  const total = expenses.reduce((sum, e) => sum + e.amount, 0);
-
-  return `${lista}\n\n💰 *Total: R$ ${total.toFixed(2)}*`;
-}
-
-// DEPOIS:
-export function formatExpensesList(expenses: DetectedExpense[]): string {
-  return expenses.map((e, i) =>
-    `${i + 1}. ${e.description}: R$ ${e.amount.toFixed(2)}`
-  ).join("\n");
-}
-```
+Isso eliminaria o problema de **shadowing** (duas `registerExpense`) de uma vez.
 
 ---
 
 ## Arquivos a Modificar
 
 ```text
-1. supabase/functions/finax-worker/index.ts
-   - Linhas 1680-1692: Usar dateISO/getBrasiliaISO em vez de new Date()
-   - Linhas 1752-1753: Parsear string ISO direto para formatacao
-   - Linhas 2862-2878: Adicionar processamento de remaining_expenses apos registro
+1. supabase/functions/finax-worker/utils/date-helpers.ts
+   - Linha 172: getBrasiliaISO default = new Date() em vez de getBrasiliaDate()
 
-2. supabase/functions/finax-worker/utils/multiple-expenses.ts
-   - Linhas 195-203: Remover total da funcao formatExpensesList
+2. supabase/functions/finax-worker/index.ts
+   - Linha 3770-3773: Construir ISO string direto dos componentes de parseRelativeDate
+   - Linha 1796-1828: registerIncome — usar getBrasiliaISO() + parsear string ISO
+
+3. supabase/functions/finax-worker/intents/expense.ts
+   - Linhas 114-118: getBrasiliaISO() sem argumento (usar new Date() internamente)
+
+4. supabase/functions/finax-worker/intents/installment.ts
+   - Linhas 151-153: getBrasiliaISO() sem argumento
 ```
 
 ## Ordem de Implementacao
 
 ```text
-1. Corrigir registerExpense inline (index.ts) — data/hora
-2. Adicionar processamento de fila multi-expense (index.ts)
-3. Remover total duplicado (multiple-expenses.ts)
-4. Deploy finax-worker
+1. Corrigir getBrasiliaISO() default → new Date()
+2. Corrigir index.ts linha 3771 → construir ISO direto
+3. Corrigir registerIncome (mesmo padrao)
+4. Corrigir intents/expense.ts e installment.ts
+5. Deploy finax-worker
+6. Testar "ontem comprei cafe de 1,50 pix" → hora deve ser correta
 ```
 
 ## Testes Esperados
 
 ```text
-Teste 1 (Horario):
-  "Lanche 10" → Pix → Data/hora mostra horario de Brasilia correto
-
-Teste 2 (Ontem):
-  "uber 10 ontem" → Pix → Data mostra dia anterior
-
-Teste 3 (Multi-expense separado):
-  "30 cinema, 50 almoco, 15 uber" → Separado
-  → Pede pagamento para 1o → Registra → Pede pagamento para 2o → Registra → Pede para 3o → Registra
-  → Todos os 3 gastos ficam no banco
-
-Teste 4 (Total unico):
-  "30 cinema, 50 almoco" → Mensagem mostra total UMA vez
+Teste 1: "cafe 5 pix" → hora atual de Brasilia (ex: 17:30, nao 14:30)
+Teste 2: "ontem comprei agua de 3" → data de ontem, hora ~atual
+Teste 3: "dia 05/02 gastei 10 debito" → 05/02/2026, hora ~atual
 ```
+
+## Proximos Passos (apos esta correcao)
+
+1. Refatorar index.ts — extrair funcoes para modulos (elimina shadowing permanentemente)
+2. Ativar `savings_goals` — metas de economia via WhatsApp
+3. Ativar `spending_alerts` — alertas proativos personalizados
+4. Revisar tabelas dormentes e limpar as que nao serao usadas
