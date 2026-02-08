@@ -169,7 +169,10 @@ export function getBrasiliaDateParts(date?: Date | string): {
  * @returns Objeto com dateISO e timeString
  */
 export function getBrasiliaISO(date?: Date | string): { dateISO: string; timeString: string } {
-  const d = date ? (typeof date === 'string' ? new Date(date) : date) : getBrasiliaDate();
+  // ✅ CORREÇÃO DEFINITIVA: Usar new Date() (UTC real) em vez de getBrasiliaDate() (fake-UTC)
+  // getBrasiliaDate() cria um Date com valores de Brasília como se fossem UTC,
+  // causando double-shift quando Intl aplica -3h novamente.
+  const d = date ? (typeof date === 'string' ? new Date(date) : date) : new Date();
   
   console.log(`🕐 [BRASILIA_ISO] Input: ${d.toISOString()}`);
   console.log(`🕐 [BRASILIA_ISO] Input toString: ${d.toString()}`);

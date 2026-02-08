@@ -111,9 +111,9 @@ export async function registerExpense(
     console.log(`📅 [EXPENSE] Data dos slots (SEM CONVERTER): ${dateISO}`);
     console.log(`📅 [EXPENSE] Hora extraída: ${timeString}`);
   } else {
-    // Data atual de Brasília
-    transactionDate = getBrasiliaDate();
-    const result = getBrasiliaISO(transactionDate);
+    // ✅ CORREÇÃO: getBrasiliaISO() sem argumento — usa new Date() internamente
+    transactionDate = new Date();
+    const result = getBrasiliaISO();
     dateISO = result.dateISO;
     timeString = result.timeString;
     
