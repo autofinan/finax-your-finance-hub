@@ -13,7 +13,7 @@ import { ExtractedSlots, SLOT_REQUIREMENTS } from "../decision/types.ts";
 import { closeAction } from "../context/manager.ts";
 import { findCardByName, listUserCards, CardInfo } from "./credit-flow.ts";
 import { categorizeDescription } from "../ai/categorizer.ts";
-import { getBrasiliaDate, getBrasiliaISO } from "../utils/date-helpers.ts";
+import { getBrasiliaISO } from "../utils/date-helpers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -149,8 +149,8 @@ export async function registerInstallment(
   // 1. CRIAR TRANSAÇÃO MÃE (COMPRA PARCELADA)
   // ========================================================================
   
-  const transactionDate = getBrasiliaDate();
-  const { dateISO, timeString } = getBrasiliaISO(transactionDate);
+  // ✅ CORREÇÃO: getBrasiliaISO() sem argumento — usa new Date() internamente
+  const { dateISO, timeString } = getBrasiliaISO();
   
   const { data: parentTx, error: txError } = await supabase
     .from("transacoes")

@@ -1798,14 +1798,30 @@ async function registerIncome(userId: string, slots: ExtractedSlots, actionId?: 
   const descricao = slots.description || "";
   const source = slots.source || "outro";
   
-  const agora = new Date();
+  // ✅ CORREÇÃO DEFINITIVA: Usar getBrasiliaISO() em vez de new Date()
+  let dateISO: string;
+  let timeString: string;
+
+  if (slots.transaction_date) {
+    dateISO = slots.transaction_date;
+    timeString = dateISO.substring(11, 16);
+    console.log(`📅 [INCOME-INLINE] Usando transaction_date dos slots: ${dateISO}`);
+  } else {
+    const result = getBrasiliaISO();
+    dateISO = result.dateISO;
+    timeString = result.timeString;
+    console.log(`📅 [INCOME-INLINE] Usando hora atual Brasília: ${dateISO}`);
+  }
+
   const { data: tx, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
     valor,
     categoria: "entrada",
     tipo: "entrada",
     descricao,
-    data: agora.toISOString(),
+    data: dateISO,
+    data_transacao: dateISO,
+    hora_transacao: timeString,
     origem: "whatsapp",
     forma_pagamento: source,
     status: "confirmada"
@@ -1818,8 +1834,11 @@ async function registerIncome(userId: string, slots: ExtractedSlots, actionId?: 
   
   if (actionId) await closeAction(actionId, tx.id);
   
-  const dataFormatada = agora.toLocaleDateString("pt-BR");
-  const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  // ✅ Parsear direto da string ISO (sem Date/Intl)
+  const [_dp] = dateISO.split('T');
+  const [_yy, _mm, _dd] = _dp.split('-');
+  const dataFormatada = `${_dd}/${_mm}/${_yy}`;
+  const horaFormatada = dateISO.substring(11, 16);
   
   return {
     success: true,
@@ -3768,9 +3787,17 @@ async function processarJob(job: any): Promise<void> {
       // CORREÇÃO: Usar getBrasiliaISO() para evitar conversão UTC (+3h)
       // ========================================================================
       if (transactionDate) {
-        const { dateISO } = getBrasiliaISO(transactionDate);
-        slots.transaction_date = dateISO;
-        console.log(`📅 [EXPENSE] Data relativa aplicada: ${dateISO.split('T')[0]} (Brasília)`);
+        // ✅ CORREÇÃO DEFINITIVA: Construir ISO direto dos componentes
+        // parseRelativeDate retorna Date com valores de Brasília como se fossem UTC.
+        // NÃO passar para getBrasiliaISO — causaria double-shift de -3h.
+        const y = transactionDate.getFullYear();
+        const m = String(transactionDate.getMonth() + 1).padStart(2, '0');
+        const dd = String(transactionDate.getDate()).padStart(2, '0');
+        const h = String(transactionDate.getHours()).padStart(2, '0');
+        const min = String(transactionDate.getMinutes()).padStart(2, '0');
+        const sec = String(transactionDate.getSeconds()).padStart(2, '0');
+        slots.transaction_date = `${y}-${m}-${dd}T${h}:${min}:${sec}-03:00`;
+        console.log(`📅 [EXPENSE] Data relativa aplicada: ${y}-${m}-${dd} às ${h}:${min} (Brasília)`);
       }
       
       const missing = getMissingSlots("expense", slots);
