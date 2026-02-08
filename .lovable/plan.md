@@ -1,206 +1,223 @@
 
-# Correcao Definitiva - Data/Hora, Multi-Expense, e Confirmacao
+# Correcao Definitiva: 4 Bugs Criticos
 
-## Diagnostico Completo (Causa Raiz de CADA Bug)
+## Diagnostico Completo
 
-### Bug 1: Data "ontem" mostra 07/02 em vez de 06/02 + hora 18:53
+### Bug 1: Horario ERRADO (mostra 00:23 em vez de 21:23)
 
-**Causa raiz**: A funcao `formatBrasiliaDateTime(transactionDate)` na linha 220 do expense.ts usa `Intl.DateTimeFormat` com `timeZone: 'America/Sao_Paulo'`. Porem, o `transactionDate` vem de `getBrasiliaDate()` que JA cria um Date com valores de Brasilia armazenados como UTC. Quando o Intl aplica a conversao de timezone NOVAMENTE, ocorre double-shift de -3h.
+**Causa raiz**: Existem DUAS funcoes `registerExpense` no projeto:
+- Uma em `index.ts` (linha 1623) — esta e a que REALMENTE e chamada pelos handlers de botao
+- Uma em `intents/expense.ts` (linha 32) — esta NUNCA e chamada porque a local em index.ts a "esconde" (shadowing)
 
-Alem disso, quando `slots.transaction_date` NAO esta definido (else branch), o `transactionDate = getBrasiliaDate()` produz um Date cujo valor UTC interno ja esta com valores de Brasilia. O `formatBrasiliaDateTime` aplica timezone de novo, gerando hora errada.
-
-**Solucao DEFINITIVA**: Nao usar `formatBrasiliaDateTime(transactionDate)` para a mensagem. Em vez disso, parsear a string `dateISO` diretamente (que JA contem data e hora corretas de Brasilia):
+A funcao em `index.ts` usa `new Date()` (UTC do servidor) para registrar a data:
 
 ```text
-// dateISO = "2026-02-06T15:53:00-03:00"
-// Extrair direto da string:
-const [datePart] = dateISO.split('T');
-const [year, month, day] = datePart.split('-');
-const time = dateISO.substring(11, 16); // "15:53"
-const formattedDateTime = `${day}/${month}/${year} as ${time}`;
-// Resultado: "06/02/2026 as 15:53"
+// index.ts linha 1680-1687
+const agora = new Date();  // UTC do servidor!
+data: agora.toISOString(),  // Salva em UTC
 ```
 
-Isso elimina QUALQUER conversao de timezone e usa os valores que ja estao corretos.
+Depois formata com `toLocaleDateString("pt-BR")` sem timezone, mostrando horario UTC.
 
----
+Todas as correcoes feitas em `intents/expense.ts` (parseamento de dateISO, bypass de formatBrasiliaDateTime) sao INUTEIS porque essa funcao nunca e chamada.
 
-### Bug 2: "ANTES DE ONTEM" nao detectado como data
+**Correcao**: Corrigir a funcao `registerExpense` DENTRO do `index.ts` (linha 1680-1753) para:
+1. Usar `getBrasiliaISO()` em vez de `new Date().toISOString()`
+2. Usar `slots.transaction_date` quando disponivel
+3. Formatar data/hora parseando a string ISO direto
 
-**Causa raiz**: O parseRelativeDate em date-helpers.ts tem o padrao `anteontem` (regex: `/\banteontem\b/`) mas NAO tem "antes de ontem" (com espacos).
+### Bug 2: Multi-expense "Separado" so registra o PRIMEIRO gasto
 
-**Solucao**: Adicionar padrao `antes_de_ontem` com regex `/\bantes\s+de\s+ontem\b/i` ANTES do padrao "anteontem" na lista de padroes.
+**Causa raiz**: Quando o usuario clica "Separado" (linha 2760-2786), o sistema:
+1. Pega o primeiro gasto
+2. Cria uma action `multi_expense_queue` com `remaining_expenses`
+3. Pede forma de pagamento para o primeiro
 
----
-
-### Bug 3: "DIA 05/02 COMPREI UMA AGUA DE 5" detectado como 2 gastos
-
-**Causa raiz**: A deteccao de multiplos gastos (linha 3421) roda ANTES da deteccao de datas (linha 3454). A funcao `detectMultipleExpenses` encontra "05" (da data) e "5" (do valor) e interpreta como 2 gastos separados.
-
-**Solucao**: Adicionar um guard de DATA ao `shouldSkipMultiDetection`:
+Quando o usuario seleciona a forma de pagamento (pay_pix, etc), o handler da linha 2862 registra o gasto e fecha TODAS as actions:
 
 ```text
-const DATE_PATTERN = /\b\d{1,2}\/\d{1,2}\b|dia\s+\d{1,2}|ontem|anteontem|antes\s+de\s+ontem/i;
+// linha 2872-2875
+await supabase.from("actions")
+  .update({ status: "done" })
+  .eq("user_id", userId)
+  .in("status", ["collecting", "awaiting_input"]);
 ```
 
-Se a mensagem contem um padrao de data, pular a deteccao de multiplos gastos.
+Os `remaining_expenses` sao simplesmente DESCARTADOS. Nao existe logica para processar o proximo gasto da fila.
 
----
+**Correcao**: Apos registrar cada gasto no handler `pay_*`, verificar se existem `remaining_expenses` nos slots da action. Se sim, criar nova action para o proximo gasto e perguntar a forma de pagamento. Repetir ate acabar a fila.
 
-### Bug 4: Confirmacao desnecessaria apos todos os slots preenchidos
+### Bug 3: Total duplicado na mensagem multi-expense
 
-**Causa raiz**: No context-handler.ts, quando o ultimo slot e preenchido (ex: selecao de cartao), a funcao `fillPendingSlot` retorna `readyToConfirm: true` e `readyToExecute: true` (linha 306-307). O index.ts verifica `readyToConfirm` PRIMEIRO (linha 3358) e envia mensagem de confirmacao, ignorando o `readyToExecute`.
-
-**Solucao**: No context-handler.ts, quando todos os slots estao preenchidos, retornar APENAS `readyToExecute: true` e `readyToConfirm: false`. A confirmacao so deve ocorrer em casos excepcionais (valor > R$ 500 ou confianca baixa).
-
-No index.ts, adicionar tratamento para `readyToExecute` (sem status awaiting_confirmation) ANTES de verificar `readyToConfirm` no CASO 3.
-
----
-
-## Arquivos a Modificar
-
-### 1. `supabase/functions/finax-worker/intents/expense.ts` (linhas 217-229)
-
-Substituir `formatBrasiliaDateTime(transactionDate)` por parsing direto de `dateISO`:
+**Causa raiz**: A funcao `formatExpensesList` (multiple-expenses.ts linha 195-203) ja inclui o total na string retornada:
 
 ```text
-// ANTES (linha 220):
-const formattedDateTime = formatBrasiliaDateTime(transactionDate);
+return `${lista}\n\n💰 *Total: R$ ${total.toFixed(2)}*`;
+```
+
+E o chamador em index.ts (linha 3472) tambem adiciona o total:
+
+```text
+`Vi ${multipleExpenses.length} gastos:\n\n${lista}\n\n💰 Total: R$ ${total.toFixed(2)}\n\nComo quer registrar?`
+```
+
+Resultado: total aparece duas vezes.
+
+**Correcao**: Remover o total de `formatExpensesList` — a funcao deve retornar apenas a lista numerada. O total e responsabilidade do chamador.
+
+### Bug 4: Data "ontem" funciona nos logs mas nao no banco
+
+**Causa raiz**: Mesma do Bug 1. A funcao `registerExpense` do `index.ts` (que e a chamada) ignora `slots.transaction_date` e usa `new Date()`:
+
+```text
+const agora = new Date();
+data: agora.toISOString()
+```
+
+**Correcao**: Incluida na correcao do Bug 1.
+
+---
+
+## Detalhes Tecnicos
+
+### 1. index.ts — registerExpense inline (linhas 1623-1771)
+
+Correcoes necessarias:
+
+**Linha 1680**: Substituir `const agora = new Date()` por logica que usa `slots.transaction_date` quando disponivel:
+
+```text
+// ANTES:
+const agora = new Date();
 
 // DEPOIS:
-// Parsear dateISO direto (ja tem data/hora corretas de Brasilia)
-const [_datePart] = dateISO.split('T');
-const [_y, _m, _d] = _datePart.split('-');
-const _time = dateISO.substring(11, 16);
-const formattedDateTime = `${_d}/${_m}/${_y} as ${_time}`;
+let dateISO: string;
+let timeString: string;
+
+if (slots.transaction_date) {
+  dateISO = slots.transaction_date;
+  timeString = dateISO.substring(11, 16);
+} else {
+  const result = getBrasiliaISO();
+  dateISO = result.dateISO;
+  timeString = result.timeString;
+}
 ```
 
-Tambem adicionar logs no final:
+**Linha 1681-1692**: Usar `dateISO` em vez de `agora.toISOString()`:
 
 ```text
-console.log(`[EXPENSE] Registrado: ${transaction.id}`);
-console.log(`[EXPENSE] Salvo no banco: ${dateISO}`);
-console.log(`[EXPENSE] Mostrado ao usuario: ${formattedDateTime}`);
+data: dateISO,
+data_transacao: dateISO,
+hora_transacao: timeString,
 ```
 
-### 2. `supabase/functions/finax-worker/utils/date-helpers.ts` (linha 282)
-
-Adicionar padrao "antes_de_ontem" ANTES de "anteontem":
+**Linhas 1752-1753**: Substituir `toLocaleDateString/toLocaleTimeString` por parsing direto da string ISO:
 
 ```text
-// INSERIR ANTES do padrao "anteontem" (linha 282):
-{
-  name: "antes_de_ontem",
-  regex: /\bantes\s+de\s+ontem\b/i,
-  transform: (d) => {
-    const result = new Date(d);
-    result.setDate(result.getDate() - 2);
-    console.log(`[DATE] Antes de ontem: ${formatBrasiliaDate(result)}`);
-    return result;
-  }
-},
-```
-
-### 3. `supabase/functions/finax-worker/index.ts` (linhas 3412-3419)
-
-Adicionar guard de data para evitar falso positivo no multi-expense:
-
-```text
-// ADICIONAR ao shouldSkipMultiDetection:
-const DATE_PATTERN = /\b\d{1,2}\/\d{1,2}\b|\bdia\s+\d{1,2}\b|\bontem\b|\banteontem\b|\bantes\s+de\s+ontem\b/i;
-
-const shouldSkipMultiDetection =
-  INSTALLMENT_PATTERN.test(conteudoProcessado) ||
-  CARD_PATTERN.test(conteudoProcessado) ||
-  BILL_PATTERN.test(conteudoProcessado) ||
-  DATE_PATTERN.test(conteudoProcessado);
-```
-
-### 4. `supabase/functions/finax-worker/fsm/context-handler.ts` (linhas 300-308)
-
-Mudar para executar direto quando slots completos (sem confirmacao):
-
-```text
-// ANTES (linhas 306-307):
-readyToConfirm: missingSlots.length === 0,
-readyToExecute: missingSlots.length === 0
+// ANTES:
+const dataFormatada = agora.toLocaleDateString("pt-BR");
+const horaFormatada = agora.toLocaleTimeString("pt-BR", {...});
 
 // DEPOIS:
-readyToConfirm: false,
-readyToExecute: missingSlots.length === 0
+const [_dp] = dateISO.split('T');
+const [_yy, _mm, _dd] = _dp.split('-');
+const dataFormatada = `${_dd}/${_mm}/${_yy}`;
+const horaFormatada = dateISO.substring(11, 16);
 ```
 
-### 5. `supabase/functions/finax-worker/index.ts` (linhas 3346-3383)
+### 2. index.ts — Handler pay_* (linhas 2862-2878)
 
-Adicionar CASO 3A para executar direto quando readyToExecute sem awaiting_confirmation:
+Apos registrar o gasto com sucesso, verificar e processar `remaining_expenses`:
 
 ```text
-// CASO 3: SLOT PREENCHIDO
-if (contextResult.handled && contextResult.filledSlot) {
-  await updateAction(activeAction.id, {
-    slots: contextResult.updatedSlots,
-    pending_slot: null
-  });
+// Apos sendMessage do resultado...
 
-  // CASO 3A: PRONTO PARA EXECUTAR DIRETO (sem confirmacao)
-  if (contextResult.readyToExecute) {
-    const slots = contextResult.updatedSlots as ExtractedSlots;
-    let result;
+// Verificar se ha gastos pendentes da fila multi-expense
+const remainingExpenses = activeAction.slots.remaining_expenses as Array<{amount: number; description: string}> | undefined;
 
-    switch (activeAction.intent) {
-      case "expense":
-        result = await registerExpense(userId, slots, activeAction.id);
-        break;
-      case "income":
-        result = await registerIncome(userId, slots, activeAction.id);
-        break;
-      // ... outros intents
-    }
+if (remainingExpenses && remainingExpenses.length > 0) {
+  const nextExpense = remainingExpenses[0];
+  const nextRemaining = remainingExpenses.slice(1);
 
-    await supabase.from("actions")
-      .update({ status: "done" })
-      .eq("user_id", userId)
-      .in("status", ["collecting","awaiting_input","awaiting_confirmation"]);
+  // Criar action para o proximo gasto
+  await createAction(userId, "multi_expense_queue", "expense", {
+    amount: nextExpense.amount,
+    description: nextExpense.description,
+    remaining_expenses: nextRemaining
+  }, "payment_method", payload.messageId);
 
-    await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-    return;
-  }
+  // Perguntar forma de pagamento
+  await sendButtons(
+    payload.phoneNumber,
+    `💸 R$ ${nextExpense.amount.toFixed(2)} - ${nextExpense.description}\n\nComo voce pagou?`,
+    SLOT_PROMPTS.payment_method.buttons!,
+    payload.messageSource
+  );
+}
+```
 
-  // Se readyToConfirm (casos excepcionais) → pedir confirmacao
-  if (contextResult.readyToConfirm) { ... }
+### 3. multiple-expenses.ts — formatExpensesList (linhas 195-203)
 
-  // Ainda falta slot → perguntar proximo
-  ...
+Remover o total duplicado:
+
+```text
+// ANTES:
+export function formatExpensesList(expenses: DetectedExpense[]): string {
+  const lista = expenses.map((e, i) =>
+    `${i + 1}. ${e.description}: R$ ${e.amount.toFixed(2)}`
+  ).join("\n");
+
+  const total = expenses.reduce((sum, e) => sum + e.amount, 0);
+
+  return `${lista}\n\n💰 *Total: R$ ${total.toFixed(2)}*`;
+}
+
+// DEPOIS:
+export function formatExpensesList(expenses: DetectedExpense[]): string {
+  return expenses.map((e, i) =>
+    `${i + 1}. ${e.description}: R$ ${e.amount.toFixed(2)}`
+  ).join("\n");
 }
 ```
 
 ---
 
+## Arquivos a Modificar
+
+```text
+1. supabase/functions/finax-worker/index.ts
+   - Linhas 1680-1692: Usar dateISO/getBrasiliaISO em vez de new Date()
+   - Linhas 1752-1753: Parsear string ISO direto para formatacao
+   - Linhas 2862-2878: Adicionar processamento de remaining_expenses apos registro
+
+2. supabase/functions/finax-worker/utils/multiple-expenses.ts
+   - Linhas 195-203: Remover total da funcao formatExpensesList
+```
+
 ## Ordem de Implementacao
 
 ```text
-1. date-helpers.ts → Adicionar "antes de ontem"
-2. expense.ts → Parsear dateISO direto (bypass formatBrasiliaDateTime)
-3. index.ts → Adicionar DATE_PATTERN guard no multi-expense
-4. context-handler.ts → readyToExecute=true, readyToConfirm=false
-5. index.ts → CASO 3A: executar direto quando readyToExecute
-6. Deploy finax-worker
+1. Corrigir registerExpense inline (index.ts) — data/hora
+2. Adicionar processamento de fila multi-expense (index.ts)
+3. Remover total duplicado (multiple-expenses.ts)
+4. Deploy finax-worker
 ```
 
 ## Testes Esperados
 
 ```text
-Teste 1: "ontem comprei um cafe de 1,50"
-  → Pix → Registrado com 06/02/2026 as HH:MM (hora correta)
+Teste 1 (Horario):
+  "Lanche 10" → Pix → Data/hora mostra horario de Brasilia correto
 
-Teste 2: "ANTES DE ONTEM COMPREI UMA AGUA DE 5 NO CREDITO"
-  → Detecta cartao → Registra DIRETO (sem confirmacao)
-  → Data: 05/02/2026
+Teste 2 (Ontem):
+  "uber 10 ontem" → Pix → Data mostra dia anterior
 
-Teste 3: "DIA 05/02 COMPREI UMA AGUA DE 5 NO CREDITO"
-  → NAO detecta como 2 gastos
-  → Detecta 1 gasto de R$ 5 no dia 05/02
+Teste 3 (Multi-expense separado):
+  "30 cinema, 50 almoco, 15 uber" → Separado
+  → Pede pagamento para 1o → Registra → Pede pagamento para 2o → Registra → Pede para 3o → Registra
+  → Todos os 3 gastos ficam no banco
 
-Teste 4: "Pizza 30 pix"
-  → Registra direto (sem confirmacao, confianca alta)
+Teste 4 (Total unico):
+  "30 cinema, 50 almoco" → Mensagem mostra total UMA vez
 ```
