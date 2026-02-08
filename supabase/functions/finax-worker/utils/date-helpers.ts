@@ -177,7 +177,7 @@ export function getBrasiliaISO(date?: Date | string): { dateISO: string; timeStr
   console.log(`🕐 [BRASILIA_ISO] Input: ${d.toISOString()}`);
   console.log(`🕐 [BRASILIA_ISO] Input toString: ${d.toString()}`);
   
-  const result = getBrasiliaDateParts(date);
+  const result = getBrasiliaDateParts(d);
   
   console.log(`🕐 [BRASILIA_ISO] Output: ${result.dataISO}`);
   console.log(`🕐 [BRASILIA_ISO] Time: ${result.hora}`);
