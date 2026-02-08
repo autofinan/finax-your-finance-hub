@@ -1677,17 +1677,36 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
     }
   }
   
-  const agora = new Date();
+  // ========================================================================
+  // ✅ CORREÇÃO DEFINITIVA: Usar slots.transaction_date ou getBrasiliaISO()
+  // NUNCA usar new Date() — causa hora UTC no servidor
+  // ========================================================================
+  let dateISO: string;
+  let timeString: string;
+
+  if (slots.transaction_date) {
+    dateISO = slots.transaction_date;
+    timeString = dateISO.substring(11, 16);
+    console.log(`📅 [EXPENSE-INLINE] Usando transaction_date dos slots: ${dateISO}`);
+  } else {
+    const result = getBrasiliaISO();
+    dateISO = result.dateISO;
+    timeString = result.timeString;
+    console.log(`📅 [EXPENSE-INLINE] Usando hora atual Brasília: ${dateISO}`);
+  }
+
   const { data: tx, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
     valor,
     categoria,
     tipo: "saida",
     descricao,
-    data: agora.toISOString(),
+    data: dateISO,
+    data_transacao: dateISO,
+    hora_transacao: timeString,
     origem: "whatsapp",
     forma_pagamento: formaPagamento,
-    cartao_id: cardId,  // Agora sempre será UUID válido ou null
+    cartao_id: cardId,
     status: "confirmada"
   }).select("id").single();
   
@@ -1749,8 +1768,11 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
     console.log(`📬 [QUEUE] ${pendingCount} mensagem(ns) pendente(s) para ${userId}`);
   }
   
-  const dataFormatada = agora.toLocaleDateString("pt-BR");
-  const horaFormatada = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  // ✅ CORREÇÃO DEFINITIVA: Parsear direto da string ISO (sem Date/Intl)
+  const [_dp] = dateISO.split('T');
+  const [_yy, _mm, _dd] = _dp.split('-');
+  const dataFormatada = `${_dd}/${_mm}/${_yy}`;
+  const horaFormatada = dateISO.substring(11, 16);
   
   const emoji = categoria === "alimentacao" ? "🍽️" : categoria === "mercado" ? "🛒" : categoria === "transporte" ? "🚗" : "💸";
   
@@ -2868,7 +2890,43 @@ async function processarJob(job: any): Promise<void> {
           if (missing.length === 0) {
             // 🔒 CRÍTICO: Registrar E fechar action imediatamente
             const result = await registerExpense(userId, updatedSlots, activeAction.id);
-            // Limpar TODAS as actions pendentes do usuário (fim do loop)
+            
+            // ================================================================
+            // 📦 MULTI-EXPENSE QUEUE: Processar próximo gasto da fila
+            // ================================================================
+            const remainingExpenses = activeAction.slots?.remaining_expenses as Array<{amount: number; description: string; confidence?: number}> | undefined;
+            
+            if (remainingExpenses && remainingExpenses.length > 0) {
+              // Há gastos pendentes na fila — NÃO fechar tudo
+              const nextExpense = remainingExpenses[0];
+              const nextRemaining = remainingExpenses.slice(1);
+              
+              console.log(`📦 [MULTI-QUEUE] Próximo gasto: R$ ${nextExpense.amount} - ${nextExpense.description} (restam ${nextRemaining.length})`);
+              
+              // Fechar apenas a action atual
+              await supabase.from("actions")
+                .update({ status: "done" })
+                .eq("id", activeAction.id);
+              
+              // Criar nova action para o próximo gasto
+              await createAction(userId, "multi_expense_queue", "expense", {
+                amount: nextExpense.amount,
+                description: nextExpense.description,
+                remaining_expenses: nextRemaining
+              }, "payment_method", payload.messageId);
+              
+              // Enviar resultado do gasto atual + perguntar próximo
+              await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+              await sendButtons(
+                payload.phoneNumber,
+                `💸 R$ ${nextExpense.amount.toFixed(2)} - ${nextExpense.description}\n\nComo você pagou?`,
+                SLOT_PROMPTS.payment_method.buttons!,
+                payload.messageSource
+              );
+              return;
+            }
+            
+            // Sem fila — fechar todas as actions pendentes
             await supabase.from("actions")
               .update({ status: "done" })
               .eq("user_id", userId)

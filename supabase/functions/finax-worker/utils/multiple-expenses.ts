@@ -193,13 +193,9 @@ export function detectMultipleExpenses(message: string): DetectedExpense[] {
  * Formata lista de gastos para exibição
  */
 export function formatExpensesList(expenses: DetectedExpense[]): string {
-  const lista = expenses.map((e, i) => 
+  return expenses.map((e, i) => 
     `${i + 1}. ${e.description}: R$ ${e.amount.toFixed(2)}`
   ).join("\n");
-  
-  const total = expenses.reduce((sum, e) => sum + e.amount, 0);
-  
-  return `${lista}\n\n💰 *Total: R$ ${total.toFixed(2)}*`;
 }
 
 /**
