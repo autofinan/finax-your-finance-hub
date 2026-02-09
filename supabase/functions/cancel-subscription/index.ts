@@ -19,27 +19,49 @@ serve(async (req) => {
   }
 
   try {
-    const { userId, phoneNumber, motivo, detalhes, ofertaRecusada } = await req.json();
-
-    if (!userId && !phoneNumber) {
+    // ================================================================
+    // 🔐 AUTHENTICATION: Validate session token
+    // ================================================================
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
       return new Response(
-        JSON.stringify({ error: "userId ou phoneNumber é obrigatório" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Token de autenticação obrigatório" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`🚫 [CANCEL] Iniciando cancelamento para: ${userId || phoneNumber}`);
+    const token = authHeader.replace("Bearer ", "");
 
-    // Buscar usuário
-    let query = supabase.from("usuarios").select("*");
-    if (userId) {
-      query = query.eq("id", userId);
-    } else {
-      const digits = phoneNumber.replace(/\D/g, "");
-      query = query.or(`phone_e164.ilike.%${digits.slice(-9)}%,phone_number.ilike.%${digits.slice(-9)}%`);
+    const { data: session, error: sessionError } = await supabase
+      .from("user_sessions")
+      .select("usuario_id")
+      .eq("token", token)
+      .eq("revoked", false)
+      .gte("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (sessionError || !session) {
+      return new Response(
+        JSON.stringify({ error: "Sessão inválida ou expirada" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    const { data: usuario, error: userError } = await query.maybeSingle();
+    const authenticatedUserId = session.usuario_id;
+
+    // ================================================================
+    // 📦 Parse body (motivo/detalhes only - userId comes from session)
+    // ================================================================
+    const { motivo, detalhes, ofertaRecusada } = await req.json();
+
+    console.log(`🚫 [CANCEL] Iniciando cancelamento para: ${authenticatedUserId}`);
+
+    // Buscar usuário autenticado
+    const { data: usuario, error: userError } = await supabase
+      .from("usuarios")
+      .select("*")
+      .eq("id", authenticatedUserId)
+      .maybeSingle();
 
     if (userError || !usuario) {
       console.error(`❌ [CANCEL] Usuário não encontrado:`, userError);
@@ -83,7 +105,7 @@ serve(async (req) => {
           httpClient: Stripe.createFetchHttpClient(),
         });
 
-        // Buscar customer pelo email/phone
+        // Buscar customer pelo phone
         const customers = await stripe.customers.search({
           query: `phone:'${usuario.phone_e164 || usuario.phone_number}'`,
         });
@@ -91,13 +113,11 @@ serve(async (req) => {
         if (customers.data.length > 0) {
           const customerId = customers.data[0].id;
           
-          // Buscar assinaturas ativas
           const subscriptions = await stripe.subscriptions.list({
             customer: customerId,
             status: "active",
           });
 
-          // Cancelar todas as assinaturas ativas
           for (const sub of subscriptions.data) {
             await stripe.subscriptions.cancel(sub.id);
             console.log(`✅ [CANCEL] Assinatura Stripe cancelada: ${sub.id}`);
@@ -106,7 +126,6 @@ serve(async (req) => {
         }
       } catch (stripeError) {
         console.error(`⚠️ [CANCEL] Erro no Stripe:`, stripeError);
-        // Continua mesmo se Stripe falhar
       }
     }
 
@@ -115,7 +134,7 @@ serve(async (req) => {
       .from("usuarios")
       .update({
         plano: "trial",
-        trial_fim: new Date().toISOString(), // Expirado imediatamente
+        trial_fim: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
       .eq("id", usuario.id);
