@@ -144,8 +144,9 @@ function formatQueryResult(transactions: any[], options: FormatOptions): string 
     return `${emoji} R$ ${Number(t.valor).toFixed(2)} - ${descricao}${dataFormatada ? ` (${dataFormatada})` : ""}`;
   }).join("\n");
   
-  const textoAdicional = transactions.length > maxItems 
-    ? `\n\n_...e mais ${transactions.length - maxItems} ${scope === "expenses" ? "gastos" : "transações"}_` 
+  const remaining = transactions.length - maxItems;
+  const textoAdicional = remaining > 0
+    ? `\n\n_...e mais ${remaining} ${scope === "expenses" ? "gastos" : "transações"}_\n💡 _Diga "ver todos" para a lista completa_` 
     : "";
   
   // ============================================================================
