@@ -34,6 +34,8 @@ import {
   hasAllRequiredSlots, getMissingSlots,
   type ActionType 
 } from "./ui/slot-prompts.ts";
+import { learnMerchantPattern } from "./memory/patterns.ts";
+import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
@@ -332,8 +334,102 @@ Formato de resposta:
 }
 
 // ============================================================================
-// 💰 VERIFICAÇÃO DE ORÇAMENTOS
+// 👤 PERFIL DO CLIENTE: Criar automaticamente se não existir
 // ============================================================================
+
+async function ensurePerfilCliente(userId: string): Promise<void> {
+  const { data: existing } = await supabase
+    .from("perfil_cliente")
+    .select("id")
+    .eq("usuario_id", userId)
+    .single();
+  
+  if (!existing) {
+    console.log(`👤 [PERFIL] Criando perfil automático para: ${userId}`);
+    await supabase.from("perfil_cliente").insert({
+      usuario_id: userId,
+      operation_mode: "normal",
+      limites: { mensal: 0 },
+      score_economia: 50,
+      preferencias: {},
+      metas_financeiras: {},
+      insights: {}
+    });
+  }
+}
+
+// ============================================================================
+// 💰 SET_BUDGET: Definir orçamento via WhatsApp
+// ============================================================================
+
+async function setBudget(userId: string, slots: ExtractedSlots): Promise<{ success: boolean; message: string }> {
+  const limite = slots.amount;
+  if (!limite || limite <= 0) {
+    return { success: false, message: "Preciso de um valor válido para o orçamento 💸" };
+  }
+  
+  const categoria = slots.category || null;
+  const tipo = categoria ? "categoria" : "global";
+  
+  // Se é global, atualizar perfil_cliente.limites.mensal também
+  if (!categoria) {
+    await supabase.from("perfil_cliente").upsert({
+      usuario_id: userId,
+      operation_mode: "normal",
+      limites: { mensal: limite },
+      score_economia: 50
+    }, { onConflict: "usuario_id" });
+  }
+  
+  // Upsert no orçamento
+  // Verificar se já existe
+  let query = supabase
+    .from("orcamentos")
+    .select("id")
+    .eq("usuario_id", userId)
+    .eq("tipo", tipo)
+    .eq("ativo", true);
+  
+  if (categoria) {
+    query = query.eq("categoria", categoria);
+  } else {
+    query = query.is("categoria", null);
+  }
+  
+  const { data: existingBudget } = await query.single();
+  
+  if (existingBudget) {
+    await supabase.from("orcamentos")
+      .update({ 
+        limite, 
+        alerta_50_enviado: false, 
+        alerta_80_enviado: false, 
+        alerta_100_enviado: false,
+        gasto_atual: 0
+      })
+      .eq("id", existingBudget.id);
+  } else {
+    await supabase.from("orcamentos").insert({
+      usuario_id: userId,
+      tipo,
+      categoria: categoria || null,
+      limite,
+      periodo: "mensal",
+      ativo: true,
+      gasto_atual: 0,
+      alerta_50_enviado: false,
+      alerta_80_enviado: false,
+      alerta_100_enviado: false
+    });
+  }
+  
+  const catLabel = categoria ? `de *${categoria}*` : "*total*";
+  return {
+    success: true,
+    message: `✅ Orçamento ${catLabel} definido!\n\n💰 Limite: *R$ ${limite.toFixed(2)}/mês*\n\nVou te avisar quando atingir 50%, 80% e 100% do limite. 📊`
+  };
+}
+
 
 // Verifica orçamentos após registrar um gasto
 async function checkBudgetAfterExpense(userId: string, categoria: string, valorGasto: number): Promise<string | null> {
@@ -592,6 +688,16 @@ Indicadores: "vale a pena", "posso comprar", "devo gastar", "consigo comprar"
 Slots: amount, description
 Exemplos: "Vale a pena comprar celular de 2000?"
 
+### set_budget - Definir orçamento/limite de gastos
+Definir limite mensal geral ou por categoria.
+Indicadores: "limite mensal", "orçamento", "gastar no máximo", "teto de", "definir limite"
+Slots: amount, category (opcional - se não informar, é global)
+Exemplos: 
+  - "Meu limite mensal é 3000" → amount: 3000 (global)
+  - "Quero gastar no máximo 500 com alimentação" → amount: 500, category: alimentacao
+  - "Definir orçamento de 2000 para lazer" → amount: 2000, category: lazer
+  - "Meu teto é 4000 por mês" → amount: 4000 (global)
+
 ### query - Consultar informações
 Ver dados, não modificar.
 Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões", "pendentes"
@@ -715,7 +821,7 @@ Context: action (start|end)
 ## 📤 RESPOSTA (JSON PURO, SEM MARKDOWN)
 
 {
-  "actionType": "expense|income|installment|recurring|add_card|card_event|bill|pay_bill|goal|purchase|query|query_alerts|cancel|chat|set_context|control|edit|unknown",
+  "actionType": "expense|income|installment|recurring|add_card|card_event|bill|pay_bill|goal|purchase|set_budget|query|query_alerts|cancel|chat|set_context|control|edit|unknown",
   "confidence": 0.0-1.0,
   "slots": { },
   "reasoning": "Explicação concisa"
@@ -1663,6 +1769,32 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   if (actionId) await closeAction(actionId, tx.id);
   
   // ========================================================================
+  // 🧠 MEMORY LAYER: Aprender padrão de merchant após sucesso
+  // ========================================================================
+  try {
+    await learnMerchantPattern({
+      userId,
+      description: descricao,
+      category: categoria,
+      paymentMethod: formaPagamento,
+      cardId: cardId || undefined,
+      transactionId: tx.id,
+      wasUserCorrected: false
+    });
+  } catch (memErr) {
+    console.error("⚠️ [MEMORY] Erro não-bloqueante ao aprender padrão:", memErr);
+  }
+  
+  // ========================================================================
+  // 👤 PERFIL DO CLIENTE: Criar automaticamente se não existir
+  // ========================================================================
+  try {
+    await ensurePerfilCliente(userId);
+  } catch (perfilErr) {
+    console.error("⚠️ [PERFIL] Erro não-bloqueante ao criar perfil:", perfilErr);
+  }
+  
+  // ========================================================================
   // 💰 VERIFICAR ALERTAS DE ORÇAMENTO APÓS REGISTRO
   // ========================================================================
   const budgetAlert = await checkBudgetAfterExpense(userId, categoria, valor);
@@ -2574,6 +2706,25 @@ async function processarJob(job: any): Promise<void> {
     const operationMode = perfil?.operation_mode || "normal";
     console.log(`🔕 [WORKER] operation_mode: ${operationMode}`);
     
+    // ========================================================================
+    // 🎯 ONBOARDING COMPLETO: Verificar se há onboarding ativo
+    // ========================================================================
+    const { data: activeOnboarding } = await supabase
+      .from("user_onboarding")
+      .select("current_step")
+      .eq("user_id", userId)
+      .neq("current_step", "done")
+      .single();
+    
+    if (activeOnboarding) {
+      console.log(`🎯 [ONBOARDING] Step ativo: ${activeOnboarding.current_step}`);
+      const handled = await handleOnboardingStep(userId, payload.phoneNumber, conteudoProcessado, payload.buttonReplyId || undefined);
+      if (handled) {
+        await supabase.from("historico_conversas").insert({ phone_number: payload.phoneNumber, user_id: userId, user_message: payload.messageText || "[MÍDIA]", ai_response: "[ONBOARDING]", tipo: "onboarding" });
+        return;
+      }
+    }
+    
     // Verificar novo usuário (onboarding)
     const { count: historicoCount } = await supabase
       .from("historico_conversas")
@@ -2581,8 +2732,8 @@ async function processarJob(job: any): Promise<void> {
       .eq("phone_number", payload.phoneNumber);
     
     if ((historicoCount || 0) === 0) {
-      console.log(`🎉 [WORKER] Novo usuário: ${payload.phoneNumber}`);
-      await sendMessage(payload.phoneNumber, `Oi, ${nomeUsuario.split(" ")[0]}! 👋\n\nSou o *Finax* — seu assistente financeiro.\n\nPode me mandar gastos por texto, áudio ou foto.\n\nPra começar, me conta: quanto você costuma ganhar por mês? 💰`, payload.messageSource);
+      console.log(`🎉 [WORKER] Novo usuário - iniciando onboarding completo: ${payload.phoneNumber}`);
+      await startOnboarding(userId, payload.phoneNumber);
       await supabase.from("historico_conversas").insert({ phone_number: payload.phoneNumber, user_id: userId, user_message: payload.messageText || "[MÍDIA]", ai_response: "[ONBOARDING]", tipo: "onboarding" });
       return;
     }
@@ -4797,7 +4948,29 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     }
     
     // ========================================================================
-    // 🛡️ GUARD: SE HÁ EXPENSE/INCOME ATIVO, NUNCA ENTRAR EM CHAT
+    // 💰 SET_BUDGET - Definir orçamento/limite mensal
+    // ========================================================================
+    if (decision.actionType === "set_budget") {
+      console.log(`💰 [SET_BUDGET] Definindo orçamento para: ${userId}`);
+      
+      if (!decision.slots.amount) {
+        await sendMessage(payload.phoneNumber, "Qual valor de limite mensal você quer definir? 💸", payload.messageSource);
+        return;
+      }
+      
+      const result = await setBudget(userId, decision.slots);
+      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      
+      await supabase.from("historico_conversas").insert({
+        phone_number: payload.phoneNumber,
+        user_id: userId,
+        user_message: conteudoProcessado,
+        ai_response: result.message,
+        tipo: "set_budget"
+      });
+      return;
+    }
+    
     // ========================================================================
     // Este guard protege contra a IA classificar erroneamente como "chat"
     // quando o usuário está no meio de um fluxo de registro.

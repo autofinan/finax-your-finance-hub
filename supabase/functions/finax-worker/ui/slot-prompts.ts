@@ -13,7 +13,7 @@
 // Perguntas SÓ são feitas para slots obrigatórios faltantes.
 // ============================================================================
 
-export type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "list_goals" | "add_goal_progress" | "installment" | "purchase" | "unknown";
+export type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "set_budget" | "chat" | "edit" | "goal" | "list_goals" | "add_goal_progress" | "installment" | "purchase" | "unknown";
 
 export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[] }> = {
   expense: { required: ["amount", "payment_method"], optional: ["description", "category", "card", "card_id"] },
@@ -32,6 +32,7 @@ export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: s
   edit: { required: [], optional: ["transaction_id", "field", "new_value"] },
   goal: { required: ["amount", "description"], optional: ["deadline", "category"] },
   purchase: { required: ["amount"], optional: ["description", "category"] },
+  set_budget: { required: ["amount"], optional: ["category"] },
   unknown: { required: [], optional: [] },
 };
 

@@ -23,6 +23,7 @@ export type ActionType =
   | "recurring"     // gasto recorrente
   | "installment"   // parcelamento no crédito
   | "set_context"   // definir contexto (viagem, evento)
+  | "set_budget"    // definir orçamento/limite mensal
   | "edit"          // edição/correção rápida
   | "chat"          // conversa livre
   | "goal"          // metas de economia (criar nova)

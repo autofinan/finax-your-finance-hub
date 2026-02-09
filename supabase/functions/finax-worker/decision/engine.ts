@@ -122,6 +122,12 @@ const SEMANTIC_PATTERNS = {
     verbs: ["vale a pena", "devo comprar", "posso comprar", "compensa comprar", "devo gastar"],
     contexts: ["compra", "comprar isso", "faz sentido comprar"],
     weight: 0.9
+  },
+  // 💰 DEFINIR ORÇAMENTO/LIMITE
+  set_budget: {
+    verbs: ["limite mensal", "meu limite", "definir limite", "definir orcamento", "definir orçamento", "teto mensal", "meu teto"],
+    contexts: ["gastar no maximo", "gastar no máximo", "orcamento de", "orçamento de"],
+    weight: 0.95
   }
 };
 
