@@ -29,6 +29,11 @@ import { FinaxError, FinaxErrorCode } from "./utils/errors.ts";
 import { parseBrazilianAmount } from "./utils/parseAmount.ts";
 import { getConversationContext, updateConversationContext, clearConversationContext, scopeToTopic } from "./utils/conversation-context.ts";
 import { saveAIDecision, markAsExecuted, markAsIncorrect } from "./utils/ai-decisions.ts";
+import { 
+  SLOT_REQUIREMENTS, SLOT_PROMPTS, PAYMENT_ALIASES, SOURCE_ALIASES,
+  hasAllRequiredSlots, getMissingSlots,
+  type ActionType 
+} from "./ui/slot-prompts.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
@@ -75,7 +80,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 type MessageSource = "meta" | "vonage";
 type TipoMidia = "text" | "audio" | "image";
-type ActionType = "expense" | "income" | "card_event" | "add_card" | "bill" | "pay_bill" | "cancel" | "query" | "query_alerts" | "control" | "recurring" | "set_context" | "chat" | "edit" | "goal" | "list_goals" | "add_goal_progress" | "installment" | "purchase" | "unknown";
+// ActionType importado de ui/slot-prompts.ts
 
 interface JobPayload {
   phoneNumber: string;
@@ -135,100 +140,11 @@ interface ActiveAction {
 }
 
 // ============================================================================
-// 🎰 CONSTANTS
+// 🎰 CONSTANTS — importados de ui/slot-prompts.ts
 // ============================================================================
-
+// SLOT_REQUIREMENTS, SLOT_PROMPTS, PAYMENT_ALIASES, SOURCE_ALIASES,
+// hasAllRequiredSlots, getMissingSlots → importados no topo do arquivo
 // ============================================================================
-// 📜 CONTRATOS DE SLOT (FONTE ÚNICA DE VERDADE)
-// ============================================================================
-// Cada intenção tem slots OBRIGATÓRIOS e opcionais.
-// Execução direta SÓ acontece quando TODOS os obrigatórios estão preenchidos.
-// Perguntas SÓ são feitas para slots obrigatórios faltantes.
-// ============================================================================
-
-const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[] }> = {
-  expense: { required: ["amount", "payment_method"], optional: ["description", "category", "card", "card_id"] },
-  income: { required: ["amount"], optional: ["description", "source"] },
-  card_event: { required: ["card", "value"], optional: ["field"] },
-  add_card: { required: ["card_name", "limit"], optional: ["due_day", "closing_day"] },
-  bill: { required: ["bill_name", "due_day"], optional: ["estimated_value"] },
-  pay_bill: { required: ["bill_name", "amount"], optional: [] },
-  cancel: { required: [], optional: ["transaction_id"] },
-  query: { required: [], optional: [] },
-  control: { required: [], optional: [] },
-  recurring: { required: ["amount", "description", "payment_method"], optional: ["day_of_month", "category", "periodicity", "card", "card_id"] },
-  installment: { required: ["amount", "installments"], optional: ["description", "card", "card_id", "category"] },
-  set_context: { required: ["label", "start_date", "end_date"], optional: ["description"] },
-  chat: { required: [], optional: [] },
-  edit: { required: [], optional: ["transaction_id", "field", "new_value"] },
-  goal: { required: ["amount", "description"], optional: ["deadline", "category"] },
-  purchase: { required: ["amount"], optional: ["description", "category"] },
-  unknown: { required: [], optional: [] },
-};
-
-// ============================================================================
-// ✅ hasAllRequiredSlots - FUNÇÃO CANÔNICA
-// ============================================================================
-// Retorna true SOMENTE se TODOS os slots obrigatórios estão preenchidos.
-// Não usa heurística. Não infere dados ausentes.
-// ============================================================================
-
-function hasAllRequiredSlots(actionType: ActionType, slots: Record<string, any>): boolean {
-  const requirements = SLOT_REQUIREMENTS[actionType];
-  if (!requirements) return true; // Tipo desconhecido = sem requisitos
-  
-  for (const required of requirements.required) {
-    const value = slots[required];
-    if (value === null || value === undefined || value === "") {
-      return false;
-    }
-  }
-  return true;
-}
-
-const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons?: Array<{ id: string; title: string }> }> = {
-  amount: { text: "Qual foi o valor? 💸" },
-  amount_income: { text: "Qual foi o valor que entrou? 💰" },
-  description: { text: "O que foi essa compra?" },
-  description_income: { text: "De onde veio esse dinheiro?" },
-  source: { 
-    text: "Como você recebeu?", 
-    useButtons: true, 
-    buttons: [
-      { id: "src_pix", title: "📱 Pix" },
-      { id: "src_dinheiro", title: "💵 Dinheiro" },
-      { id: "src_transf", title: "🏦 Transferência" }
-    ]
-  },
-  payment_method: { 
-    text: "Como você pagou?", 
-    useButtons: true,
-    buttons: [
-      { id: "pay_pix", title: "📱 Pix" },
-      { id: "pay_debito", title: "💳 Débito" },
-      { id: "pay_credito", title: "💳 Crédito" }
-    ]
-  },
-  card: { text: "Qual cartão?" },
-  card_name: { text: "Qual o nome do cartão? (ex: Nubank, Inter, Bradesco...)" },
-  limit: { text: "Qual o limite total? 💰" },
-  due_day: { text: "Qual o dia de vencimento? (1-31)" },
-  closing_day: { text: "Qual o dia de fechamento?" },
-  bill_name: { text: "Qual o nome da conta? (ex: Energia, Internet, Água...)" },
-  estimated_value: { text: "Qual o valor estimado? (opcional)" },
-};
-
-const PAYMENT_ALIASES: Record<string, string> = {
-  "pix": "pix", "débito": "debito", "debito": "debito", 
-  "crédito": "credito", "credito": "credito", "cartão": "credito",
-  "dinheiro": "dinheiro", "cash": "dinheiro",
-  "pay_pix": "pix", "pay_debito": "debito", "pay_credito": "credito", "pay_dinheiro": "dinheiro"
-};
-
-const SOURCE_ALIASES: Record<string, string> = {
-  "pix": "pix", "dinheiro": "dinheiro", "transferencia": "transferencia",
-  "src_pix": "pix", "src_dinheiro": "dinheiro", "src_transf": "transferencia"
-};
 
 // ============================================================================
 // 🔧 UTILITIES
@@ -990,18 +906,8 @@ CONTEXTO ATIVO (usuário está no meio de uma ação):
 }
 
 // ============================================================================
-// 🔍 getMissingSlots - LISTA SLOTS OBRIGATÓRIOS FALTANTES
+// 🔍 getMissingSlots — importado de ui/slot-prompts.ts
 // ============================================================================
-
-function getMissingSlots(actionType: ActionType, currentSlots: Record<string, any>): string[] {
-  const requirements = SLOT_REQUIREMENTS[actionType];
-  if (!requirements) return [];
-  
-  return requirements.required.filter(slot => {
-    const value = currentSlots[slot];
-    return value === null || value === undefined || value === "";
-  });
-}
 
 // ============================================================================
 // 🚫 GUARD CLAUSES DE DOMÍNIO
@@ -1620,6 +1526,9 @@ import { categorizeDescription } from "./ai/categorizer.ts";
 // 📊 Query handlers
 import { getExpensesByCategory } from "./intents/query.ts";
 
+// 💰 Income handler (extraído para módulo)
+import { registerIncome as registerIncomeModule } from "./intents/income.ts";
+
 async function registerExpense(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
   const valor = slots.amount!;
   const descricao = slots.description || "";
@@ -1793,57 +1702,9 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   };
 }
 
+// 💰 registerIncome — delegado ao módulo intents/income.ts
 async function registerIncome(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
-  const valor = slots.amount!;
-  const descricao = slots.description || "";
-  const source = slots.source || "outro";
-  
-  // ✅ CORREÇÃO DEFINITIVA: Usar getBrasiliaISO() em vez de new Date()
-  let dateISO: string;
-  let timeString: string;
-
-  if (slots.transaction_date) {
-    dateISO = slots.transaction_date;
-    timeString = dateISO.substring(11, 16);
-    console.log(`📅 [INCOME-INLINE] Usando transaction_date dos slots: ${dateISO}`);
-  } else {
-    const result = getBrasiliaISO();
-    dateISO = result.dateISO;
-    timeString = result.timeString;
-    console.log(`📅 [INCOME-INLINE] Usando hora atual Brasília: ${dateISO}`);
-  }
-
-  const { data: tx, error } = await supabase.from("transacoes").insert({
-    usuario_id: userId,
-    valor,
-    categoria: "entrada",
-    tipo: "entrada",
-    descricao,
-    data: dateISO,
-    data_transacao: dateISO,
-    hora_transacao: timeString,
-    origem: "whatsapp",
-    forma_pagamento: source,
-    status: "confirmada"
-  }).select("id").single();
-  
-  if (error) {
-    console.error("❌ [INCOME] Erro:", error);
-    return { success: false, message: "Algo deu errado 😕\nTenta de novo?" };
-  }
-  
-  if (actionId) await closeAction(actionId, tx.id);
-  
-  // ✅ Parsear direto da string ISO (sem Date/Intl)
-  const [_dp] = dateISO.split('T');
-  const [_yy, _mm, _dd] = _dp.split('-');
-  const dataFormatada = `${_dd}/${_mm}/${_yy}`;
-  const horaFormatada = dateISO.substring(11, 16);
-  
-  return {
-    success: true,
-    message: `💰 *Entrada registrada!*\n\n✅ *+R$ ${valor.toFixed(2)}*\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${source}\n📅 ${dataFormatada} às ${horaFormatada}`
-  };
+  return registerIncomeModule(userId, slots, actionId);
 }
 
 async function getMonthlySummary(userId: string): Promise<string> {

@@ -1,18 +1,28 @@
 // ============================================================================
 // 💰 INTENT: INCOME (Registrar Entrada)
 // ============================================================================
+// Extraído de index.ts para modularização.
+// Contém a lógica completa de registro de entrada (inline do index.ts).
+// ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { ExtractedSlots, SLOT_REQUIREMENTS } from "../decision/types.ts";
-import { closeAction } from "../context/manager.ts";
+import { getBrasiliaISO } from "../utils/date-helpers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ============================================================================
-// 📝 REGISTRAR ENTRADA
+// 📝 INTERFACE
 // ============================================================================
+
+export interface ExtractedSlotsIncome {
+  amount?: number;
+  description?: string;
+  source?: string;
+  transaction_date?: string;
+  [key: string]: any;
+}
 
 export interface IncomeResult {
   success: boolean;
@@ -20,50 +30,61 @@ export interface IncomeResult {
   transactionId?: string;
 }
 
+// ============================================================================
+// 💰 REGISTRAR ENTRADA (lógica idêntica ao inline do index.ts)
+// ============================================================================
+
 export async function registerIncome(
   userId: string,
-  slots: ExtractedSlots,
-  eventoId: string | null,
+  slots: ExtractedSlotsIncome,
   actionId?: string
 ): Promise<IncomeResult> {
-  console.log(`💰 [INCOME] Registrando: ${JSON.stringify(slots)}`);
+  const valor = slots.amount!;
+  const descricao = slots.description || "";
+  const source = slots.source || "outro";
   
-  // Verificar slot obrigatório (apenas amount)
-  if (!slots.amount) {
-    return {
-      success: false,
-      message: "Falta informar o valor 💰"
-    };
+  // ✅ CORREÇÃO DEFINITIVA: Usar getBrasiliaISO() em vez de new Date()
+  let dateISO: string;
+  let timeString: string;
+
+  if (slots.transaction_date) {
+    dateISO = slots.transaction_date;
+    timeString = dateISO.substring(11, 16);
+    console.log(`📅 [INCOME] Usando transaction_date dos slots: ${dateISO}`);
+  } else {
+    const result = getBrasiliaISO();
+    dateISO = result.dateISO;
+    timeString = result.timeString;
+    console.log(`📅 [INCOME] Usando hora atual Brasília: ${dateISO}`);
   }
-  
-  // Registrar transação
-  const now = new Date();
-  
-  const { data: transaction, error } = await supabase.from("transacoes").insert({
+
+  const { data: tx, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
-    valor: slots.amount,
+    valor,
     categoria: "entrada",
     tipo: "entrada",
-    descricao: slots.description || slots.source || "Entrada",
-    data: now.toISOString(),
-    data_transacao: now.toISOString(),
-    hora_transacao: now.toTimeString().slice(0, 5),
+    descricao,
+    data: dateISO,
+    data_transacao: dateISO,
+    hora_transacao: timeString,
     origem: "whatsapp",
-    forma_pagamento: slots.source || "outros",
+    forma_pagamento: source,
     status: "confirmada"
   }).select("id").single();
   
   if (error) {
     console.error("❌ [INCOME] Erro:", error);
-    return {
-      success: false,
-      message: "Ops, algo deu errado ao registrar 😕"
-    };
+    return { success: false, message: "Algo deu errado 😕\nTenta de novo?" };
   }
   
   // Fechar action se existir
   if (actionId) {
-    await closeAction(actionId, transaction.id);
+    await supabase.from("actions").update({ 
+      status: "done", 
+      entity_id: tx.id, 
+      updated_at: new Date().toISOString() 
+    }).eq("id", actionId);
+    console.log(`✅ [ACTION] Fechado: ${actionId.slice(-8)}`);
   }
   
   // Log
@@ -71,34 +92,22 @@ export async function registerIncome(
     user_id: userId,
     action_type: "registrar_entrada",
     entity_type: "transacao",
-    entity_id: transaction.id,
+    entity_id: tx.id,
     new_data: slots
   });
   
-  // Formatar resposta amigável
-  const formattedDate = now.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-  const formattedTime = now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  // ✅ Parsear direto da string ISO (sem Date/Intl)
+  const [_dp] = dateISO.split('T');
+  const [_yy, _mm, _dd] = _dp.split('-');
+  const dataFormatada = `${_dd}/${_mm}/${_yy}`;
+  const horaFormatada = dateISO.substring(11, 16);
   
-  const sourceEmojiMap: Record<string, string> = {
-    pix: "📱",
-    dinheiro: "💵",
-    transferencia: "🏦"
-  };
-  const sourceEmoji = sourceEmojiMap[slots.source || ""] || "💰";
-  
-  const message = `✅ *Entrada registrada!*\n\n` +
-    `💰 *+R$ ${slots.amount?.toFixed(2)}*\n` +
-    (slots.description ? `📝 ${slots.description}\n` : "") +
-    (slots.source ? `${sourceEmoji} ${slots.source}\n` : "") +
-    `📅 ${formattedDate} às ${formattedTime}\n\n` +
-    `_Mandou errado? Responda "cancelar"!_`;
-  
-  console.log(`✅ [INCOME] Registrado: ${transaction.id}`);
+  console.log(`✅ [INCOME] Registrado: ${tx.id}`);
   
   return {
     success: true,
-    message,
-    transactionId: transaction.id
+    message: `💰 *Entrada registrada!*\n\n✅ *+R$ ${valor.toFixed(2)}*\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${source}\n📅 ${dataFormatada} às ${horaFormatada}`,
+    transactionId: tx.id
   };
 }
 
@@ -106,7 +115,7 @@ export async function registerIncome(
 // 🔧 HELPERS
 // ============================================================================
 
-export function getMissingIncomeSlots(slots: ExtractedSlots): string[] {
-  const requirements = SLOT_REQUIREMENTS.income;
-  return requirements.required.filter(slot => !slots[slot]);
+export function getMissingIncomeSlots(slots: ExtractedSlotsIncome): string[] {
+  const required = ["amount"];
+  return required.filter(slot => !slots[slot]);
 }
