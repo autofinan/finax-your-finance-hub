@@ -240,6 +240,54 @@ export async function handleOnboardingStep(
       completed_at: new Date().toISOString()
     }).eq("user_id", userId);
     
+    // ========================================================================
+    // 🏗️ CRIAR RECURSOS AUTOMÁTICOS COM BASE NO ONBOARDING
+    // ========================================================================
+    
+    // 1. Criar perfil_cliente
+    const amount = onboarding.problem_details?.amount;
+    const limiteMensal = amount && onboarding.main_problem === "prob_overspend" ? amount : 0;
+    
+    await supabase.from("perfil_cliente").upsert({
+      usuario_id: userId,
+      operation_mode: "normal",
+      limites: { mensal: limiteMensal },
+      score_economia: onboarding.financial_state === "stressed" ? 30 : onboarding.financial_state === "ok" ? 50 : 70,
+      preferencias: { first_name: firstName },
+      metas_financeiras: { main_problem: onboarding.main_problem },
+      insights: {}
+    }, { onConflict: "usuario_id" });
+    
+    console.log(`👤 [ONBOARDING] Perfil criado para ${firstName}`);
+    
+    // 2. Se quer juntar grana, criar savings_goal automaticamente
+    if (onboarding.main_problem === "goal_save" && onboarding.problem_details?.text) {
+      await supabase.from("savings_goals").insert({
+        user_id: userId,
+        name: onboarding.problem_details.text,
+        target_amount: amount || 1000,
+        current_amount: 0,
+        status: "active"
+      });
+      console.log(`🎯 [ONBOARDING] Meta criada: ${onboarding.problem_details.text}`);
+    }
+    
+    // 3. Se informou renda e quer controlar gastos, criar orçamento global
+    if (amount && (onboarding.main_problem === "prob_overspend" || onboarding.main_problem === "prob_notsaving")) {
+      await supabase.from("orcamentos").insert({
+        usuario_id: userId,
+        tipo: "global",
+        limite: amount,
+        periodo: "mensal",
+        ativo: true,
+        gasto_atual: 0,
+        alerta_50_enviado: false,
+        alerta_80_enviado: false,
+        alerta_100_enviado: false
+      });
+      console.log(`💰 [ONBOARDING] Orçamento global criado: R$ ${amount}`);
+    }
+    
     // Mensagem de fechamento personalizada
     const summary = buildOnboardingSummary(onboarding, firstName);
     
