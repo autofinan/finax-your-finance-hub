@@ -398,14 +398,35 @@ async function setBudget(userId: string, slots: ExtractedSlots): Promise<{ succe
   
   const { data: existingBudget } = await query.single();
   
+  // ✅ CORREÇÃO: Calcular gastos do mês atual ao criar/atualizar orçamento
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+  
+  let queryGastos = supabase
+    .from("transacoes")
+    .select("valor")
+    .eq("usuario_id", userId)
+    .eq("tipo", "saida")
+    .gte("data", startOfMonth.toISOString());
+  
+  if (categoria) {
+    queryGastos = queryGastos.eq("categoria", categoria);
+  }
+  
+  const { data: gastos } = await queryGastos;
+  const gastoAtual = gastos?.reduce((sum: number, t: any) => sum + (Number(t.valor) || 0), 0) || 0;
+  
+  console.log(`💰 [BUDGET] Gastos do mês em ${categoria || 'total'}: R$ ${gastoAtual.toFixed(2)}`);
+  
   if (existingBudget) {
     await supabase.from("orcamentos")
       .update({ 
         limite, 
-        alerta_50_enviado: false, 
-        alerta_80_enviado: false, 
-        alerta_100_enviado: false,
-        gasto_atual: 0
+        gasto_atual: gastoAtual,
+        alerta_50_enviado: gastoAtual >= limite * 0.5,
+        alerta_80_enviado: gastoAtual >= limite * 0.8,
+        alerta_100_enviado: gastoAtual >= limite
       })
       .eq("id", existingBudget.id);
   } else {
@@ -416,17 +437,29 @@ async function setBudget(userId: string, slots: ExtractedSlots): Promise<{ succe
       limite,
       periodo: "mensal",
       ativo: true,
-      gasto_atual: 0,
-      alerta_50_enviado: false,
-      alerta_80_enviado: false,
-      alerta_100_enviado: false
+      gasto_atual: gastoAtual,
+      alerta_50_enviado: gastoAtual >= limite * 0.5,
+      alerta_80_enviado: gastoAtual >= limite * 0.8,
+      alerta_100_enviado: gastoAtual >= limite
     });
+  }
+  
+  // Mensagem com status atual
+  const percentual = (gastoAtual / limite) * 100;
+  let statusMsg = "";
+  
+  if (percentual >= 100) {
+    statusMsg = `\n\n🚨 *ATENÇÃO:* Você já estourou o limite!\nGastou R$ ${gastoAtual.toFixed(2)} de R$ ${limite.toFixed(2)}`;
+  } else if (percentual >= 80) {
+    statusMsg = `\n\n⚠️ Você já gastou ${percentual.toFixed(0)}% do limite (R$ ${gastoAtual.toFixed(2)})`;
+  } else if (percentual >= 50) {
+    statusMsg = `\n\nℹ️ Você já gastou ${percentual.toFixed(0)}% do limite (R$ ${gastoAtual.toFixed(2)})`;
   }
   
   const catLabel = categoria ? `de *${categoria}*` : "*total*";
   return {
     success: true,
-    message: `✅ Orçamento ${catLabel} definido!\n\n💰 Limite: *R$ ${limite.toFixed(2)}/mês*\n\nVou te avisar quando atingir 50%, 80% e 100% do limite. 📊`
+    message: `✅ Orçamento ${catLabel} definido!\n\n💰 Limite: *R$ ${limite.toFixed(2)}/mês*${statusMsg}\n\nVou te avisar quando atingir 50%, 80% e 100% do limite. 📊`
   };
 }
 
@@ -3239,6 +3272,39 @@ async function processarJob(job: any): Promise<void> {
       if (payload.buttonReplyId === "cancel_confirm_no") {
         if (activeAction) await closeAction(activeAction.id);
         await sendMessage(payload.phoneNumber, "Ok, mantido! 👍", payload.messageSource);
+        return;
+      }
+      
+      // ========================================================================
+      // 💳 LIMITE INSUFICIENTE - Handlers
+      // ========================================================================
+      if (payload.buttonReplyId === "limit_force_yes" && activeAction?.intent === "expense") {
+        // Forçar registro mesmo com limite insuficiente
+        const result = await registerExpense(userId, activeAction.slots as ExtractedSlots, activeAction.id);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      if (payload.buttonReplyId === "limit_other_card" && activeAction?.intent === "expense") {
+        // Listar outros cartões para o usuário escolher
+        const cards = await listCardsForUser(userId);
+        if (cards.length <= 1) {
+          await sendMessage(payload.phoneNumber, "Você só tem um cartão cadastrado 💳", payload.messageSource);
+          return;
+        }
+        const cardButtons = cards.slice(0, 3).map(c => ({
+          id: `card_${c.id}`,
+          title: (c.nome || "Cartão").slice(0, 20)
+        }));
+        const slotsClean = { ...activeAction.slots, card: undefined, card_id: undefined };
+        await updateAction(activeAction.id, { slots: slotsClean, pending_slot: "card" });
+        await sendButtons(payload.phoneNumber, "💳 Qual cartão quer usar?", cardButtons, payload.messageSource);
+        return;
+      }
+      
+      if (payload.buttonReplyId === "limit_cancel") {
+        if (activeAction) await closeAction(activeAction.id);
+        await sendMessage(payload.phoneNumber, "Ok, cancelado! 👍", payload.messageSource);
         return;
       }
     }

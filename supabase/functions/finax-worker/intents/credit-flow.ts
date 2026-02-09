@@ -157,7 +157,21 @@ async function processCardSelection(
   // ========================================================================
   if (card.limite_disponivel !== null && card.limite_disponivel < amount) {
     console.log(`⚠️ [CREDIT] Limite insuficiente: R$ ${card.limite_disponivel} < R$ ${amount}`);
-    // Continua mesmo assim, mas avisa
+    const faltam = amount - card.limite_disponivel;
+    return {
+      success: false,
+      message: `❌ Limite insuficiente no *${card.nome}*!\n\n` +
+               `Disponível: R$ ${card.limite_disponivel.toFixed(2)}\n` +
+               `Necessário: R$ ${amount.toFixed(2)}\n` +
+               `Faltam: R$ ${faltam.toFixed(2)}\n\n` +
+               `O que quer fazer?`,
+      missingSlot: "card",
+      cardButtons: [
+        { id: "limit_force_yes", title: "✅ Registrar assim" },
+        { id: "limit_other_card", title: "💳 Outro cartão" },
+        { id: "limit_cancel", title: "❌ Cancelar" }
+      ]
+    };
   }
   
   // ========================================================================
