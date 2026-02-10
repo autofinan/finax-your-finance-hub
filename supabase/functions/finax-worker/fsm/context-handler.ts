@@ -123,7 +123,7 @@ function isCancelIntent(normalized: string): boolean {
 // ============================================================================
 
 function handleConfirmation(normalized: string): ContextHandlerResult {
-  const positiveWords = ["sim", "s", "yes", "confirma", "confirmar", "isso", "certeza", "ok", "certo"];
+  const positiveWords = ["sim", "s", "yes", "confirma", "confirmar", "isso", "certeza", "ok", "certo", "sjm", "simmm", "siin", "si", "sii", "simm", "sím"];
   const negativeWords = ["nao", "não", "n", "no", "cancela", "cancelar", "errado"];
   
   const isPositive = positiveWords.some(word => normalized === word || normalized.startsWith(word + " "));
@@ -336,6 +336,16 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
       }
       return null;
     
+    // Escolha de tipo (gasto/entrada) - validar estritamente
+    case "type_choice": {
+      const expenseWords = ["gasto", "despesa", "saida", "saída", "expense", "1"];
+      const incomeWords = ["entrada", "receita", "renda", "income", "2"];
+      if (expenseWords.some(w => normalized.includes(w))) return "expense";
+      if (incomeWords.some(w => normalized.includes(w))) return "income";
+      // Não é uma resposta válida para type_choice
+      return null;
+    }
+    
     // Forma de pagamento
     case "payment_method":
       if (normalized.includes("pix")) return "pix";
@@ -398,6 +408,7 @@ function getSlotErrorMessage(slotType: string): string {
     description: "Manda uma descrição curta 📝",
     card_name: "Qual o nome do cartão? (ex: Nubank, Inter...)",
     bill_name: "Qual o nome da conta? (ex: Luz, Internet...)",
+    type_choice: "É *gasto* ou *entrada*? 🤔",
   };
   
   return errorMessages[slotType] || `Qual o ${slotType}?`;
@@ -460,8 +471,20 @@ export function generateConfirmationMessage(
       if (slots.day_of_month) message += `📅 Todo dia ${slots.day_of_month}\n`;
       break;
     
+    case "numero_isolado":
+      message = `*Confirmar registro:*\n\n`;
+      if (slots.amount) message += `💸 R$ ${Number(slots.amount).toFixed(2)}\n`;
+      if (slots.description) message += `📝 ${slots.description}\n`;
+      if (slots.type_choice === "expense") message += `📂 Gasto\n`;
+      else if (slots.type_choice === "income") message += `📂 Entrada\n`;
+      break;
+    
     default:
-      message = `*Confirmar:*\n\n${JSON.stringify(slots, null, 2)}`;
+      message = `*Confirmar:*\n\n`;
+      if (slots.amount) message += `💸 R$ ${Number(slots.amount).toFixed(2)}\n`;
+      if (slots.description) message += `📝 ${slots.description}\n`;
+      if (slots.category) message += `📂 ${slots.category}\n`;
+      if (slots.payment_method) message += `💳 ${slots.payment_method}\n`;
   }
   
   message += `\n✅ *Tudo certo?*`;
