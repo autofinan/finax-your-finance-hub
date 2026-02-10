@@ -77,7 +77,8 @@ export const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; 
     buttons: [
       { id: "src_pix", title: "📱 Pix" },
       { id: "src_dinheiro", title: "💵 Dinheiro" },
-      { id: "src_transf", title: "🏦 Transferência" }
+      { id: "src_transf", title: "🏦 Transferência" },
+      { id: "src_deposito", title: "💳 Depósito" }
     ]
   },
   payment_method: { 
@@ -111,5 +112,7 @@ export const PAYMENT_ALIASES: Record<string, string> = {
 
 export const SOURCE_ALIASES: Record<string, string> = {
   "pix": "pix", "dinheiro": "dinheiro", "transferencia": "transferencia",
-  "src_pix": "pix", "src_dinheiro": "dinheiro", "src_transf": "transferencia"
+  "salario": "salario", "deposito": "deposito",
+  "src_pix": "pix", "src_dinheiro": "dinheiro", "src_transf": "transferencia",
+  "src_deposito": "deposito", "src_salario": "salario"
 };
