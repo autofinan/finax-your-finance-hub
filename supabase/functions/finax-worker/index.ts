@@ -2905,7 +2905,16 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     // 🔘 PRIORIDADE 1: CALLBACK DE BOTÃO
     // ========================================================================
-    if (payload.buttonReplyId) {
+    // 🔘 DETECTAR SE É CALLBACK DE BOTÃO OU LISTA
+    const isButtonReply = !!(payload.buttonReplyId || payload.listReplyId);
+    
+    // ✅ NORMALIZAR: usar buttonReplyId para ambos (lista usa listReplyId)
+    if (payload.listReplyId && !payload.buttonReplyId) {
+      payload.buttonReplyId = payload.listReplyId;
+      console.log(`📋 [LIST] Convertido listReplyId → buttonReplyId: ${payload.listReplyId}`);
+    }
+    
+    if (isButtonReply) {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
       
       // ====================================================================
