@@ -3272,7 +3272,8 @@ async function processarJob(job: any): Promise<void> {
         const paymentAliases: Record<string, string> = {
           "rec_pay_pix": "pix",
           "rec_pay_debito": "debito",
-          "rec_pay_credito": "credito"
+          "rec_pay_credito": "credito",
+          "rec_pay_dinheiro": "dinheiro"
         };
         const paymentMethod = paymentAliases[payload.buttonReplyId];
         
@@ -3316,10 +3317,49 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      // CONFIRMAR CANCELAMENTO DE RECORRENTE
+      if (payload.buttonReplyId === "cancel_confirm_rec_yes" && activeAction?.slots?.transaction_id) {
+        const result = await cancelRecurring(userId, activeAction.slots.transaction_id);
+        await closeAction(activeAction.id);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
       if (payload.buttonReplyId === "cancel_confirm_no") {
         if (activeAction) await closeAction(activeAction.id);
         await sendMessage(payload.phoneNumber, "Ok, mantido! 👍", payload.messageSource);
         return;
+      }
+      
+      // SELEÇÃO DE RECORRENTE PARA CANCELAR (via botão/lista)
+      if (payload.buttonReplyId?.startsWith("cancel_rec_") && activeAction) {
+        const recId = payload.buttonReplyId.replace("cancel_rec_", "");
+        const result = await cancelRecurring(userId, recId);
+        await closeAction(activeAction.id);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      // SELEÇÃO DE TRANSAÇÃO PARA CANCELAR (via botão/lista)
+      if (payload.buttonReplyId?.startsWith("cancel_tx_") && activeAction) {
+        const txId = payload.buttonReplyId.replace("cancel_tx_", "");
+        const result = await cancelTransaction(userId, txId);
+        await closeAction(activeAction.id);
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      // SELEÇÃO DE META PARA ADICIONAR PROGRESSO (via botão/lista)
+      if (payload.buttonReplyId?.startsWith("goal_add_") && activeAction) {
+        const goalId = payload.buttonReplyId.replace("goal_add_", "");
+        const amount = activeAction.slots?.amount;
+        if (amount) {
+          const { addToGoal } = await import("./intents/goals.ts");
+          const result = await addToGoal(userId, goalId, Number(amount));
+          await closeAction(activeAction.id);
+          await sendMessage(payload.phoneNumber, result, payload.messageSource);
+          return;
+        }
       }
       
       // ========================================================================
@@ -3487,9 +3527,57 @@ async function processarJob(job: any): Promise<void> {
       }
       
       // ========================================================================
-      // 💳 SELEÇÃO DE CARTÃO VIA LISTA (select_card_)
+      // 💳 BOTÃO "OUTROS" - Mostrar lista completa de cartões
+      // ========================================================================
+      if (payload.buttonReplyId === "card_others") {
+        console.log(`📋 [BUTTON] Mostrar todos os cartões via lista`);
+        
+        if (!activeAction) {
+          await sendMessage(payload.phoneNumber, "Ops, perdi o contexto 😕\nTenta novamente?", payload.messageSource);
+          return;
+        }
+        
+        const { listUserCards } = await import("./intents/credit-flow.ts");
+        const allCards = await listUserCards(userId);
+        
+        if (allCards.length === 0) {
+          await sendMessage(payload.phoneNumber, "Nenhum cartão encontrado 🤔", payload.messageSource);
+          return;
+        }
+        
+        // Enviar lista interativa
+        const sections = [{
+          title: "Seus cartões",
+          rows: allCards.map(c => {
+            const disponivel = c.limite_disponivel ?? c.limite_total ?? 0;
+            return {
+              id: `card_${c.id}`,
+              title: (c.nome || "Cartão").slice(0, 24),
+              description: `Disponível: R$ ${disponivel.toFixed(2)}`
+            };
+          })
+        }];
+        
+        await sendListMessage(
+          payload.phoneNumber,
+          "💳 Escolha um cartão:",
+          "Selecionar cartão",
+          sections,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ========================================================================
+      // 💳 SELEÇÃO DE CARTÃO VIA LISTA/BOTÃO (select_card_ / card_)
       // ========================================================================
       if (payload.buttonReplyId?.startsWith("select_card_") || payload.buttonReplyId?.startsWith("card_")) {
+        // Filtrar "card_others" que já foi tratado acima
+        if (payload.buttonReplyId === "card_others") {
+          // Já tratado
+          return;
+        }
+        
         const cardId = payload.buttonReplyId.replace("select_card_", "").replace("card_", "");
         
         console.log(`💳 [BUTTON] Cartão selecionado via lista: ${cardId}`);
@@ -4269,15 +4357,29 @@ async function processarJob(job: any): Promise<void> {
       // ❌ FALTA SLOT OBRIGATÓRIO
       const missing = getMissingSlots("card_event", slots);
       
-      // Se falta cartão, listar opções
+      // Se falta cartão, listar opções com botões
       if (missing.includes("card")) {
         const cards = await listCardsForUser(userId);
         if (cards.length === 0) {
           await sendMessage(payload.phoneNumber, "Você não tem cartões cadastrados 💳", payload.messageSource);
           return;
         }
-        const cardList = cards.map((c, i) => `${i + 1}. ${c.nome}`).join("\n");
-        await sendMessage(payload.phoneNumber, `Qual cartão atualizar?\n\n${cardList}`, payload.messageSource);
+        if (cards.length <= 3) {
+          const cardButtons = cards.map(c => ({
+            id: `card_${c.id}`,
+            title: (c.nome || "Cartão").slice(0, 20)
+          }));
+          await sendButtons(payload.phoneNumber, "Qual cartão atualizar?", cardButtons, payload.messageSource);
+        } else {
+          const sections = [{
+            title: "Seus cartões",
+            rows: cards.map(c => ({
+              id: `card_${c.id}`,
+              title: (c.nome || "Cartão").slice(0, 24)
+            }))
+          }];
+          await sendListMessage(payload.phoneNumber, "Qual cartão atualizar?", "Selecionar", sections, payload.messageSource);
+        }
         return;
       }
       
@@ -4534,7 +4636,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           [
             { id: "rec_pay_pix", title: "📱 Pix" },
             { id: "rec_pay_debito", title: "💳 Débito" },
-            { id: "rec_pay_credito", title: "💳 Crédito" }
+            { id: "rec_pay_credito", title: "💳 Crédito" },
+            { id: "rec_pay_dinheiro", title: "💵 Dinheiro" }
           ], 
           payload.messageSource
         );
@@ -4626,8 +4729,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             "Você não tem cartões cadastrados 💳\n\nAdicione um: *Adicionar cartão Nubank limite 5000*", 
             payload.messageSource
           );
-        } else {
-          const cardButtons = cards.slice(0, 3).map(c => ({ 
+        } else if (cards.length <= 3) {
+          const cardButtons = cards.map(c => ({ 
             id: `card_${c.id}`, 
             title: (c.nome || "Cartão").slice(0, 20) 
           }));
@@ -4636,6 +4739,20 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             cardButtons, 
             payload.messageSource
           );
+        } else {
+          // 4+ cartões: lista interativa
+          const sections = [{
+            title: "Seus cartões",
+            rows: cards.map(c => {
+              const disponivel = c.limite_disponivel ?? c.limite_total ?? 0;
+              return {
+                id: `card_${c.id}`,
+                title: (c.nome || "Cartão").slice(0, 24),
+                description: `Disponível: R$ ${disponivel.toFixed(2)}`
+              };
+            })
+          }];
+          await sendListMessage(payload.phoneNumber, "💳 Qual cartão?", "Selecionar cartão", sections, payload.messageSource);
         }
       } else {
         await sendMessage(payload.phoneNumber, `Qual o ${nextMissing}?`, payload.messageSource);
@@ -4694,14 +4811,34 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       
       // Se tem valor mas precisa escolher meta
       if (slots.amount && metasAtivas.length > 1) {
-        const lista = metasAtivas.map((m, i) => 
-          `${i + 1}. ${m.name} (R$ ${Number(m.current_amount).toFixed(2)} / R$ ${Number(m.target_amount).toFixed(2)})`
-        ).join("\n");
-        
-        await sendMessage(payload.phoneNumber,
-          `📊 *Suas metas ativas:*\n\n${lista}\n\n_Em qual meta você quer adicionar R$ ${slots.amount.toFixed(2)}? (responda o número)_`,
-          payload.messageSource
-        );
+        if (metasAtivas.length <= 3) {
+          // Usar botões
+          const goalButtons = metasAtivas.map(m => ({
+            id: `goal_add_${m.id}`,
+            title: m.name.slice(0, 20)
+          }));
+          await sendButtons(payload.phoneNumber,
+            `💰 R$ ${slots.amount.toFixed(2)}\n\nEm qual meta quer adicionar?`,
+            goalButtons,
+            payload.messageSource
+          );
+        } else {
+          // Usar lista interativa
+          const sections = [{
+            title: "Suas metas",
+            rows: metasAtivas.map(m => ({
+              id: `goal_add_${m.id}`,
+              title: m.name.slice(0, 24),
+              description: `R$ ${Number(m.current_amount).toFixed(2)} / R$ ${Number(m.target_amount).toFixed(2)}`
+            }))
+          }];
+          await sendListMessage(payload.phoneNumber,
+            `💰 R$ ${slots.amount.toFixed(2)}\n\nEm qual meta quer adicionar?`,
+            "Selecionar meta",
+            sections,
+            payload.messageSource
+          );
+        }
         
         await createAction(userId, "add_goal_progress", "goal", {
           ...slots,
@@ -4889,29 +5026,65 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             await sendMessage(payload.phoneNumber, "Você não tem gastos recorrentes nem transações recentes para cancelar 🤔", payload.messageSource);
             return;
           }
-          const lista = txs.map((t, i) => `${i + 1}. R$ ${t.valor?.toFixed(2)} - ${t.descricao || t.categoria}`).join("\n");
-          await createAction(userId, "cancel_transaction", "cancel", 
-            { options: txs.map(t => t.id) }, "selection", payload.messageId);
-          await sendMessage(payload.phoneNumber, `Qual transação cancelar?\n\n${lista}\n\n_Responde com o número_`, payload.messageSource);
+          // Usar botões/lista para transações
+          if (txs.length <= 3) {
+            const txButtons = txs.map(t => ({
+              id: `cancel_tx_${t.id}`,
+              title: `${t.descricao || t.categoria}`.slice(0, 20)
+            }));
+            await createAction(userId, "cancel_transaction", "cancel", 
+              { options: txs.map(t => t.id) }, "selection", payload.messageId);
+            await sendButtons(payload.phoneNumber, "Qual transação cancelar?", txButtons, payload.messageSource);
+          } else {
+            const sections = [{
+              title: "Transações recentes",
+              rows: txs.map(t => ({
+                id: `cancel_tx_${t.id}`,
+                title: `${t.descricao || t.categoria}`.slice(0, 24),
+                description: `R$ ${t.valor?.toFixed(2)}`
+              }))
+            }];
+            await createAction(userId, "cancel_transaction", "cancel", 
+              { options: txs.map(t => t.id) }, "selection", payload.messageId);
+            await sendListMessage(payload.phoneNumber, "Qual transação cancelar?", "Selecionar", sections, payload.messageSource);
+          }
           return;
         }
         
         if (recorrentes.length === 1) {
-          // Match único → cancelar direto
-          const result = await cancelRecurring(userId, recorrentes[0].id);
-          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          // Match único → pedir confirmação com botões
+          const rec = recorrentes[0];
+          await sendButtons(payload.phoneNumber,
+            `🔄 Cancelar *${rec.descricao}* (R$ ${Number(rec.valor_parcela).toFixed(2)}/mês)?`,
+            [
+              { id: "cancel_confirm_rec_yes", title: "✅ Sim, cancelar" },
+              { id: "cancel_confirm_no", title: "❌ Não" }
+            ],
+            payload.messageSource
+          );
+          await createAction(userId, "cancel_recurring", "cancel", 
+            { transaction_id: rec.id, options: [rec.id] }, "confirmation", payload.messageId);
           return;
         }
         
-        // Múltiplos matches → pedir confirmação
-        const lista = recorrentes.map((r, i) => 
-          `${i + 1}. ${r.descricao} - R$ ${r.valor_parcela?.toFixed(2)}/mês`
-        ).join("\n");
-        
-        await sendMessage(payload.phoneNumber, 
-          `Encontrei ${recorrentes.length} recorrentes:\n\n${lista}\n\n_Qual você quer cancelar? Responde com o número._`, 
-          payload.messageSource
-        );
+        // Múltiplos matches → usar botões/lista
+        if (recorrentes.length <= 3) {
+          const recButtons = recorrentes.map(r => ({
+            id: `cancel_rec_${r.id}`,
+            title: `${r.descricao}`.slice(0, 20)
+          }));
+          await sendButtons(payload.phoneNumber, "Qual você quer cancelar?", recButtons, payload.messageSource);
+        } else {
+          const sections = [{
+            title: "Recorrentes",
+            rows: recorrentes.map(r => ({
+              id: `cancel_rec_${r.id}`,
+              title: `${r.descricao}`.slice(0, 24),
+              description: `R$ ${Number(r.valor_parcela).toFixed(2)}/mês`
+            }))
+          }];
+          await sendListMessage(payload.phoneNumber, "Qual você quer cancelar?", "Selecionar", sections, payload.messageSource);
+        }
         
         // Salvar seleção pendente
         await createAction(userId, "cancel_recurring", "cancel_recurring", 

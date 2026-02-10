@@ -111,15 +111,10 @@ export async function resolveCreditCard(
   }
   
   // ========================================================================
-  // CASO 4: Múltiplos cartões → perguntar qual
+  // CASO 4: 2-3 cartões → botões inline
   // ========================================================================
-  console.log(`💳 [CREDIT] ${cards.length} cartões - precisa selecionar`);
-  
-  // WhatsApp suporta APENAS 3 botões interativos
-  const MAX_BUTTONS = 3;
-  
-  if (cards.length <= MAX_BUTTONS) {
-    // Usar botões para até 3 cartões
+  if (cards.length <= 3) {
+    console.log(`💳 [CREDIT] ${cards.length} cartões - botões inline`);
     return {
       success: false,
       needsCardSelection: true,
@@ -128,34 +123,64 @@ export async function resolveCreditCard(
       missingSlot: "card",
       cardButtons: cards.map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) }))
     };
-  } else {
-    // 4+ cartões: usar lista interativa do WhatsApp
-    const lista = cards.map((c, i) => {
-      const disponivel = c.limite_disponivel ?? c.limite_total ?? 0;
-      return `${i + 1}. ${c.nome} (R$ ${disponivel.toFixed(2)} disponível)`;
-    }).join("\n");
-    
-    return {
-      success: false,
-      needsCardSelection: true,
-      cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
-      message: `💳 Você tem ${cards.length} cartões:\n\n${lista}\n\n_Responde com o número do cartão_`,
-      missingSlot: "card",
-      // Usar lista interativa para 4+ cartões
-      useListMessage: true,
-      listSections: [{
-        title: "Seus cartões",
-        rows: cards.map(c => {
-          const disponivel = c.limite_disponivel ?? c.limite_total ?? 0;
-          return {
-            id: `card_${c.id}`,
-            title: (c.nome || "Cartão").slice(0, 24),
-            description: `Disponível: R$ ${disponivel.toFixed(2)}`
-          };
-        })
-      }]
-    };
   }
+  
+  // ========================================================================
+  // CASO 5: 4+ cartões → 2 mais usados como botões + "Outros" → lista
+  // ========================================================================
+  console.log(`💳 [CREDIT] ${cards.length} cartões - padrão 2+Outros`);
+  
+  // Buscar 2 cartões mais usados (últimos 30 dias)
+  const { data: recentTxs } = await supabase
+    .from("transacoes")
+    .select("cartao_id")
+    .eq("usuario_id", userId)
+    .eq("forma_pagamento", "credito")
+    .gte("data", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+    .not("cartao_id", "is", null);
+  
+  // Contar uso de cada cartão
+  const usage: Record<string, number> = {};
+  for (const tx of (recentTxs || [])) {
+    if (tx.cartao_id) {
+      usage[tx.cartao_id] = (usage[tx.cartao_id] || 0) + 1;
+    }
+  }
+  
+  // Ordenar por uso
+  const sorted = [...cards].sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
+  const top2 = sorted.slice(0, 2);
+  
+  // Criar botões: 2 mais usados + "Outros"
+  const cardButtons = [
+    ...top2.map(c => ({
+      id: `card_${c.id}`,
+      title: (c.nome || "Cartão").slice(0, 20)
+    })),
+    { id: "card_others", title: "📋 Outros" }
+  ];
+  
+  return {
+    success: false,
+    needsCardSelection: true,
+    cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
+    message: `💳 Qual cartão?`,
+    missingSlot: "card",
+    cardButtons,
+    // Guardar lista completa para quando clicar "Outros"
+    useListMessage: false, // NÃO enviar lista direto, esperar o botão "Outros"
+    listSections: [{
+      title: "Seus cartões",
+      rows: cards.map(c => {
+        const disponivel = c.limite_disponivel ?? c.limite_total ?? 0;
+        return {
+          id: `card_${c.id}`,
+          title: (c.nome || "Cartão").slice(0, 24),
+          description: `Disponível: R$ ${disponivel.toFixed(2)}`
+        };
+      })
+    }]
+  };
 }
 
 // ============================================================================
@@ -262,7 +287,6 @@ export async function getOrCreateInvoice(
   let mes = hoje.getMonth() + 1;
   let ano = hoje.getFullYear();
   
-  // Se já passou do dia de fechamento, a compra vai para a próxima fatura
   if (diaFechamento && hoje.getDate() >= diaFechamento) {
     mes += 1;
     if (mes > 12) {
@@ -273,7 +297,6 @@ export async function getOrCreateInvoice(
   
   console.log(`📄 [INVOICE] Buscando fatura ${mes}/${ano} do cartão ${cardId.slice(-8)}`);
   
-  // Buscar fatura existente
   const { data: existingInvoice } = await supabase
     .from("faturas_cartao")
     .select("*")
@@ -288,7 +311,6 @@ export async function getOrCreateInvoice(
     return existingInvoice as InvoiceInfo;
   }
   
-  // Criar nova fatura
   const { data: newInvoice, error } = await supabase
     .from("faturas_cartao")
     .insert({
@@ -361,7 +383,6 @@ export async function restoreCardLimitOnPayment(
 ): Promise<void> {
   console.log(`💳 [CREDIT] Restaurando limite: +R$ ${valorPago}`);
   
-  // Buscar cartão
   const { data: card } = await supabase
     .from("cartoes_credito")
     .select("limite_disponivel, limite_total")
@@ -370,7 +391,6 @@ export async function restoreCardLimitOnPayment(
   
   if (!card) return;
   
-  // Restaurar limite (não pode exceder limite total)
   const novoLimite = Math.min(
     card.limite_total!,
     (card.limite_disponivel || 0) + valorPago
@@ -381,7 +401,6 @@ export async function restoreCardLimitOnPayment(
     .update({ limite_disponivel: novoLimite })
     .eq("id", cardId);
   
-  // Atualizar status da fatura
   await supabase
     .from("faturas_cartao")
     .update({ 
