@@ -733,10 +733,11 @@ Exemplos:
 
 ### query - Consultar informações
 Ver dados, não modificar.
-Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões", "pendentes"
-Slots: query_scope, time_range
+Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões", "pendentes", "detalhe", "detalhar"
+Slots: query_scope, time_range, category
 - query_scope: summary | cards | expenses | income | pending | recurring | category
 - time_range: today | week | month | custom
+- category: alimentacao | transporte | moradia | lazer | saude | educacao | mercado | servicos | compras | outros
 Exemplos: 
   - "Quanto gastei esse mês?" → query_scope: expenses, time_range: month
   - "Meus cartões" → query_scope: cards
@@ -745,6 +746,10 @@ Exemplos:
   - "Gastos da semana" → query_scope: expenses, time_range: week
   - "Quanto gastei hoje?" → query_scope: expenses, time_range: today
   - "Resumo" → query_scope: summary
+  - "Detalhe alimentação" → query_scope: expenses, category: alimentacao, time_range: month
+  - "Gastos com transporte" → query_scope: expenses, category: transporte, time_range: month
+  - "Ver lazer" → query_scope: expenses, category: lazer, time_range: month
+  - "Quanto gastei com alimentação?" → query_scope: expenses, category: alimentacao, time_range: month
 
 ### query_alerts - Ver alertas
 Indicadores: "alertas", "avisos"
@@ -1579,6 +1584,68 @@ async function sendButtons(to: string, bodyText: string, buttons: Array<{ id: st
     return sendMessage(to, bodyText, source);
   }
 }
+
+// ============================================================================
+// 📋 WHATSAPP LIST MESSAGE (para 4+ opções)
+// ============================================================================
+
+async function sendListMessage(
+  to: string, 
+  bodyText: string, 
+  buttonText: string,
+  sections: Array<{ title: string; rows: Array<{ id: string; title: string; description?: string }> }>,
+  source: MessageSource
+): Promise<boolean> {
+  if (source !== "meta") {
+    // Fallback para texto simples
+    const fallbackRows = sections.flatMap(s => s.rows);
+    const fallbackText = bodyText + "\n\n" + fallbackRows.map((r, i) => `${i + 1}. ${r.title}${r.description ? ` - ${r.description}` : ""}`).join("\n");
+    return sendMessage(to, fallbackText, source);
+  }
+
+  try {
+    const cleanNumber = to.replace(/\D/g, "");
+    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: cleanNumber,
+        type: "interactive",
+        interactive: {
+          type: "list",
+          body: { text: bodyText },
+          action: {
+            button: buttonText.slice(0, 20),
+            sections: sections.map(s => ({
+              title: s.title.slice(0, 24),
+              rows: s.rows.map(r => ({
+                id: r.id.slice(0, 200),
+                title: r.title.slice(0, 24),
+                description: r.description?.slice(0, 72) || undefined
+              }))
+            }))
+          }
+        }
+      }),
+    });
+    
+    if (!response.ok) {
+      console.error(`📋 [LIST] Erro:`, await response.text());
+      // Fallback para texto
+      const fallbackRows = sections.flatMap(s => s.rows);
+      const fallbackText = bodyText + "\n\n" + fallbackRows.map((r, i) => `${i + 1}. ${r.title}${r.description ? ` - ${r.description}` : ""}`).join("\n");
+      return sendMessage(to, fallbackText, source);
+    }
+    
+    console.log(`📋 [LIST] Lista enviada para ${cleanNumber}`);
+    return true;
+  } catch (error) {
+    console.error("[Meta List] Erro:", error);
+    const fallbackRows = sections.flatMap(s => s.rows);
+    const fallbackText = bodyText + "\n\n" + fallbackRows.map((r, i) => `${i + 1}. ${r.title}`).join("\n");
+    return sendMessage(to, fallbackText, source);
+  }
 
 // ============================================================================
 // 🎤 MÍDIA (AUDIO/IMAGEM)
@@ -3174,28 +3241,7 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // SELEÇÃO DE CARTÃO PARA EXPENSE
-      if (payload.buttonReplyId.startsWith("card_") && activeAction) {
-        const cardId = payload.buttonReplyId.replace("card_", "");
-        
-        const { data: card } = await supabase
-          .from("cartoes_credito")
-          .select("*")
-          .eq("id", cardId)
-          .single();
-        
-        if (card && activeAction.intent === "expense") {
-          const updatedSlots = { 
-            ...activeAction.slots, 
-            card: card.nome,
-            card_id: card.id
-          };
-          
-          const result = await registerExpense(userId, updatedSlots, activeAction.id);
-          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-          return;
-        }
-      }
+      // NOTA: Seleção de cartão (card_) agora é tratada no bloco unificado select_card_/card_ acima
       
       // SELEÇÃO DE CARTÃO PARA RECURRING
       if (payload.buttonReplyId.startsWith("rec_card_") && activeAction) {
@@ -3307,11 +3353,185 @@ async function processarJob(job: any): Promise<void> {
         await sendMessage(payload.phoneNumber, "Ok, cancelado! 👍", payload.messageSource);
         return;
       }
+      
+      // ========================================================================
+      // 📋 QUERY BUTTONS: Ver todos / Por categoria / Detalhe categoria
+      // ========================================================================
+      if (payload.buttonReplyId?.startsWith("view_all_")) {
+        // Extrair parâmetros: view_all_expenses_month_alimentacao
+        const parts = payload.buttonReplyId.replace("view_all_", "").split("_");
+        const scope = parts[0]; // expenses, income
+        const viewTimeRange = parts[1] || "month";
+        const viewCategory = parts[2] !== "all" ? parts[2] : undefined;
+        
+        console.log(`📋 [BUTTON] Ver todos: ${scope} ${viewTimeRange} ${viewCategory || 'todas categorias'}`);
+        
+        // Buscar TODOS os gastos (sem limite)
+        const viewStartOfMonth = new Date();
+        if (viewTimeRange === "month") {
+          viewStartOfMonth.setDate(1);
+          viewStartOfMonth.setHours(0, 0, 0, 0);
+        } else if (viewTimeRange === "week") {
+          viewStartOfMonth.setDate(viewStartOfMonth.getDate() - 7);
+          viewStartOfMonth.setHours(0, 0, 0, 0);
+        } else if (viewTimeRange === "today") {
+          viewStartOfMonth.setHours(0, 0, 0, 0);
+        } else {
+          viewStartOfMonth.setDate(1);
+          viewStartOfMonth.setHours(0, 0, 0, 0);
+        }
+        
+        let viewQuery = supabase
+          .from("transacoes")
+          .select("valor, descricao, categoria, data")
+          .eq("usuario_id", userId)
+          .eq("tipo", scope === "income" ? "entrada" : "saida")
+          .gte("data", viewStartOfMonth.toISOString())
+          .eq("status", "confirmada")
+          .order("data", { ascending: false });
+        
+        if (viewCategory) {
+          viewQuery = viewQuery.eq("categoria", viewCategory);
+        }
+        
+        const { data: allTx } = await viewQuery;
+        
+        if (!allTx || allTx.length === 0) {
+          await sendMessage(payload.phoneNumber, "Nenhum gasto encontrado 🤷", payload.messageSource);
+          return;
+        }
+        
+        // Agrupar por categoria
+        const byCategory: Record<string, typeof allTx> = {};
+        for (const tx of allTx) {
+          const cat = tx.categoria || "outros";
+          if (!byCategory[cat]) byCategory[cat] = [];
+          byCategory[cat].push(tx);
+        }
+        
+        const catEmojis: Record<string, string> = {
+          alimentacao: "🍔", transporte: "🚗", moradia: "🏠", lazer: "🎮",
+          saude: "🏥", educacao: "📚", mercado: "🛒", servicos: "✂️", compras: "🛍️", outros: "📦"
+        };
+        
+        let fullMsg = `📊 *Todos os gastos*\n\n`;
+        for (const [cat, txs] of Object.entries(byCategory)) {
+          const emoji = catEmojis[cat] || "💸";
+          const totalCat = txs.reduce((sum, t) => sum + Number(t.valor), 0);
+          fullMsg += `${emoji} *${cat}* (R$ ${totalCat.toFixed(2)})\n`;
+          for (const tx of txs) {
+            const dataF = tx.data ? formatBrasiliaDate(tx.data) : "";
+            fullMsg += `  💸 R$ ${Number(tx.valor).toFixed(2)} - ${tx.descricao || 'Sem descrição'}${dataF ? ` (${dataF})` : ""}\n`;
+          }
+          fullMsg += `\n`;
+        }
+        const totalAll = allTx.reduce((sum, t) => sum + Number(t.valor), 0);
+        fullMsg += `💰 *Total: R$ ${totalAll.toFixed(2)}*`;
+        
+        await sendMessage(payload.phoneNumber, fullMsg, payload.messageSource);
+        return;
+      }
+      
+      if (payload.buttonReplyId?.startsWith("view_by_category_")) {
+        const catTimeRange = payload.buttonReplyId.replace("view_by_category_", "");
+        console.log(`📊 [BUTTON] Ver por categoria: ${catTimeRange}`);
+        
+        const catStartDate = new Date();
+        if (catTimeRange === "month") { catStartDate.setDate(1); catStartDate.setHours(0,0,0,0); }
+        else if (catTimeRange === "week") { catStartDate.setDate(catStartDate.getDate() - 7); catStartDate.setHours(0,0,0,0); }
+        else { catStartDate.setDate(1); catStartDate.setHours(0,0,0,0); }
+        
+        const { data: catTxs } = await supabase
+          .from("transacoes")
+          .select("categoria, valor")
+          .eq("usuario_id", userId)
+          .eq("tipo", "saida")
+          .gte("data", catStartDate.toISOString())
+          .eq("status", "confirmada");
+        
+        if (!catTxs || catTxs.length === 0) {
+          await sendMessage(payload.phoneNumber, "Nenhum gasto encontrado 🤷", payload.messageSource);
+          return;
+        }
+        
+        const byCat: Record<string, number> = {};
+        for (const tx of catTxs) {
+          const cat = tx.categoria || "outros";
+          byCat[cat] = (byCat[cat] || 0) + Number(tx.valor);
+        }
+        
+        const sorted = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+        const catEmojis2: Record<string, string> = {
+          alimentacao: "🍔", transporte: "🚗", moradia: "🏠", lazer: "🎮",
+          saude: "🏥", educacao: "📚", mercado: "🛒", servicos: "✂️", compras: "🛍️", outros: "📦"
+        };
+        
+        let catMsg = `📊 *Gastos por Categoria*\n\n`;
+        for (const [cat, total] of sorted) {
+          const emoji = catEmojis2[cat] || "💸";
+          catMsg += `${emoji} ${cat}: R$ ${total.toFixed(2)}\n`;
+        }
+        const totalGeral = sorted.reduce((sum, [_, val]) => sum + val, 0);
+        catMsg += `\n💸 *Total: R$ ${totalGeral.toFixed(2)}*`;
+        
+        // Botões para detalhar top 3 categorias
+        const topCats = sorted.slice(0, 3);
+        const detailButtons = topCats.map(([cat]) => ({
+          id: `view_all_expenses_${catTimeRange}_${cat}`,
+          title: `📋 ${cat.slice(0, 16)}`
+        }));
+        
+        await sendButtons(payload.phoneNumber, catMsg, detailButtons, payload.messageSource);
+        return;
+      }
+      
+      // ========================================================================
+      // 💳 SELEÇÃO DE CARTÃO VIA LISTA (select_card_)
+      // ========================================================================
+      if (payload.buttonReplyId?.startsWith("select_card_") || payload.buttonReplyId?.startsWith("card_")) {
+        const cardId = payload.buttonReplyId.replace("select_card_", "").replace("card_", "");
+        
+        console.log(`💳 [BUTTON] Cartão selecionado via lista: ${cardId}`);
+        
+        if (!activeAction) {
+          await sendMessage(payload.phoneNumber, "Ops, perdi o contexto 😕\nTenta novamente?", payload.messageSource);
+          return;
+        }
+        
+        const { data: selectedCard } = await supabase
+          .from("cartoes_credito")
+          .select("*")
+          .eq("id", cardId)
+          .single();
+        
+        if (!selectedCard) {
+          await sendMessage(payload.phoneNumber, "Cartão não encontrado 🤔", payload.messageSource);
+          return;
+        }
+        
+        const updatedSlots = {
+          ...activeAction.slots,
+          card: selectedCard.nome,
+          card_id: cardId
+        };
+        
+        if (activeAction.intent === "expense") {
+          const result = await registerExpense(userId, updatedSlots, activeAction.id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        } else if (activeAction.intent === "recurring") {
+          const result = await registerRecurring(userId, updatedSlots, activeAction.id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        } else if (activeAction.intent === "installment") {
+          const { registerInstallment } = await import("./intents/installment.ts");
+          const result = await registerInstallment(userId, updatedSlots as any, activeAction.id);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+      }
     }
     
-    // ========================================================================
-    // 📷 PROCESSAR MÍDIA (AUDIO/IMAGEM)
-    // ========================================================================
     let conteudoProcessado = payload.messageText;
     
     if (payload.messageType === "audio" && payload.mediaId) {
@@ -3902,7 +4122,10 @@ async function processarJob(job: any): Promise<void> {
               };
               await createAction(userId, "expense", "expense", slotsWithOptions, "card", payload.messageId);
               
-              if (creditResult.cardButtons) {
+              if (creditResult.useListMessage && creditResult.listSections) {
+                // 4+ cartões: usar lista interativa
+                await sendListMessage(payload.phoneNumber, creditResult.message, "Escolher cartão", creditResult.listSections, payload.messageSource);
+              } else if (creditResult.cardButtons) {
                 await sendButtons(payload.phoneNumber, creditResult.message, creditResult.cardButtons, payload.messageSource);
               } else {
                 await sendMessage(payload.phoneNumber, creditResult.message, payload.messageSource);
@@ -4708,6 +4931,21 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         console.log(`📊 [QUERY] FIX: "detalhe entradas" → roteando para INCOME`);
       }
       
+      // 🔧 FIX: "detalhe [categoria]" deve filtrar por categoria
+      const KNOWN_CATEGORIES = ["alimentacao", "alimentação", "transporte", "moradia", "lazer", "saude", "saúde", "educacao", "educação", "mercado", "servicos", "serviços", "outros", "compras"];
+      if ((normalized.includes("detalhe") || normalized.includes("detalha") || normalized.includes("detalhar")) && !decision.slots.category) {
+        for (const cat of KNOWN_CATEGORIES) {
+          const catNorm = cat.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          if (normalized.includes(catNorm)) {
+            // Normalizar para formato do banco (sem acentos)
+            decision.slots.category = catNorm;
+            queryScope = "expenses";
+            console.log(`📊 [QUERY] FIX: "detalhe ${cat}" → roteando para EXPENSES com category=${catNorm}`);
+            break;
+          }
+        }
+      }
+      
       console.log(`📊 [QUERY] Scope: ${queryScope}, TimeRange: ${timeRange}`);
       
       // Importar funções de query
@@ -4753,14 +4991,31 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           console.log(`📊 [QUERY] Dynamic params:`, expenseQueryParams);
           
           const expensesResult = await executeDynamicQuery(expenseQueryParams);
-          await sendMessage(payload.phoneNumber, expensesResult, payload.messageSource);
+          
+          // ✅ Se tem mais itens, enviar com botões interativos
+          if (expensesResult.hasMore) {
+            const queryButtons: Array<{ id: string; title: string }> = [
+              { id: `view_all_expenses_${expensesResult.timeRange}_${expensesResult.category || 'all'}`, title: "📋 Ver todos" }
+            ];
+            // Se não filtrou por categoria, adicionar botão "Por categoria"
+            if (!expensesResult.category) {
+              queryButtons.push({
+                id: `view_by_category_${expensesResult.timeRange}`,
+                title: "📊 Por categoria"
+              });
+            }
+            await sendButtons(payload.phoneNumber, expensesResult.message, queryButtons, payload.messageSource);
+          } else {
+            await sendMessage(payload.phoneNumber, expensesResult.message, payload.messageSource);
+          }
           
           // Atualizar contexto para próxima pergunta
           await updateConversationContext(userId, {
             currentTopic: "expenses",
             lastIntent: "query",
             lastTimeRange: timeRange,
-            lastQueryScope: "expenses"
+            lastQueryScope: "expenses",
+            lastCategory: decision.slots.category as string || undefined
           });
           
           return;

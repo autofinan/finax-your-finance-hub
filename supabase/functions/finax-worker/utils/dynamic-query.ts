@@ -26,11 +26,20 @@ interface QueryParams {
   time_range?: string;  // "today", "yesterday", "week", etc (apenas para formatação)
 }
 
+export interface QueryResultWithMeta {
+  message: string;
+  hasMore: boolean;
+  totalItems: number;
+  scope: string;
+  category?: string;
+  timeRange: string;
+}
+
 /**
  * ✅ QUERY DINÂMICA - Funciona para QUALQUER período
  * A IA calcula as datas, nós só executamos
  */
-export async function executeDynamicQuery(params: QueryParams): Promise<string> {
+export async function executeDynamicQuery(params: QueryParams): Promise<QueryResultWithMeta> {
   const { userId, query_scope, start_date, end_date, category, card_id, time_range } = params;
   
   console.log(`📊 [DYNAMIC_QUERY] Executando query dinâmica:`, {
@@ -91,7 +100,10 @@ export async function executeDynamicQuery(params: QueryParams): Promise<string> 
   
   if (error) {
     console.error(`❌ [DYNAMIC_QUERY] Erro:`, error);
-    return "Ops! Tive um problema ao buscar seus dados 😕";
+    return { 
+      message: "Ops! Tive um problema ao buscar seus dados 😕", 
+      hasMore: false, totalItems: 0, scope: query_scope, timeRange: time_range || "período" 
+    };
   }
   
   // ============================================================================
@@ -118,7 +130,7 @@ interface FormatOptions {
   endDate: string;
 }
 
-function formatQueryResult(transactions: any[], options: FormatOptions): string {
+function formatQueryResult(transactions: any[], options: FormatOptions): QueryResultWithMeta {
   const { scope, timeRange, category } = options;
   
   // ============================================================================
@@ -128,7 +140,14 @@ function formatQueryResult(transactions: any[], options: FormatOptions): string 
     const periodoTexto = getPeriodoTexto(timeRange);
     const scopeTexto = scope === "expenses" ? "gastos" : scope === "income" ? "entradas" : "transações";
     
-    return `📊 Nenhum ${scopeTexto} ${periodoTexto}! 🎉`;
+    return {
+      message: `📊 Nenhum ${scopeTexto} ${periodoTexto}! 🎉`,
+      hasMore: false,
+      totalItems: 0,
+      scope,
+      category,
+      timeRange
+    };
   }
   
   // ============================================================================
@@ -146,7 +165,7 @@ function formatQueryResult(transactions: any[], options: FormatOptions): string 
   
   const remaining = transactions.length - maxItems;
   const textoAdicional = remaining > 0
-    ? `\n\n_...e mais ${remaining} ${scope === "expenses" ? "gastos" : "transações"}_\n💡 _Diga "ver todos" para a lista completa_` 
+    ? `\n\n_...e mais ${remaining} ${scope === "expenses" ? "gastos" : "transações"}_` 
     : "";
   
   // ============================================================================
@@ -158,7 +177,14 @@ function formatQueryResult(transactions: any[], options: FormatOptions): string 
   
   const titulo = `📊 *${scopeTexto}${categoriaTexto} ${periodoTexto}*`;
   
-  return `${titulo}\n\n${lista}${textoAdicional}\n\n💸 *Total: R$ ${total.toFixed(2)}*`;
+  return {
+    message: `${titulo}\n\n${lista}${textoAdicional}\n\n💸 *Total: R$ ${total.toFixed(2)}*`,
+    hasMore: remaining > 0,
+    totalItems: transactions.length,
+    scope,
+    category,
+    timeRange
+  };
 }
 
 // ============================================================================

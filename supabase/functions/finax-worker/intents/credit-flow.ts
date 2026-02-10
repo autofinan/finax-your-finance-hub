@@ -32,6 +32,11 @@ export interface CreditResolutionResult {
   message: string;
   missingSlot?: string;
   cardButtons?: Array<{ id: string; title: string }>;
+  useListMessage?: boolean;
+  listSections?: Array<{
+    title: string;
+    rows: Array<{ id: string; title: string; description?: string }>;
+  }>;
 }
 
 export interface CardInfo {
@@ -124,10 +129,11 @@ export async function resolveCreditCard(
       cardButtons: cards.map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) }))
     };
   } else {
-    // Mais de 5 cartões: usar lista numerada (sem botões)
-    const lista = cards.map((c, i) => 
-      `${i + 1}. ${c.nome} (R$ ${c.limite_disponivel?.toFixed(2)} disponível)`
-    ).join("\n");
+    // 4+ cartões: usar lista interativa do WhatsApp
+    const lista = cards.map((c, i) => {
+      const disponivel = c.limite_disponivel ?? c.limite_total ?? 0;
+      return `${i + 1}. ${c.nome} (R$ ${disponivel.toFixed(2)} disponível)`;
+    }).join("\n");
     
     return {
       success: false,
@@ -135,8 +141,19 @@ export async function resolveCreditCard(
       cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
       message: `💳 Você tem ${cards.length} cartões:\n\n${lista}\n\n_Responde com o número do cartão_`,
       missingSlot: "card",
-      // SEM botões - vai usar seleção numérica
-      cardButtons: undefined
+      // Usar lista interativa para 4+ cartões
+      useListMessage: true,
+      listSections: [{
+        title: "Seus cartões",
+        rows: cards.map(c => {
+          const disponivel = c.limite_disponivel ?? c.limite_total ?? 0;
+          return {
+            id: `card_${c.id}`,
+            title: (c.nome || "Cartão").slice(0, 24),
+            description: `Disponível: R$ ${disponivel.toFixed(2)}`
+          };
+        })
+      }]
     };
   }
 }
