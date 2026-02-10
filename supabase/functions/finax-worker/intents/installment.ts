@@ -106,17 +106,18 @@ export async function registerInstallment(
   
   // Precisa escolher cartão
   if (!selectedCard) {
+    // Retornar com cardButtons para o caller usar sendButtons/sendListMessage
+    const cardButtons = cards.slice(0, 3).map(c => ({ 
+      id: `card_${c.id}`, 
+      title: (c.nome || "Cartão").slice(0, 20) 
+    }));
+    
     return {
       success: false,
       needsCardSelection: true,
-      message: `💳 Qual cartão?\n\n${cards.map((c, i) => 
-        `${i + 1}. ${c.nome} (R$ ${(c.limite_disponivel ?? 0).toFixed(2)} disponível)`
-      ).join("\n")}`,
+      message: `💳 Qual cartão?`,
       missingSlot: "card",
-      cardButtons: cards.slice(0, 3).map(c => ({ 
-        id: `card_${c.id}`, 
-        title: (c.nome || "Cartão").slice(0, 20) 
-      }))
+      cardButtons
     };
   }
   

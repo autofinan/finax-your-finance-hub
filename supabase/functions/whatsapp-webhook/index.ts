@@ -157,6 +157,7 @@ interface PayloadParsed {
   nomeContato: string | null;
   rawPayload: any;
   buttonReplyId: string | null;
+  listReplyId: string | null;
 }
 
 // ============================================================================
@@ -335,7 +336,8 @@ function parsePayload(json: any): PayloadParsed | null {
       mediaMimeType: "",
       nomeContato: null,
       rawPayload: json,
-      buttonReplyId: null
+      buttonReplyId: null,
+      listReplyId: null
     };
   }
   
@@ -357,6 +359,7 @@ function parsePayload(json: any): PayloadParsed | null {
     let mediaId: string | null = null;
     let mediaMimeType = "";
     let buttonReplyId: string | null = null;
+    let listReplyId: string | null = null;
     
     if (message.type === "text") {
       messageType = "text";
@@ -370,11 +373,13 @@ function parsePayload(json: any): PayloadParsed | null {
       mediaId = message.image?.id || null;
       mediaMimeType = message.image?.mime_type || "image/jpeg";
     } else if (message.type === "interactive") {
-      // 🔘 CALLBACK DE BOTÃO INTERATIVO
       messageType = "text";
+      // 🔘 CALLBACK DE BOTÃO INTERATIVO
       buttonReplyId = message.interactive?.button_reply?.id || null;
-      messageText = buttonReplyId || message.interactive?.button_reply?.title || "";
-      console.log(`🔘 [BUTTON] Callback: ${buttonReplyId}`);
+      // 📋 CALLBACK DE LISTA INTERATIVA
+      listReplyId = message.interactive?.list_reply?.id || null;
+      messageText = buttonReplyId || listReplyId || message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || "";
+      console.log(`🔘 [INTERACTIVE] button: ${buttonReplyId}, list: ${listReplyId}`);
     } else {
       return null; // Tipo não suportado
     }
@@ -389,7 +394,8 @@ function parsePayload(json: any): PayloadParsed | null {
       mediaMimeType,
       nomeContato,
       rawPayload: json,
-      buttonReplyId
+      buttonReplyId,
+      listReplyId
     };
   }
   

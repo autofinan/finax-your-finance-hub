@@ -2919,6 +2919,75 @@ async function processarJob(job: any): Promise<void> {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
       
       // ====================================================================
+      // ✅ CONFIRMAÇÃO VIA BOTÃO (confirm_yes / confirm_no)
+      // ====================================================================
+      if (payload.buttonReplyId === "confirm_yes" && activeAction && activeAction.status === "awaiting_confirmation") {
+        console.log(`✅ [BUTTON] Confirmação recebida para ${activeAction.intent}`);
+        
+        const slots = activeAction.slots as ExtractedSlots;
+        let result: { message: string; success?: boolean };
+        
+        switch (activeAction.intent) {
+          case "expense":
+            result = await registerExpense(userId, slots, activeAction.id);
+            break;
+          case "income":
+            result = await registerIncome(userId, slots, activeAction.id);
+            break;
+          case "recurring":
+            result = await registerRecurring(userId, slots, activeAction.id);
+            break;
+          case "installment": {
+            const { registerInstallment } = await import("./intents/installment.ts");
+            result = await registerInstallment(userId, slots as any, activeAction.id);
+            break;
+          }
+          case "add_card": {
+            const { createCard } = await import("./intents/card.ts");
+            result = await createCard(userId, slots as any);
+            break;
+          }
+          case "bill": {
+            const { createBill } = await import("./intents/bills.ts");
+            const billResult = await createBill({
+              userId,
+              nome: slots.bill_name || slots.description || "Conta",
+              diaVencimento: Number(slots.due_day || 1),
+              valorEstimado: slots.estimated_value ? Number(slots.estimated_value) : undefined,
+              tipo: "fixa"
+            });
+            result = { message: billResult, success: true };
+            break;
+          }
+          case "numero_isolado": {
+            const typeChoice = slots.type_choice || slots.original_intent;
+            if (typeChoice === "income") {
+              result = await registerIncome(userId, slots, activeAction.id);
+            } else {
+              result = await registerExpense(userId, slots, activeAction.id);
+            }
+            break;
+          }
+          default:
+            result = { message: "✅ Feito!", success: true };
+        }
+        
+        await supabase.from("actions")
+          .update({ status: "done" })
+          .eq("user_id", userId)
+          .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
+        
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        return;
+      }
+      
+      if (payload.buttonReplyId === "confirm_no" && activeAction) {
+        await cancelAction(userId);
+        await sendMessage(payload.phoneNumber, "👍 Cancelado!", payload.messageSource);
+        return;
+      }
+      
+      // ====================================================================
       // 📦 MÚLTIPLOS GASTOS - Separado ou Junto
       // ====================================================================
       if (payload.buttonReplyId === "multi_separado" && activeAction?.intent === "multi_expense") {
@@ -3890,7 +3959,10 @@ async function processarJob(job: any): Promise<void> {
           await setActionAwaitingConfirmation(activeAction.id, contextResult.updatedSlots!);
           
           const confirmMsg = generateConfirmationMessage(activeAction.intent, contextResult.updatedSlots!);
-          await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
+          await sendButtons(payload.phoneNumber, confirmMsg, [
+            { id: "confirm_yes", title: "✅ Confirmar" },
+            { id: "confirm_no", title: "❌ Cancelar" }
+          ], payload.messageSource);
           return;
         }
         
@@ -4699,8 +4771,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           return;
         }
         
-        // Precisa confirmar → enviar mensagem de confirmação
-        // Mensagem customizada para parcelamento
+        // Precisa confirmar → enviar mensagem de confirmação COM BOTÕES
         const valorParcela = (slots.amount || 0) / (slots.installments || 1);
         const confirmMsg = `*Confirmar parcelamento:*\n\n` +
           `📦 ${slots.description || "Compra"}\n` +
@@ -4708,7 +4779,10 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           (slots.card ? `💳 ${slots.card}\n` : "") +
           `\n✅ *Tudo certo?*`;
         
-        await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
+        await sendButtons(payload.phoneNumber, confirmMsg, [
+          { id: "confirm_yes", title: "✅ Confirmar" },
+          { id: "confirm_no", title: "❌ Cancelar" }
+        ], payload.messageSource);
         return;
       }
       
