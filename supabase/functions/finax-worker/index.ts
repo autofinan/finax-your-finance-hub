@@ -3695,6 +3695,16 @@ async function processarJob(job: any): Promise<void> {
             result = { message: payResult, success: true };
             break;
           }
+          case "numero_isolado": {
+            const typeChoice = slots.type_choice || slots.original_intent;
+            if (typeChoice === "income") {
+              result = await registerIncome(userId, slots, activeAction.id);
+            } else {
+              // Default to expense
+              result = await registerExpense(userId, slots, activeAction.id);
+            }
+            break;
+          }
           default:
             result = { message: "✅ Feito!", success: true };
         }
@@ -3745,6 +3755,15 @@ async function processarJob(job: any): Promise<void> {
             case "income":
               execResult = await registerIncome(userId, execSlots, activeAction.id);
               break;
+            case "numero_isolado": {
+              const typeChoice2 = execSlots.type_choice || execSlots.original_intent;
+              if (typeChoice2 === "income") {
+                execResult = await registerIncome(userId, execSlots, activeAction.id);
+              } else {
+                execResult = await registerExpense(userId, execSlots, activeAction.origin_message_id || null, activeAction.id);
+              }
+              break;
+            }
             default:
               console.log(`⚠️ [FSM] Intent "${activeAction.intent}" não suporta execução direta`);
               // Fallback: pedir confirmação
