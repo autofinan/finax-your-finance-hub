@@ -230,6 +230,8 @@ export async function registerExpense(
   console.log(`📅 [EXPENSE] Salvo no banco: ${dateISO}`);
   console.log(`📅 [EXPENSE] Mostrado ao usuário: ${formattedDateTime}`);
   
+  const message = `✅ Gasto registrado!\n\n📝 ${slots.description || category}\n💰 R$ ${(slots.amount || 0).toFixed(2)}\n${paymentEmoji} ${slots.payment_method || "pix"}\n📅 ${formattedDateTime}`;
+
   return {
     success: true,
     message,
