@@ -95,6 +95,7 @@ interface JobPayload {
   nomeContato: string | null;
   evento_id: string | null;
   buttonReplyId: string | null;
+  listReplyId?: string | null;
   replyToMessageId?: string | null;
 }
 
@@ -2819,7 +2820,7 @@ async function processarJob(job: any): Promise<void> {
     
     if (activeOnboarding) {
       console.log(`🎯 [ONBOARDING] Step ativo: ${activeOnboarding.current_step}`);
-      const handled = await handleOnboardingStep(userId, payload.phoneNumber, conteudoProcessado, payload.buttonReplyId || undefined);
+      const handled = await handleOnboardingStep(userId, payload.phoneNumber, payload.messageText || "", payload.buttonReplyId || undefined);
       if (handled) {
         await supabase.from("historico_conversas").insert({ phone_number: payload.phoneNumber, user_id: userId, user_message: payload.messageText || "[MÍDIA]", ai_response: "[ONBOARDING]", tipo: "onboarding" });
         return;
@@ -2914,7 +2915,7 @@ async function processarJob(job: any): Promise<void> {
       console.log(`📋 [LIST] Convertido listReplyId → buttonReplyId: ${payload.listReplyId}`);
     }
     
-    if (isButtonReply) {
+    if (isButtonReply && payload.buttonReplyId) {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
       
       // ====================================================================
@@ -3847,7 +3848,7 @@ async function processarJob(job: any): Promise<void> {
           
           switch (activeAction.intent) {
             case "expense":
-              execResult = await registerExpense(userId, execSlots, activeAction.origin_message_id || null, activeAction.id);
+              execResult = await registerExpense(userId, execSlots, activeAction.id);
               break;
             case "income":
               execResult = await registerIncome(userId, execSlots, activeAction.id);
@@ -3857,7 +3858,7 @@ async function processarJob(job: any): Promise<void> {
               if (typeChoice2 === "income") {
                 execResult = await registerIncome(userId, execSlots, activeAction.id);
               } else {
-                execResult = await registerExpense(userId, execSlots, activeAction.origin_message_id || null, activeAction.id);
+                execResult = await registerExpense(userId, execSlots, activeAction.id);
               }
               break;
             }
@@ -3865,8 +3866,8 @@ async function processarJob(job: any): Promise<void> {
               console.log(`⚠️ [FSM] Intent "${activeAction.intent}" não suporta execução direta`);
               // Fallback: pedir confirmação
               const { generateConfirmationMessage, setActionAwaitingConfirmation } = await import("./fsm/context-handler.ts");
-              await setActionAwaitingConfirmation(activeAction.id, execSlots);
-              const confirmMsg = generateConfirmationMessage(activeAction.intent, execSlots);
+              await setActionAwaitingConfirmation(activeAction.id, execSlots as any);
+              const confirmMsg = generateConfirmationMessage(activeAction.intent, execSlots as any);
               await sendMessage(payload.phoneNumber, confirmMsg, payload.messageSource);
               return;
           }
