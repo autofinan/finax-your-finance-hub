@@ -1646,6 +1646,7 @@ async function sendListMessage(
     const fallbackText = bodyText + "\n\n" + fallbackRows.map((r, i) => `${i + 1}. ${r.title}`).join("\n");
     return sendMessage(to, fallbackText, source);
   }
+}
 
 // ============================================================================
 // 🎤 MÍDIA (AUDIO/IMAGEM)
