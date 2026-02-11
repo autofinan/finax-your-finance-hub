@@ -95,6 +95,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('✅ [AUTH] Sessão válida:', response.data.user.nome);
       localStorage.setItem(USER_KEY, JSON.stringify(response.data.user));
       setUser(response.data.user);
+
+      // Set Supabase Auth session so auth.uid() works in RLS policies
+      if (response.data.supabaseSession) {
+        await supabase.auth.setSession({
+          access_token: response.data.supabaseSession.access_token,
+          refresh_token: response.data.supabaseSession.refresh_token,
+        });
+      }
+
       setLoading(false);
       
     } catch (err) {
@@ -193,6 +202,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken);
         localStorage.setItem(USER_KEY, JSON.stringify(data.user));
         
+        // Set Supabase Auth session so auth.uid() works in RLS policies
+        if (data.supabaseSession) {
+          await supabase.auth.setSession({
+            access_token: data.supabaseSession.access_token,
+            refresh_token: data.supabaseSession.refresh_token,
+          });
+        }
+        
         // Atualizar estado
         setUser(data.user);
         setOtpSent(false);
@@ -218,6 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ========================================================================
   const logout = useCallback(() => {
     console.log('👋 [AUTH] Fazendo logout...');
+    supabase.auth.signOut().catch(() => {}); // Clear Supabase Auth session
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.removeItem(USER_KEY);

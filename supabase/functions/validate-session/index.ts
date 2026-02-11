@@ -11,6 +11,59 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// ============================================================================
+// 🔐 SUPABASE AUTH SESSION - Para auth.uid() funcionar no frontend (RLS)
+// ============================================================================
+async function getSupabaseAuthSession(userId: string): Promise<{ access_token: string; refresh_token: string } | null> {
+  try {
+    const authEmail = `${userId}@finax.auth`;
+    const encoder = new TextEncoder();
+    const passwordData = encoder.encode(userId + SUPABASE_SERVICE_ROLE_KEY);
+    const passwordHash = await crypto.subtle.digest("SHA-256", passwordData);
+    const authPassword = Array.from(new Uint8Array(passwordHash)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let { data: signInData, error: signInError } = await anonClient.auth.signInWithPassword({
+      email: authEmail,
+      password: authPassword,
+    });
+
+    if (signInError) {
+      const { error: createError } = await supabase.auth.admin.createUser({
+        id: userId,
+        email: authEmail,
+        password: authPassword,
+        email_confirm: true,
+      });
+
+      if (createError) {
+        await supabase.auth.admin.updateUserById(userId, { password: authPassword });
+      }
+
+      const result = await anonClient.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      signInData = result.data;
+    }
+
+    if (signInData?.session) {
+      await supabase.from("usuarios").update({ auth_id: userId }).eq("id", userId);
+      return {
+        access_token: signInData.session.access_token,
+        refresh_token: signInData.session.refresh_token,
+      };
+    }
+
+    return null;
+  } catch (err) {
+    console.error("⚠️ [AUTH] Supabase Auth session error:", err);
+    return null;
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -73,6 +126,9 @@ serve(async (req) => {
 
     const usuario = session.usuarios as any;
 
+    // Criar sessão Supabase Auth para RLS
+    const supabaseSession = await getSupabaseAuthSession(usuario.id);
+
     // Calcular status do plano
     let planoStatus = "indefinido";
     let diasRestantesTrial = null;
@@ -93,6 +149,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         valid: true,
+        supabaseSession,
         user: {
           id: usuario.id,
           nome: usuario.nome,
