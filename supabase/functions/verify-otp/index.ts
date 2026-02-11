@@ -49,6 +49,65 @@ function generateRefreshToken(): string {
   return Array.from(array, b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// ============================================================================
+// 🔐 SUPABASE AUTH SESSION - Para auth.uid() funcionar no frontend (RLS)
+// ============================================================================
+async function getSupabaseAuthSession(userId: string): Promise<{ access_token: string; refresh_token: string } | null> {
+  try {
+    const authEmail = `${userId}@finax.auth`;
+    const encoder = new TextEncoder();
+    const passwordData = encoder.encode(userId + SUPABASE_SERVICE_ROLE_KEY);
+    const passwordHash = await crypto.subtle.digest("SHA-256", passwordData);
+    const authPassword = Array.from(new Uint8Array(passwordHash)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // Try sign in first
+    let { data: signInData, error: signInError } = await anonClient.auth.signInWithPassword({
+      email: authEmail,
+      password: authPassword,
+    });
+
+    if (signInError) {
+      // Create Supabase Auth user with SAME UUID as usuarios.id
+      const { error: createError } = await supabase.auth.admin.createUser({
+        id: userId,
+        email: authEmail,
+        password: authPassword,
+        email_confirm: true,
+      });
+
+      if (createError) {
+        // Already exists with different password - update it
+        await supabase.auth.admin.updateUserById(userId, { password: authPassword });
+      }
+
+      // Retry sign in
+      const result = await anonClient.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      signInData = result.data;
+    }
+
+    if (signInData?.session) {
+      // Sync auth_id = id (same UUID)
+      await supabase.from("usuarios").update({ auth_id: userId }).eq("id", userId);
+      console.log(`✅ [AUTH] Supabase Auth session created for ${userId}`);
+      return {
+        access_token: signInData.session.access_token,
+        refresh_token: signInData.session.refresh_token,
+      };
+    }
+
+    return null;
+  } catch (err) {
+    console.error("⚠️ [AUTH] Supabase Auth session error:", err);
+    return null;
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -169,6 +228,9 @@ serve(async (req) => {
       console.log(`📱 [VERIFY] Atualizado phone_e164: ${phoneE164}`);
     }
 
+    // Criar sessão Supabase Auth para que auth.uid() funcione no frontend
+    const supabaseSession = await getSupabaseAuthSession(usuario.id);
+
     // ========================================================================
     // 🔐 CRIAR SESSÃO
     // ========================================================================
@@ -234,6 +296,7 @@ serve(async (req) => {
         token,
         refreshToken,
         expiresAt,
+        supabaseSession,
         user: {
           id: usuario.id,
           nome: usuario.nome,

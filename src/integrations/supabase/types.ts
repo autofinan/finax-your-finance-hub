@@ -4183,6 +4183,7 @@ export type Database = {
       }
       get_alert_stats: { Args: never; Returns: Json }
       is_service_role: { Args: never; Returns: boolean }
+      is_user_owner: { Args: { target_user_id: string }; Returns: boolean }
       limpar_conversas_expiradas: { Args: never; Returns: undefined }
       normalize_phone_e164: { Args: { phone: string }; Returns: string }
       reset_user_conversation_state: {
