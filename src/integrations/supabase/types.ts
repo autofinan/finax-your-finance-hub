@@ -947,11 +947,15 @@ export type Database = {
           expires_at: string | null
           interaction_count: number | null
           last_card_id: string | null
+          last_card_name: string | null
           last_category: string | null
+          last_end_date: string | null
           last_goal_id: string | null
+          last_goal_name: string | null
           last_intent: string | null
           last_interaction_at: string | null
           last_query_scope: string | null
+          last_start_date: string | null
           last_time_range: string | null
           user_id: string
         }
@@ -961,11 +965,15 @@ export type Database = {
           expires_at?: string | null
           interaction_count?: number | null
           last_card_id?: string | null
+          last_card_name?: string | null
           last_category?: string | null
+          last_end_date?: string | null
           last_goal_id?: string | null
+          last_goal_name?: string | null
           last_intent?: string | null
           last_interaction_at?: string | null
           last_query_scope?: string | null
+          last_start_date?: string | null
           last_time_range?: string | null
           user_id: string
         }
@@ -975,11 +983,15 @@ export type Database = {
           expires_at?: string | null
           interaction_count?: number | null
           last_card_id?: string | null
+          last_card_name?: string | null
           last_category?: string | null
+          last_end_date?: string | null
           last_goal_id?: string | null
+          last_goal_name?: string | null
           last_intent?: string | null
           last_interaction_at?: string | null
           last_query_scope?: string | null
+          last_start_date?: string | null
           last_time_range?: string | null
           user_id?: string
         }
