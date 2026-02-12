@@ -1,116 +1,191 @@
 
 
-# Plano de Correcao Completa - Finax Worker
+# Plano de Correcao Completa - Finax Conversacional + Botoes
 
-## Problemas Identificados
+## Filosofia Central
 
-### Problema 1: Selecao de cartao mostra texto em vez de botoes/lista interativa
-**O que acontece:** Quando usuario diz "cafe 5,40 credito" e tem 4 cartoes, o sistema mostra lista numerada em texto com "Responde com o numero do cartao" em vez de usar botoes interativos (ate 3) ou lista interativa do WhatsApp (4+).
-
-**Causa raiz:** O `credit-flow.ts` ja foi corrigido para retornar `useListMessage` e `listSections`, e o `index.ts` ja tem `sendListMessage`. Porem, o codigo no bloco de expense (linha ~4126) envia a lista corretamente, MAS o fallback de texto na mensagem do `credit-flow.ts` (linha 142) ainda inclui "Responde com o numero do cartao" que e redundante quando a lista interativa funciona. O problema real e que **a funcao `sendListMessage` pode estar falhando silenciosamente** e caindo no fallback de texto. Alem disso, ha o bug do "R$ undefined disponivel" no Sicredi.
-
-### Problema 2: "R$ undefined disponivel" no cartao Sicredi
-**O que acontece:** Cartao Sicredi mostra "R$ undefined disponivel" porque `limite_disponivel` e `null` no banco.
-
-**Causa raiz:** A migracao SQL para corrigir valores `null` ja foi aprovada/executada, mas o codigo em `credit-flow.ts` linha 134 ja usa `c.limite_disponivel ?? c.limite_total ?? 0`. O problema e que a mensagem de texto (fallback) no `credit-flow.ts` linha 135 usa `c.limite_disponivel` que pode ser null antes do fallback. Precisa verificar se a migracao realmente rodou.
-
-### Problema 3: "Acai 25" tratado como numero isolado
-**O que acontece:** Quando usuario manda "Acai 25", o sistema cria uma action `numero_isolado` com pending_slot `type_choice` e amount `1` (!!). Depois "Sim" dispara confirmacao que cai no case `default` do `generateConfirmationMessage`, exibindo JSON bruto.
-
-**Causa raiz:** O `isNumericOnly("Acai 25")` retorna `false` (correto), mas no decision engine, o resultado da IA provavelmente retorna `unknown` com baixa confianca, e o fallback final no `isNumericOnly` check pega. Olhando os logs: `amount: 1` e `type_choice: "Acai 25"` - isso indica que o texto "Acai 25" foi inserido como `type_choice` quando deveria ter sido classificado como expense. O intent `numero_isolado` nao e reconhecido no switch case do `generateConfirmationMessage`, causando JSON bruto.
-
-### Problema 4: Botoes "Ver todos" / "Por categoria" nas queries
-**O que acontece:** Ja implementado no codigo (linhas 4997-5011), mas precisa verificar se funciona corretamente na pratica com os handlers de botao (linhas 3361-3487).
-
-### Problema 5: "Detalhe alimentacao" nao filtra por categoria
-**O que acontece:** Ja implementado (linhas 4936-4948), precisa verificar se funciona.
+O Finax e um assistente CONVERSACIONAL que usa botoes apenas quando ha opcoes objetivas e limitadas. Saudacoes, ajuda e dialogos sao CONVERSA. Selecao de cartao, forma de pagamento e confirmacoes sao BOTOES.
 
 ---
 
-## Correcoes Necessarias
+## BLOCO 1: Botoes "Ver todos" / "Por categoria" (BUG CRITICO)
 
-### Correcao 1: `credit-flow.ts` - Garantir lista interativa para 4+ cartoes
+**Problema:** Clicar em [Ver todos] ou [Por categoria] retorna "perdi o contexto" porque esses botoes caem no guard `EXPIRED_BUTTON` (linha 3047) que exige `activeAction`.
 
-**Arquivo:** `supabase/functions/finax-worker/intents/credit-flow.ts`
+**Causa raiz:** Os handlers `view_all_*` e `view_by_category_*` ja existem (linhas 3480-3606) MAS estao DENTRO do bloco `if (activeAction)` (o guard na linha 3047 retorna antes de chegar neles).
 
-O codigo atual (linhas 131-158) ja tem a logica de lista interativa. O problema e sutil: a mensagem de fallback (linha 142) diz "Responde com o numero do cartao" que so deveria aparecer se a lista interativa falhar. A estrutura esta correta, mas precisa garantir que `sendListMessage` no `index.ts` funcione.
+**Correcao:** Mover os handlers de `view_all_*` e `view_by_category_*` para ANTES do guard de `EXPIRED_BUTTON`. Esses botoes sao auto-suficientes (extraem parametros do proprio ID) e nao precisam de action ativa.
 
-**Acao:** Verificar que o fluxo no `index.ts` (linhas 4126-4128) esta chamando `sendListMessage` corretamente quando `useListMessage === true`.
+**Arquivo:** `index.ts` - Reorganizar ordem dos handlers de botao (mover linhas 3480-3606 para antes da linha 3047)
 
-### Correcao 2: `index.ts` - Corrigir tratamento de "Acai 25" como numero isolado
+---
 
-**Arquivo:** `supabase/functions/finax-worker/index.ts`
+## BLOCO 2: Parcelamento nao pede cartao com botoes (BUG CRITICO)
 
-**Causa:** O intent `numero_isolado` nao esta nos cases do `generateConfirmationMessage` em `context-handler.ts`. Quando "Acai 25" chega com action `numero_isolado` e pending_slot `type_choice`, a FSM preenche `type_choice = "Acai 25"` (toda a mensagem como valor do slot). Depois, como nao tem mais slots faltando, marca `readyToExecute: true`. No executor (linha 3736), cai no case `default` que pede confirmacao via `generateConfirmationMessage`, e como nao ha case para `numero_isolado`, mostra JSON bruto.
+**Problema:** "ventilador 140 credito 2x" -> Confirma -> "Qual cartao?" em TEXTO -> usuario responde "sicredi" em texto -> IA retorna unknown conf 0.3 -> "Nao entendi"
 
-**Solucao:**
-1. Em `context-handler.ts`, o slot `type_choice` deveria validar se o valor e "expense" ou "income" (nao aceitar texto livre)
-2. Se a mensagem "Acai 25" chega quando ha action `numero_isolado` com pending_slot `type_choice`, deveria reconhecer que nao e resposta valida e cancelar a action, permitindo reprocessar como novo expense
-3. Adicionar case `numero_isolado` no `generateConfirmationMessage` como fallback de seguranca
+**Causa raiz:** No handler `confirm_yes` para `installment` (linha 2940-2943), o resultado de `registerInstallment` nao verifica `needsCardSelection`. O installment.ts retorna `needsCardSelection: true` mas o index.ts ignora e envia `result.message` como texto simples.
 
-### Correcao 3: FSM `context-handler.ts` - Validar slot `type_choice`
+**Correcao:**
+- **`index.ts`** (case `installment` no confirm_yes, linha 2940): Apos chamar `registerInstallment`, verificar se `result.needsCardSelection === true`. Se sim:
+  - Criar action com `pending_slot: "card"` e intent `installment`
+  - Se `result.cardButtons` -> `sendButtons`
+  - Se `result.useListMessage` -> `sendListMessage`
+- O handler de `card_*` na linha 3694 ja trata `activeAction.intent === "installment"`, entao a selecao vai funcionar automaticamente.
 
-**Arquivo:** `supabase/functions/finax-worker/fsm/context-handler.ts`
+**Arquivo:** `index.ts` - Bloco confirm_yes case installment
 
-Na funcao `extractSlotValue`, adicionar case para `type_choice` que so aceite "gasto", "entrada", "expense", "income" e similares. Se a mensagem nao corresponder, retornar `null` para que o sistema repergunte ou cancele e reprocesse.
+---
 
-### Correcao 4: `generateConfirmationMessage` - Adicionar case `numero_isolado`
+## BLOCO 3: Entrada mostra "outro" em vez da forma de pagamento (BUG IMPORTANTE)
 
-**Arquivo:** `supabase/functions/finax-worker/fsm/context-handler.ts`
+**Problema:** "caiu 500 pix" registra com `💳 outro` na mensagem. Logs confirmam: IA envia `payment_method: "pix"` nos slots, mas income.ts usa `slots.source` (que e undefined) e faz fallback para "outro".
 
-No default case da funcao `generateConfirmationMessage` (linha 464), em vez de mostrar `JSON.stringify(slots)`, formatar de forma amigavel:
+**Causa raiz:** Em `income.ts` linha 44: `const source = slots.source || "outro"`. A IA envia `payment_method` mas income.ts busca `source`. O mapeamento nao existe.
 
-```text
-default:
-  message = `*Confirmar:*\n\n`;
-  if (slots.amount) message += `R$ ${slots.amount.toFixed(2)}\n`;
-  if (slots.description) message += `${slots.description}\n`;
-```
+**Correcao:**
+- **`income.ts`** (linha 44): Mudar para `const source = slots.source || slots.payment_method || "outro"`. Isso captura tanto quando vem de botao (`src_pix` -> source) quanto da IA (`payment_method`).
 
-### Correcao 5: `index.ts` - Handler de `numero_isolado` no executor da FSM
+**Arquivo:** `intents/income.ts`
 
-**Arquivo:** `supabase/functions/finax-worker/index.ts`
+---
 
-Na secao de confirmacao recebida (linha 3652-3709), o switch case nao tem `numero_isolado`. Quando o usuario confirma "Sim" num contexto de numero isolado, o sistema precisa saber se e gasto ou entrada para executar. Como o `type_choice` esta nos slots, precisamos rotear:
+## BLOCO 4: "meus parcelamentos" mostra resumo geral (BUG IMPORTANTE)
 
-```text
-case "numero_isolado":
-  if (slots.type_choice === "expense" || activeAction.slots.original_intent === "expense") {
-    result = await registerExpense(userId, slots, activeAction.id);
-  } else {
-    result = await registerIncome(userId, slots, activeAction.id);
-  }
-  break;
-```
+**Problema:** IA classifica como `query` com `query_scope: "installments"`, mas o handler de query nao tem case para installments. Cai no fallback que mostra resumo mensal generico.
 
-### Correcao 6: Verificar e garantir migracao SQL dos limites null
+**Causa raiz:** No roteamento de query (provavelmente apos linha 4600), nao ha case para `query_scope === "installments"` ou `"installment"` ou `"parcelas"`.
 
-Verificar se a migracao `20260210003203` realmente rodou para corrigir `limite_disponivel IS NULL` nos cartoes de credito. Se nao, reexecutar.
+**Correcao:**
+- **`index.ts`** (secao de query routing): Adicionar case para `query_scope` contendo "installment"/"parcela"/"parcelamento":
+  - Buscar da tabela `parcelamentos` onde `usuario_id = userId` e `ativa = true`
+  - Formatar lista com descricao, parcela_atual/num_parcelas, valor_parcela
+  - Se nao encontrar: "Nenhum parcelamento ativo"
 
-### Correcao 7: Tolerancia a typos na confirmacao ("sjm" = "sim")
+**Arquivo:** `index.ts` - Secao de query
 
-**Arquivo:** `supabase/functions/finax-worker/fsm/context-handler.ts`
+---
 
-Na funcao `handleConfirmation` (linha 126), adicionar palavras com typos comuns:
+## BLOCO 5: "meus metas" / "minhas metas" mostra resumo geral (BUG SIMILAR)
 
-```text
-const positiveWords = ["sim", "s", "yes", "confirma", "confirmar", "isso", "certeza", "ok", "certo", "sjm", "simmm", "siin", "si"];
-```
+**Problema:** IA classifica como `query` com `query_scope: "goal"` mas cai no resumo mensal generico.
+
+**Causa raiz:** Mesma causa do BUG #4. Sem case para goals no query router.
+
+**Correcao:**
+- **`index.ts`** (secao de query routing): Adicionar case para `query_scope === "goal"` ou `"goals"` ou `"metas"`:
+  - Buscar da tabela `metas` onde `usuario_id = userId` e `status = 'ativa'`
+  - Formatar com nome, valor_atual/valor_objetivo, percentual de progresso
+
+**Arquivo:** `index.ts` - Secao de query
+
+---
+
+## BLOCO 6: Cancelamento usa lista numerada em texto (BUG MEDIO)
+
+**Problema:** "cancela" mostra lista "1. R$ 4.56 - uber" com "Responde com o numero" em texto.
+
+**Causa raiz:** O handler de cancel cria action com `options` e `pending_slot: "selection"`, e mostra lista numerada. O FSM espera resposta numerica que pode ser confundida com valor.
+
+**Correcao:**
+- **`index.ts`** (handler de cancel, onde cria lista numerada): Substituir por botoes (ate 3 transacoes) ou lista interativa (4+):
+  - Botoes com `cancel_tx_{id}` (ja existe handler na linha 3423)
+  - Lista com `cancel_tx_{id}` como row ID
+  - Remover a logica de "selecao numerica" do FSM para cancel
+
+**Arquivo:** `index.ts` - Secao de cancel
+
+---
+
+## BLOCO 7: "Erro ao atualizar contexto" em todos os logs (BUG NAO-BLOQUEANTE)
+
+**Problema:** Erro aparece em TODOS os testes. Provavelmente a tabela `conversation_context` nao tem todas as colunas necessarias ou o upsert falha.
+
+**Causa raiz:** O `conversation-context.ts` faz upsert com campos como `last_card_name`, `last_goal_name`, `last_start_date`, `last_end_date`, `interaction_count` que podem nao existir na tabela.
+
+**Correcao:**
+- Verificar schema da tabela `conversation_context` e adicionar colunas faltantes via migracao SQL
+- OU simplificar o upsert para usar apenas colunas que existem
+
+**Arquivo:** Migracao SQL + `utils/conversation-context.ts`
+
+---
+
+## BLOCO 8: Saudacao e Ajuda conversacionais (POLIMENTO)
+
+**Problema:** "oi" e "ajuda" retornam respostas basicas sem contexto.
+
+**Correcao (CONVERSA, nao botoes):**
+- **Saudacao:** Detectar horario (bom dia/boa tarde/boa noite), buscar ultima atividade do usuario, responder contextualmente. Ex: "Boa tarde! Vi que voce acabou de registrar um cafe. Quer adicionar mais algo?"
+- **Ajuda:** Responder com texto conversacional listando exemplos por categoria. Se o usuario responder com topico ("gastos"), detalhar. Usar `conversation_context.last_intent = "help"` para manter contexto da conversa de ajuda.
+- NAO usar botoes para saudacao nem ajuda. Manter conversa natural.
+
+**Arquivo:** `index.ts` - Handlers de saudacao e ajuda
+
+---
+
+## BLOCO 9: Meta nao reconhece "ja tenho 250 para essa meta" (BUG MEDIO)
+
+**Problema:** "ja tenho 250 para essa meta" -> IA classifica como `goal` com `amount: 250` mas sem `description`. Pergunta nome da meta. Usuario responde "trafego pago" -> IA classifica como `unknown` conf 0.3.
+
+**Causa raiz:** A resposta ao slot `description` da meta e um texto solto que a IA nao consegue classificar. O FSM (context-handler) deveria capturar isso como preenchimento de slot, mas provavelmente nao tem case para goal/description.
+
+**Correcao:**
+- **`fsm/context-handler.ts`**: Garantir que quando `activeAction.intent === "goal"` e `pending_slot === "description"`, qualquer texto livre seja aceito como nome da meta (sem passar pela IA).
+- **`index.ts`** (handler de goal): Se IA detecta `goal` com `description` que ja existe, ao inves de perguntar "quer atualizar", verificar se o usuario disse "guardei/adicionei/ja tenho" e adicionar ao acumulado.
+
+**Arquivo:** `fsm/context-handler.ts` + `intents/goals.ts`
 
 ---
 
 ## Ordem de Implementacao
 
-1. **context-handler.ts** - Corrigir `extractSlotValue` para `type_choice`, adicionar case `numero_isolado` no `generateConfirmationMessage`, adicionar tolerancia a typos
-2. **index.ts** - Adicionar case `numero_isolado` no executor de confirmacao (linha ~3658)
-3. **credit-flow.ts** - Verificar que o fallback de texto nao sobrescreve a lista interativa
-4. **Verificar migracao SQL** - Confirmar que limites null foram corrigidos
-5. **Deploy e testar**
+```text
+DIA 1 (Criticos - impacto imediato):
+  1. BLOCO 1 - Botoes Ver todos/Por categoria (30 min)
+  2. BLOCO 2 - Parcelamento pedir cartao com botoes (1h)
+  3. BLOCO 3 - Income forma_pagamento "outro" -> correto (15 min)
+  4. BLOCO 7 - Fix "Erro ao atualizar contexto" (30 min)
 
-## Impacto
+DIA 2 (Importantes):
+  5. BLOCO 4 - Handler "meus parcelamentos" (1h)
+  6. BLOCO 5 - Handler "minhas metas" (1h)
+  7. BLOCO 6 - Cancel com botoes/lista (1h)
+  8. BLOCO 9 - Meta context e "ja tenho X" (1.5h)
 
-- **Zero regressao:** Nenhuma funcionalidade existente e removida ou alterada em comportamento
-- **Correcoes cirurgicas:** Cada mudanca e pontual e isolada
-- **Compatibilidade:** As mudancas sao aditivas (novos cases, novas validacoes)
-- **Arquivos afetados:** `context-handler.ts`, `index.ts` (2 pontos), `credit-flow.ts` (verificacao)
+DIA 3 (Polimento):
+  9. BLOCO 8 - Saudacao e ajuda conversacionais (1.5h)
+  10. Testes finais e ajustes
+```
+
+## Arquivos Afetados
+
+```text
+supabase/functions/finax-worker/index.ts
+  - Reorganizar handlers de botao (view_all antes do guard)
+  - Case installment no confirm_yes tratar needsCardSelection
+  - Cases query para installments e goals
+  - Cancel com botoes/lista
+  - Saudacao e ajuda conversacionais
+
+supabase/functions/finax-worker/intents/income.ts
+  - Mapear payment_method para source
+
+supabase/functions/finax-worker/fsm/context-handler.ts
+  - Goal description aceitar texto livre
+
+supabase/functions/finax-worker/utils/conversation-context.ts
+  - Fix colunas do upsert
+
+Migracao SQL (se necessario):
+  - Adicionar colunas faltantes em conversation_context
+```
+
+## Principios
+
+- Zero regressao: todas as mudancas sao aditivas
+- Botoes APENAS para opcoes objetivas (pagamento, cartao, confirmacao)
+- Conversa para saudacao, ajuda, dialogos
+- Cada bloco pode ser deployado e testado independentemente
+- Manter contexto ativo ate finalizar a intent (nao expirar prematuramente)
 
