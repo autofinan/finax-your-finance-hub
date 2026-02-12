@@ -141,21 +141,19 @@ O Finax e um assistente CONVERSACIONAL que usa botoes apenas quando ha opcoes ob
 ## Ordem de Implementacao
 
 ```text
-DIA 1 (Criticos - impacto imediato):
-  1. BLOCO 1 - Botoes Ver todos/Por categoria (30 min)
-  2. BLOCO 2 - Parcelamento pedir cartao com botoes (1h)
-  3. BLOCO 3 - Income forma_pagamento "outro" -> correto (15 min)
-  4. BLOCO 7 - Fix "Erro ao atualizar contexto" (30 min)
+DIA 1 (Criticos): ✅ CONCLUÍDO
+  1. BLOCO 1 - Botoes Ver todos/Por categoria ✅
+  2. BLOCO 2 - Parcelamento pedir cartao com botoes ✅
+  3. BLOCO 3 - Income forma_pagamento "outro" -> correto ✅
+  4. BLOCO 7 - Fix "Erro ao atualizar contexto" ✅
+  (Extras: BLOCO 4, 5, 6 tambem feitos)
 
-DIA 2 (Importantes):
-  5. BLOCO 4 - Handler "meus parcelamentos" (1h)
-  6. BLOCO 5 - Handler "minhas metas" (1h)
-  7. BLOCO 6 - Cancel com botoes/lista (1h)
-  8. BLOCO 9 - Meta context e "ja tenho X" (1.5h)
+DIA 2 (Importantes + Polimento): ✅ CONCLUÍDO
+  5-7. BLOCO 4, 5, 6 ✅ (feitos DIA 1)
+  8. BLOCO 9 - Meta context e "ja tenho X" ✅
+  9. BLOCO 8 - Saudacao e ajuda conversacionais ✅
 
-DIA 3 (Polimento):
-  9. BLOCO 8 - Saudacao e ajuda conversacionais (1.5h)
-  10. Testes finais e ajustes
+DIA 3: Testes finais e ajustes
 ```
 
 ## Arquivos Afetados

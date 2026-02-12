@@ -3954,6 +3954,28 @@ async function processarJob(job: any): Promise<void> {
               }
               break;
             }
+            case "goal": {
+              // ✅ BLOCO 9: Executar criação de meta diretamente
+              const { createGoal } = await import("./intents/goals.ts");
+              const goalResult = await createGoal({
+                userId,
+                name: execSlots.description || "Meta",
+                targetAmount: execSlots.amount || 0,
+                deadline: execSlots.deadline ? new Date(execSlots.deadline) : undefined,
+                category: execSlots.category
+              });
+              execResult = { message: goalResult };
+              break;
+            }
+            case "add_goal_progress": {
+              // ✅ BLOCO 9: Executar contribuição à meta
+              const { addToGoal } = await import("./intents/goals.ts");
+              const goalName = execSlots.description || execSlots.goal_name || "";
+              const goalAmount = execSlots.amount || 0;
+              const progressResult = await addToGoal(userId, goalName, goalAmount);
+              execResult = { message: progressResult };
+              break;
+            }
             default:
               console.log(`⚠️ [FSM] Intent "${activeAction.intent}" não suporta execução direta`);
               // Fallback: pedir confirmação
@@ -4998,12 +5020,16 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         return;
       }
       
-      // Falta informação
+      // Falta informação → criar action com pending_slot para FSM capturar
       if (!slots.amount) {
+        await createAction(userId, "goal", "goal", slots, "amount", payload.messageId);
         await sendMessage(payload.phoneNumber, "🎯 Qual o valor da meta?", payload.messageSource);
         return;
       }
       if (!slots.description) {
+        // ✅ BLOCO 9: Criar action com pending_slot "description" para que
+        // o FSM capture texto livre como nome da meta (sem passar pela IA)
+        await createAction(userId, "goal", "goal", slots, "description", payload.messageId);
         await sendMessage(payload.phoneNumber, "🎯 Qual o nome da meta? (ex: Viagem, Carro, Emergência...)", payload.messageSource);
         return;
       }
@@ -5867,18 +5893,153 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         return;
       }
       
-      if (normalized.includes("ajuda") || normalized.includes("help")) {
-        await sendMessage(payload.phoneNumber, `*Como usar o Finax* 📊\n\n💸 *Registrar gasto:*\n"Gastei 50 no mercado"\n\n💰 *Registrar entrada:*\n"Recebi 200 de pix"\n\n📊 *Ver resumo:*\n"Quanto gastei?"\n\n📄 *Contas a pagar:*\n"Criar fatura energia dia 15"\n"Paguei energia, deu 180"`, payload.messageSource);
+      // ================================================================
+      // 🔍 VERIFICAR SE É FOLLOW-UP DE AJUDA (contexto ativo com last_intent = "help")
+      // ================================================================
+      const helpCtx = await getConversationContext(userId);
+      if (helpCtx?.lastIntent === "help") {
+        // Usuário está respondendo a "precisa de ajuda com o quê?"
+        let helpResponse = "";
+        
+        if (/\b(gasto|registr|anotar|lanc|compra|despesa)\b/i.test(conteudoProcessado)) {
+          helpResponse = `💸 *Registrar gastos é simples!*\n\n` +
+            `É só me dizer assim:\n\n` +
+            `• "café 5 pix"\n` +
+            `• "almoço 30 débito"\n` +
+            `• "uber 15 crédito"\n\n` +
+            `Eu pergunto o que faltar!\n\n` +
+            `Também dá pra mandar:\n` +
+            `• "ontem jantar 80 cartão"\n` +
+            `• "dia 05/02 mercado 150 débito"\n\n` +
+            `Quer testar agora? 😊`;
+        } else if (/\b(cartao|cartões|credito|limite)\b/i.test(conteudoProcessado)) {
+          helpResponse = `💳 *Sobre cartões de crédito:*\n\n` +
+            `Ver seus cartões:\n` +
+            `• "meus cartões"\n\n` +
+            `Adicionar novo:\n` +
+            `• "adicionar cartão Nubank limite 5000"\n\n` +
+            `Gasto no crédito:\n` +
+            `• "uber 15 crédito"\n\n` +
+            `O que quer fazer?`;
+        } else if (/\b(resumo|saldo|quanto|gastei|relatorio)\b/i.test(conteudoProcessado)) {
+          helpResponse = `📊 *Ver seu resumo:*\n\n` +
+            `• "quanto gastei esse mês?"\n` +
+            `• "saldo"\n` +
+            `• "gastos da semana"\n` +
+            `• "detalhe alimentação"\n\n` +
+            `Quer ver algum desses agora?`;
+        } else if (/\b(meta|metas|economia|economizar|poupar)\b/i.test(conteudoProcessado)) {
+          helpResponse = `🎯 *Metas de economia:*\n\n` +
+            `Criar meta:\n` +
+            `• "meta viagem 5000"\n\n` +
+            `Adicionar valor:\n` +
+            `• "guardei 200 pra viagem"\n\n` +
+            `Ver metas:\n` +
+            `• "minhas metas"\n\n` +
+            `Quer criar uma meta?`;
+        } else if (/\b(recorrente|fixo|mensal|conta)\b/i.test(conteudoProcessado)) {
+          helpResponse = `🔄 *Gastos recorrentes:*\n\n` +
+            `Criar recorrente:\n` +
+            `• "spotify 22 todo mês"\n` +
+            `• "academia 99 mensal"\n\n` +
+            `Ver recorrentes:\n` +
+            `• "meus gastos fixos"\n\n` +
+            `O que quer fazer?`;
+        } else if (/\b(parcel|parcela)\b/i.test(conteudoProcessado)) {
+          helpResponse = `📦 *Parcelamentos:*\n\n` +
+            `Registrar:\n` +
+            `• "tv 3000 crédito 12x"\n\n` +
+            `Ver parcelamentos:\n` +
+            `• "meus parcelamentos"\n\n` +
+            `Quer registrar um?`;
+        }
+        
+        if (helpResponse) {
+          await updateConversationContext(userId, { lastIntent: null });
+          await sendMessage(payload.phoneNumber, helpResponse, payload.messageSource);
+          return;
+        }
+        
+        // Não entendeu o tópico
+        await sendMessage(payload.phoneNumber,
+          `Não entendi bem... 🤔\n\n` +
+          `Você quer ajuda com:\n` +
+          `• Registrar gastos?\n` +
+          `• Cartões?\n` +
+          `• Ver resumo?\n` +
+          `• Metas?\n` +
+          `• Parcelamentos?\n\n` +
+          `Me diz qual!`, payload.messageSource);
         return;
       }
       
-      // Saudação inteligente com variação
+      // ================================================================
+      // 📖 AJUDA CONVERSACIONAL (sem botões!)
+      // ================================================================
+      if (normalized.includes("ajuda") || normalized.includes("help") || 
+          normalized.includes("como usar") || normalized.includes("como funciona") ||
+          normalized.includes("tutorial") || normalized.includes("comandos")) {
+        
+        // Salvar contexto de ajuda para follow-up
+        await updateConversationContext(userId, { lastIntent: "help" });
+        
+        await sendMessage(payload.phoneNumber,
+          `🤖 *Claro! Estou aqui pra te ajudar!*\n\n` +
+          `Precisa de ajuda com o quê?\n\n` +
+          `💸 Registrar gastos?\n` +
+          `💳 Cartões de crédito?\n` +
+          `📊 Ver resumo/saldo?\n` +
+          `🎯 Metas de economia?\n` +
+          `🔄 Gastos recorrentes?\n` +
+          `📦 Parcelamentos?\n\n` +
+          `Me diz que eu te explico! 😊`, payload.messageSource);
+        return;
+      }
+      
+      // ================================================================
+      // 👋 SAUDAÇÃO CONTEXTUAL (sem botões!)
+      // ================================================================
       try {
-        const { gerarSaudacao } = await import("./greetings/smart-greeting.ts");
-        const saudacao = await gerarSaudacao(userId);
-        await sendMessage(payload.phoneNumber, saudacao, payload.messageSource);
+        const primeiroNome = nomeUsuario.split(" ")[0] || "você";
+        
+        // Buscar atividade recente para contexto
+        const { data: recentActivity } = await supabase
+          .from("transacoes")
+          .select("tipo, valor, descricao, created_at")
+          .eq("usuario_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        
+        // Determinar período do dia (Brasília UTC-3)
+        const now = new Date();
+        const brasiliaHour = (now.getUTCHours() - 3 + 24) % 24;
+        let greeting = "Oi";
+        if (brasiliaHour >= 5 && brasiliaHour < 12) greeting = "Bom dia";
+        else if (brasiliaHour >= 12 && brasiliaHour < 18) greeting = "Boa tarde";
+        else greeting = "Boa noite";
+        
+        let contextMessage = "";
+        
+        if (recentActivity) {
+          const hoursAgo = (Date.now() - new Date(recentActivity.created_at).getTime()) / (1000 * 60 * 60);
+          
+          if (hoursAgo < 1) {
+            if (recentActivity.tipo === "saida") {
+              contextMessage = `\n\nVi que você acabou de registrar *${recentActivity.descricao}*. Quer adicionar mais algo?`;
+            } else {
+              contextMessage = `\n\nVi que entrou dinheiro! 💰 Tudo certo?`;
+            }
+          } else if (hoursAgo < 12) {
+            contextMessage = `\n\nComo vai o dia? Tudo tranquilo com as finanças? 📊`;
+          }
+        } else {
+          // Nunca usou ou sem transações
+          contextMessage = `\n\nSou seu assistente financeiro! 💰\n\nPode me dizer seus gastos assim:\n"café 5 pix" ou "almoço 30 débito"\n\nEu cuido do resto!`;
+        }
+        
+        await sendMessage(payload.phoneNumber, `${greeting}, ${primeiroNome}! 👋${contextMessage}`, payload.messageSource);
       } catch (err) {
-        // Fallback para saudação simples
         const primeiroNome = nomeUsuario.split(" ")[0];
         await sendMessage(payload.phoneNumber, `Oi, ${primeiroNome}! 👋\n\nMe conta um gasto ou pergunta seu resumo.`, payload.messageSource);
       }
