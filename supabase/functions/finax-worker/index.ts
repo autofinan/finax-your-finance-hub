@@ -169,6 +169,8 @@ function detectQueryScope(normalized: string): string {
   if (normalized.includes("categoria") || normalized.includes("categorias")) return "category";
   if (normalized.includes("recebi") || normalized.includes("entrada") || normalized.includes("entrou")) return "income";
   if (normalized.includes("recorrente") || normalized.includes("assinatura")) return "recurring";
+  if (normalized.includes("parcelamento") || normalized.includes("parcela") || normalized.includes("parcelado")) return "installments";
+  if (normalized.includes("meta") || normalized.includes("metas") || normalized.includes("poupanca")) return "goals";
   if (normalized.includes("gastei") || normalized.includes("gasto")) return "expenses";
   return "summary";
 }
@@ -2939,7 +2941,33 @@ async function processarJob(job: any): Promise<void> {
             break;
           case "installment": {
             const { registerInstallment } = await import("./intents/installment.ts");
-            result = await registerInstallment(userId, slots as any, activeAction.id);
+            const installResult = await registerInstallment(userId, slots as any, activeAction.id);
+            
+            // ✅ BLOCO 2: Se precisa seleção de cartão, pedir com botões/lista
+            if (installResult.needsCardSelection && installResult.cardButtons) {
+              console.log(`💳 [INSTALLMENT] Precisa selecionar cartão após confirmação`);
+              await updateAction(activeAction.id, { 
+                slots: { ...slots }, 
+                pending_slot: "card",
+                status: "collecting"
+              });
+              
+              if (installResult.cardButtons.length <= 3) {
+                await sendButtons(payload.phoneNumber, installResult.message, installResult.cardButtons, payload.messageSource);
+              } else {
+                const sections = [{
+                  title: "Seus cartões",
+                  rows: installResult.cardButtons.map(c => ({
+                    id: c.id,
+                    title: c.title
+                  }))
+                }];
+                await sendListMessage(payload.phoneNumber, installResult.message, "Selecionar cartão", sections, payload.messageSource);
+              }
+              return; // Return early - don't fall through to sendMessage
+            }
+            
+            result = installResult;
             break;
           }
           case "add_card": {
@@ -3039,15 +3067,141 @@ async function processarJob(job: any): Promise<void> {
       }
       
       // ====================================================================
-      // 🛡️ GUARD: BOTÃO EXPIRADO (sem contexto ativo)
+      // 📋 QUERY BUTTONS INDEPENDENTES (NÃO precisam de activeAction)
       // ====================================================================
-      // Se recebemos um botão mas não há activeAction, significa que o
-      // contexto expirou. Responder amigavelmente pedindo para repetir.
+      // Estes botões extraem parâmetros do próprio ID e executam queries
+      // diretamente. Devem vir ANTES do guard de EXPIRED_BUTTON.
+      // ====================================================================
+      if (payload.buttonReplyId?.startsWith("view_all_")) {
+        const parts = payload.buttonReplyId.replace("view_all_", "").split("_");
+        const scope = parts[0];
+        const viewTimeRange = parts[1] || "month";
+        const viewCategory = parts[2] !== "all" ? parts[2] : undefined;
+        
+        console.log(`📋 [BUTTON] Ver todos: ${scope} ${viewTimeRange} ${viewCategory || 'todas categorias'}`);
+        
+        const viewStartOfMonth = new Date();
+        if (viewTimeRange === "month") {
+          viewStartOfMonth.setDate(1);
+          viewStartOfMonth.setHours(0, 0, 0, 0);
+        } else if (viewTimeRange === "week") {
+          viewStartOfMonth.setDate(viewStartOfMonth.getDate() - 7);
+          viewStartOfMonth.setHours(0, 0, 0, 0);
+        } else if (viewTimeRange === "today") {
+          viewStartOfMonth.setHours(0, 0, 0, 0);
+        } else {
+          viewStartOfMonth.setDate(1);
+          viewStartOfMonth.setHours(0, 0, 0, 0);
+        }
+        
+        let viewQuery = supabase
+          .from("transacoes")
+          .select("valor, descricao, categoria, data")
+          .eq("usuario_id", userId)
+          .eq("tipo", scope === "income" ? "entrada" : "saida")
+          .gte("data", viewStartOfMonth.toISOString())
+          .eq("status", "confirmada")
+          .order("data", { ascending: false });
+        
+        if (viewCategory) {
+          viewQuery = viewQuery.eq("categoria", viewCategory);
+        }
+        
+        const { data: allTx } = await viewQuery;
+        
+        if (!allTx || allTx.length === 0) {
+          await sendMessage(payload.phoneNumber, "Nenhum gasto encontrado 🤷", payload.messageSource);
+          return;
+        }
+        
+        const byCategory: Record<string, typeof allTx> = {};
+        for (const tx of allTx) {
+          const cat = tx.categoria || "outros";
+          if (!byCategory[cat]) byCategory[cat] = [];
+          byCategory[cat].push(tx);
+        }
+        
+        const catEmojis: Record<string, string> = {
+          alimentacao: "🍔", transporte: "🚗", moradia: "🏠", lazer: "🎮",
+          saude: "🏥", educacao: "📚", mercado: "🛒", servicos: "✂️", compras: "🛍️", outros: "📦"
+        };
+        
+        let fullMsg = `📊 *Todos os gastos*\n\n`;
+        for (const [cat, txs] of Object.entries(byCategory)) {
+          const emoji = catEmojis[cat] || "💸";
+          const totalCat = txs.reduce((sum, t) => sum + Number(t.valor), 0);
+          fullMsg += `${emoji} *${cat}* (R$ ${totalCat.toFixed(2)})\n`;
+          for (const tx of txs) {
+            const dataF = tx.data ? formatBrasiliaDate(tx.data) : "";
+            fullMsg += `  💸 R$ ${Number(tx.valor).toFixed(2)} - ${tx.descricao || 'Sem descrição'}${dataF ? ` (${dataF})` : ""}\n`;
+          }
+          fullMsg += `\n`;
+        }
+        const totalAll = allTx.reduce((sum, t) => sum + Number(t.valor), 0);
+        fullMsg += `💰 *Total: R$ ${totalAll.toFixed(2)}*`;
+        
+        await sendMessage(payload.phoneNumber, fullMsg, payload.messageSource);
+        return;
+      }
+      
+      if (payload.buttonReplyId?.startsWith("view_by_category_")) {
+        const catTimeRange = payload.buttonReplyId.replace("view_by_category_", "");
+        console.log(`📊 [BUTTON] Ver por categoria: ${catTimeRange}`);
+        
+        const catStartDate = new Date();
+        if (catTimeRange === "month") { catStartDate.setDate(1); catStartDate.setHours(0,0,0,0); }
+        else if (catTimeRange === "week") { catStartDate.setDate(catStartDate.getDate() - 7); catStartDate.setHours(0,0,0,0); }
+        else { catStartDate.setDate(1); catStartDate.setHours(0,0,0,0); }
+        
+        const { data: catTxs } = await supabase
+          .from("transacoes")
+          .select("categoria, valor")
+          .eq("usuario_id", userId)
+          .eq("tipo", "saida")
+          .gte("data", catStartDate.toISOString())
+          .eq("status", "confirmada");
+        
+        if (!catTxs || catTxs.length === 0) {
+          await sendMessage(payload.phoneNumber, "Nenhum gasto encontrado 🤷", payload.messageSource);
+          return;
+        }
+        
+        const byCat: Record<string, number> = {};
+        for (const tx of catTxs) {
+          const cat = tx.categoria || "outros";
+          byCat[cat] = (byCat[cat] || 0) + Number(tx.valor);
+        }
+        
+        const sorted = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+        const catEmojis2: Record<string, string> = {
+          alimentacao: "🍔", transporte: "🚗", moradia: "🏠", lazer: "🎮",
+          saude: "🏥", educacao: "📚", mercado: "🛒", servicos: "✂️", compras: "🛍️", outros: "📦"
+        };
+        
+        let catMsg = `📊 *Gastos por Categoria*\n\n`;
+        for (const [cat, total] of sorted) {
+          const emoji = catEmojis2[cat] || "💸";
+          catMsg += `${emoji} ${cat}: R$ ${total.toFixed(2)}\n`;
+        }
+        const totalGeral = sorted.reduce((sum, [_, val]) => sum + val, 0);
+        catMsg += `\n💸 *Total: R$ ${totalGeral.toFixed(2)}*`;
+        
+        const topCats = sorted.slice(0, 3);
+        const detailButtons = topCats.map(([cat]) => ({
+          id: `view_all_expenses_${catTimeRange}_${cat}`,
+          title: `📋 ${cat.slice(0, 16)}`
+        }));
+        
+        await sendButtons(payload.phoneNumber, catMsg, detailButtons, payload.messageSource);
+        return;
+      }
+      
+      // ====================================================================
+      // 🛡️ GUARD: BOTÃO EXPIRADO (sem contexto ativo)
       // ====================================================================
       if (!activeAction) {
         console.log(`⏰ [EXPIRED_BUTTON] Botão clicado sem contexto ativo: ${payload.buttonReplyId}`);
         
-        // Botões de clarificação de palavra solta
         if (payload.buttonReplyId === "word_gasto" || payload.buttonReplyId === "word_consulta") {
           await sendMessage(payload.phoneNumber, 
             "⏰ Ops, demorei demais e perdi o contexto!\n\nPode repetir o que você quer registrar ou consultar?", 
@@ -3056,7 +3210,6 @@ async function processarJob(job: any): Promise<void> {
           return;
         }
         
-        // Botões de número isolado
         if (payload.buttonReplyId === "num_gasto" || payload.buttonReplyId === "num_entrada") {
           await sendMessage(payload.phoneNumber, 
             "⏰ Hmm, perdi o fio da meada!\n\nPode mandar o valor de novo?", 
@@ -3065,7 +3218,6 @@ async function processarJob(job: any): Promise<void> {
           return;
         }
         
-        // Outros botões (pagamento, cartão, etc.)
         await sendMessage(payload.phoneNumber, 
           "⏰ Opa, o tempo passou e perdi o contexto.\n\nPode me mandar de novo o que você quer fazer?", 
           payload.messageSource
@@ -3474,136 +3626,7 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // ========================================================================
-      // 📋 QUERY BUTTONS: Ver todos / Por categoria / Detalhe categoria
-      // ========================================================================
-      if (payload.buttonReplyId?.startsWith("view_all_")) {
-        // Extrair parâmetros: view_all_expenses_month_alimentacao
-        const parts = payload.buttonReplyId.replace("view_all_", "").split("_");
-        const scope = parts[0]; // expenses, income
-        const viewTimeRange = parts[1] || "month";
-        const viewCategory = parts[2] !== "all" ? parts[2] : undefined;
-        
-        console.log(`📋 [BUTTON] Ver todos: ${scope} ${viewTimeRange} ${viewCategory || 'todas categorias'}`);
-        
-        // Buscar TODOS os gastos (sem limite)
-        const viewStartOfMonth = new Date();
-        if (viewTimeRange === "month") {
-          viewStartOfMonth.setDate(1);
-          viewStartOfMonth.setHours(0, 0, 0, 0);
-        } else if (viewTimeRange === "week") {
-          viewStartOfMonth.setDate(viewStartOfMonth.getDate() - 7);
-          viewStartOfMonth.setHours(0, 0, 0, 0);
-        } else if (viewTimeRange === "today") {
-          viewStartOfMonth.setHours(0, 0, 0, 0);
-        } else {
-          viewStartOfMonth.setDate(1);
-          viewStartOfMonth.setHours(0, 0, 0, 0);
-        }
-        
-        let viewQuery = supabase
-          .from("transacoes")
-          .select("valor, descricao, categoria, data")
-          .eq("usuario_id", userId)
-          .eq("tipo", scope === "income" ? "entrada" : "saida")
-          .gte("data", viewStartOfMonth.toISOString())
-          .eq("status", "confirmada")
-          .order("data", { ascending: false });
-        
-        if (viewCategory) {
-          viewQuery = viewQuery.eq("categoria", viewCategory);
-        }
-        
-        const { data: allTx } = await viewQuery;
-        
-        if (!allTx || allTx.length === 0) {
-          await sendMessage(payload.phoneNumber, "Nenhum gasto encontrado 🤷", payload.messageSource);
-          return;
-        }
-        
-        // Agrupar por categoria
-        const byCategory: Record<string, typeof allTx> = {};
-        for (const tx of allTx) {
-          const cat = tx.categoria || "outros";
-          if (!byCategory[cat]) byCategory[cat] = [];
-          byCategory[cat].push(tx);
-        }
-        
-        const catEmojis: Record<string, string> = {
-          alimentacao: "🍔", transporte: "🚗", moradia: "🏠", lazer: "🎮",
-          saude: "🏥", educacao: "📚", mercado: "🛒", servicos: "✂️", compras: "🛍️", outros: "📦"
-        };
-        
-        let fullMsg = `📊 *Todos os gastos*\n\n`;
-        for (const [cat, txs] of Object.entries(byCategory)) {
-          const emoji = catEmojis[cat] || "💸";
-          const totalCat = txs.reduce((sum, t) => sum + Number(t.valor), 0);
-          fullMsg += `${emoji} *${cat}* (R$ ${totalCat.toFixed(2)})\n`;
-          for (const tx of txs) {
-            const dataF = tx.data ? formatBrasiliaDate(tx.data) : "";
-            fullMsg += `  💸 R$ ${Number(tx.valor).toFixed(2)} - ${tx.descricao || 'Sem descrição'}${dataF ? ` (${dataF})` : ""}\n`;
-          }
-          fullMsg += `\n`;
-        }
-        const totalAll = allTx.reduce((sum, t) => sum + Number(t.valor), 0);
-        fullMsg += `💰 *Total: R$ ${totalAll.toFixed(2)}*`;
-        
-        await sendMessage(payload.phoneNumber, fullMsg, payload.messageSource);
-        return;
-      }
-      
-      if (payload.buttonReplyId?.startsWith("view_by_category_")) {
-        const catTimeRange = payload.buttonReplyId.replace("view_by_category_", "");
-        console.log(`📊 [BUTTON] Ver por categoria: ${catTimeRange}`);
-        
-        const catStartDate = new Date();
-        if (catTimeRange === "month") { catStartDate.setDate(1); catStartDate.setHours(0,0,0,0); }
-        else if (catTimeRange === "week") { catStartDate.setDate(catStartDate.getDate() - 7); catStartDate.setHours(0,0,0,0); }
-        else { catStartDate.setDate(1); catStartDate.setHours(0,0,0,0); }
-        
-        const { data: catTxs } = await supabase
-          .from("transacoes")
-          .select("categoria, valor")
-          .eq("usuario_id", userId)
-          .eq("tipo", "saida")
-          .gte("data", catStartDate.toISOString())
-          .eq("status", "confirmada");
-        
-        if (!catTxs || catTxs.length === 0) {
-          await sendMessage(payload.phoneNumber, "Nenhum gasto encontrado 🤷", payload.messageSource);
-          return;
-        }
-        
-        const byCat: Record<string, number> = {};
-        for (const tx of catTxs) {
-          const cat = tx.categoria || "outros";
-          byCat[cat] = (byCat[cat] || 0) + Number(tx.valor);
-        }
-        
-        const sorted = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
-        const catEmojis2: Record<string, string> = {
-          alimentacao: "🍔", transporte: "🚗", moradia: "🏠", lazer: "🎮",
-          saude: "🏥", educacao: "📚", mercado: "🛒", servicos: "✂️", compras: "🛍️", outros: "📦"
-        };
-        
-        let catMsg = `📊 *Gastos por Categoria*\n\n`;
-        for (const [cat, total] of sorted) {
-          const emoji = catEmojis2[cat] || "💸";
-          catMsg += `${emoji} ${cat}: R$ ${total.toFixed(2)}\n`;
-        }
-        const totalGeral = sorted.reduce((sum, [_, val]) => sum + val, 0);
-        catMsg += `\n💸 *Total: R$ ${totalGeral.toFixed(2)}*`;
-        
-        // Botões para detalhar top 3 categorias
-        const topCats = sorted.slice(0, 3);
-        const detailButtons = topCats.map(([cat]) => ({
-          id: `view_all_expenses_${catTimeRange}_${cat}`,
-          title: `📋 ${cat.slice(0, 16)}`
-        }));
-        
-        await sendButtons(payload.phoneNumber, catMsg, detailButtons, payload.messageSource);
-        return;
-      }
+      // (view_all_* and view_by_category_* handlers moved before EXPIRED_BUTTON guard)
       
       // ========================================================================
       // 💳 BOTÃO "OUTROS" - Mostrar lista completa de cartões
@@ -5184,10 +5207,28 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         return;
       }
       
-      const lista = txs.map((t, i) => `${i + 1}. R$ ${t.valor?.toFixed(2)} - ${t.descricao || t.categoria}`).join("\n");
-      await createAction(userId, "cancel_transaction", "cancel", 
-        { options: txs.map(t => t.id) }, "selection", payload.messageId);
-      await sendMessage(payload.phoneNumber, `Qual transação cancelar?\n\n${lista}\n\n_Responde com o número_`, payload.messageSource);
+      // ✅ BLOCO 6: Usar botões/lista em vez de texto numerado
+      if (txs.length <= 3) {
+        const txButtons = txs.map(t => ({
+          id: `cancel_tx_${t.id}`,
+          title: `${t.descricao || t.categoria}`.slice(0, 20)
+        }));
+        await createAction(userId, "cancel_transaction", "cancel", 
+          { options: txs.map(t => t.id) }, "selection", payload.messageId);
+        await sendButtons(payload.phoneNumber, "Qual transação cancelar?", txButtons, payload.messageSource);
+      } else {
+        const sections = [{
+          title: "Transações recentes",
+          rows: txs.map(t => ({
+            id: `cancel_tx_${t.id}`,
+            title: `${t.descricao || t.categoria}`.slice(0, 24),
+            description: `R$ ${t.valor?.toFixed(2)}`
+          }))
+        }];
+        await createAction(userId, "cancel_transaction", "cancel", 
+          { options: txs.map(t => t.id) }, "selection", payload.messageId);
+        await sendListMessage(payload.phoneNumber, "Qual transação cancelar?", "Selecionar", sections, payload.messageSource);
+      }
       return;
     }
     
@@ -5347,6 +5388,92 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           ).join("\n");
           await sendMessage(payload.phoneNumber, `🔄 *Seus Recorrentes*\n\n${listaRec}`, payload.messageSource);
           return;
+        
+        // ✅ BLOCO 4: Handler para "meus parcelamentos"
+        case "installments":
+        case "installment":
+        case "parcelas":
+        case "parcelamento":
+        case "parcelamentos": {
+          console.log(`📊 [QUERY] Roteando para: INSTALLMENTS`);
+          
+          const { data: parcelas } = await supabase
+            .from("parcelas")
+            .select("descricao, numero_parcela, total_parcelas, valor, status, mes_referencia")
+            .eq("usuario_id", userId)
+            .in("status", ["pendente", "futura"])
+            .order("mes_referencia", { ascending: true })
+            .limit(20);
+          
+          if (!parcelas || parcelas.length === 0) {
+            await sendMessage(payload.phoneNumber, "📦 Nenhum parcelamento ativo!\n\n_Pra parcelar, manda: \"notebook 1200 crédito 12x\"_", payload.messageSource);
+            return;
+          }
+          
+          // Agrupar por descrição
+          const byDesc: Record<string, typeof parcelas> = {};
+          for (const p of parcelas) {
+            const desc = p.descricao || "Parcelado";
+            if (!byDesc[desc]) byDesc[desc] = [];
+            byDesc[desc].push(p);
+          }
+          
+          let parcMsg = `📦 *Seus Parcelamentos*\n\n`;
+          for (const [desc, items] of Object.entries(byDesc)) {
+            const first = items[0];
+            const totalParcelas = first.total_parcelas || items.length;
+            const pendentes = items.filter(p => p.status === "pendente").length;
+            const futuras = items.filter(p => p.status === "futura").length;
+            const valorParcela = Number(first.valor || 0);
+            const valorTotal = valorParcela * totalParcelas;
+            
+            parcMsg += `📦 *${desc}*\n`;
+            parcMsg += `  💰 ${totalParcelas}x de R$ ${valorParcela.toFixed(2)} (Total: R$ ${valorTotal.toFixed(2)})\n`;
+            parcMsg += `  📊 ${pendentes + futuras} parcelas restantes\n\n`;
+          }
+          
+          await sendMessage(payload.phoneNumber, parcMsg, payload.messageSource);
+          return;
+        }
+        
+        // ✅ BLOCO 5: Handler para "minhas metas"
+        case "goal":
+        case "goals":
+        case "metas": {
+          console.log(`📊 [QUERY] Roteando para: GOALS`);
+          
+          const { data: metas } = await supabase
+            .from("savings_goals")
+            .select("name, current_amount, target_amount, status, deadline")
+            .eq("user_id", userId)
+            .eq("status", "active")
+            .order("created_at", { ascending: false });
+          
+          if (!metas || metas.length === 0) {
+            await sendMessage(payload.phoneNumber, "🎯 Nenhuma meta ativa!\n\n_Pra criar uma, manda: \"meta viagem 5000\"_", payload.messageSource);
+            return;
+          }
+          
+          let metaMsg = `🎯 *Suas Metas*\n\n`;
+          for (const m of metas) {
+            const atual = Number(m.current_amount || 0);
+            const objetivo = Number(m.target_amount || 0);
+            const pct = objetivo > 0 ? Math.round((atual / objetivo) * 100) : 0;
+            const barFull = Math.round(pct / 10);
+            const bar = "▓".repeat(barFull) + "░".repeat(10 - barFull);
+            
+            metaMsg += `🎯 *${m.name}*\n`;
+            metaMsg += `  R$ ${atual.toFixed(2)} / R$ ${objetivo.toFixed(2)} (${pct}%)\n`;
+            metaMsg += `  ${bar}\n`;
+            if (m.deadline) {
+              metaMsg += `  📅 Prazo: ${formatBrasiliaDate(m.deadline)}\n`;
+            }
+            metaMsg += `\n`;
+          }
+          
+          await sendMessage(payload.phoneNumber, metaMsg, payload.messageSource);
+          return;
+        }
         
         case "summary":
         default:

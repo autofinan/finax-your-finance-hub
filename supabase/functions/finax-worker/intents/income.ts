@@ -41,7 +41,7 @@ export async function registerIncome(
 ): Promise<IncomeResult> {
   const valor = slots.amount!;
   const descricao = slots.description || "";
-  const source = slots.source || "outro";
+  const source = slots.source || slots.payment_method || "outro";
   
   // ✅ CORREÇÃO DEFINITIVA: Usar getBrasiliaISO() em vez de new Date()
   let dateISO: string;
