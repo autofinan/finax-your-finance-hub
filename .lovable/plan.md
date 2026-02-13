@@ -1,189 +1,104 @@
 
 
-# Plano de Correcao Completa - Finax Conversacional + Botoes
+# Plano de Correcao - Bugs Restantes
 
-## Filosofia Central
+## Status Atual (apos verificacao no codigo)
 
-O Finax e um assistente CONVERSACIONAL que usa botoes apenas quando ha opcoes objetivas e limitadas. Saudacoes, ajuda e dialogos sao CONVERSA. Selecao de cartao, forma de pagamento e confirmacoes sao BOTOES.
+| Bug | Status Real | Explicacao |
+|-----|------------|------------|
+| #1 Limite insuficiente | JA CORRIGIDO | Handlers `limit_force_yes/other/cancel` existem nas linhas 3596-3627 |
+| #2 Gasto duplicado | NAO CORRIGIDO | A funcao `registerExpense` USADA (shadowed, linha 1742 do index.ts) NAO tem deduplicacao. A versao em `intents/expense.ts` tem, mas NAO e chamada pelo fluxo principal |
+| #7 Gastos rapidos | PARCIALMENTE | Existe `message-queue` e `multi_expense_queue` mas sem sistema de fila dedicado |
+| #8 Orcamento undefined | NAO CORRIGIDO | Valores como `orcamento.limite` e `orcamento.gasto_atual` sao usados sem `?? 0` em varias mensagens |
+| #9 Contexto/viagem | JA CORRIGIDO | `registerExpense` (linha 1863) ja chama `linkTransactionToContext` e mostra tag |
+| #11 Imagem | NAO CORRIGIDO | `String.fromCharCode(...new Uint8Array(arrayBuffer))` causa stack overflow em imagens grandes |
 
----
-
-## BLOCO 1: Botoes "Ver todos" / "Por categoria" (BUG CRITICO)
-
-**Problema:** Clicar em [Ver todos] ou [Por categoria] retorna "perdi o contexto" porque esses botoes caem no guard `EXPIRED_BUTTON` (linha 3047) que exige `activeAction`.
-
-**Causa raiz:** Os handlers `view_all_*` e `view_by_category_*` ja existem (linhas 3480-3606) MAS estao DENTRO do bloco `if (activeAction)` (o guard na linha 3047 retorna antes de chegar neles).
-
-**Correcao:** Mover os handlers de `view_all_*` e `view_by_category_*` para ANTES do guard de `EXPIRED_BUTTON`. Esses botoes sao auto-suficientes (extraem parametros do proprio ID) e nao precisam de action ativa.
-
-**Arquivo:** `index.ts` - Reorganizar ordem dos handlers de botao (mover linhas 3480-3606 para antes da linha 3047)
+## Bugs que Precisam de Correcao (3 restantes)
 
 ---
 
-## BLOCO 2: Parcelamento nao pede cartao com botoes (BUG CRITICO)
+### BUG #2: Deduplicacao de gastos
 
-**Problema:** "ventilador 140 credito 2x" -> Confirma -> "Qual cartao?" em TEXTO -> usuario responde "sicredi" em texto -> IA retorna unknown conf 0.3 -> "Nao entendi"
-
-**Causa raiz:** No handler `confirm_yes` para `installment` (linha 2940-2943), o resultado de `registerInstallment` nao verifica `needsCardSelection`. O installment.ts retorna `needsCardSelection: true` mas o index.ts ignora e envia `result.message` como texto simples.
+**Problema:** A funcao `registerExpense` usada pelo sistema (inline no index.ts, linha 1742) nao verifica duplicatas. A versao em `intents/expense.ts` tem deduplicacao mas e "shadowed" (nunca chamada).
 
 **Correcao:**
-- **`index.ts`** (case `installment` no confirm_yes, linha 2940): Apos chamar `registerInstallment`, verificar se `result.needsCardSelection === true`. Se sim:
-  - Criar action com `pending_slot: "card"` e intent `installment`
-  - Se `result.cardButtons` -> `sendButtons`
-  - Se `result.useListMessage` -> `sendListMessage`
-- O handler de `card_*` na linha 3694 ja trata `activeAction.intent === "installment"`, entao a selecao vai funcionar automaticamente.
+1. Adicionar verificacao de duplicata na `registerExpense` do index.ts (linha 1817, ANTES do insert):
+   - Buscar transacoes dos ultimos 5 minutos com mesmo `valor + descricao normalizada + usuario`
+   - Se encontrar, retornar mensagem pedindo confirmacao com botoes
+2. Adicionar handlers `duplicate_confirm_yes` e `duplicate_confirm_no` na secao de botoes do index.ts
 
-**Arquivo:** `index.ts` - Bloco confirm_yes case installment
-
----
-
-## BLOCO 3: Entrada mostra "outro" em vez da forma de pagamento (BUG IMPORTANTE)
-
-**Problema:** "caiu 500 pix" registra com `💳 outro` na mensagem. Logs confirmam: IA envia `payment_method: "pix"` nos slots, mas income.ts usa `slots.source` (que e undefined) e faz fallback para "outro".
-
-**Causa raiz:** Em `income.ts` linha 44: `const source = slots.source || "outro"`. A IA envia `payment_method` mas income.ts busca `source`. O mapeamento nao existe.
-
-**Correcao:**
-- **`income.ts`** (linha 44): Mudar para `const source = slots.source || slots.payment_method || "outro"`. Isso captura tanto quando vem de botao (`src_pix` -> source) quanto da IA (`payment_method`).
-
-**Arquivo:** `intents/income.ts`
+**Arquivos:** `index.ts` (linhas 1742-1830 + secao de handlers de botao)
 
 ---
 
-## BLOCO 4: "meus parcelamentos" mostra resumo geral (BUG IMPORTANTE)
+### BUG #8: Valores "undefined" em mensagens de orcamento
 
-**Problema:** IA classifica como `query` com `query_scope: "installments"`, mas o handler de query nao tem case para installments. Cai no fallback que mostra resumo mensal generico.
+**Problema:** Variaveis como `orcamento.limite`, `orcamento.gasto_atual` podem ser null/undefined, causando "R$ undefined" nas mensagens.
 
-**Causa raiz:** No roteamento de query (provavelmente apos linha 4600), nao ha case para `query_scope === "installments"` ou `"installment"` ou `"parcelas"`.
+**Correcao:** Adicionar guards `?? 0` em TODOS os `.toFixed()` nas funcoes de orcamento:
+- `checkBudgetAfterExpense` (linhas 486-510): `orcamento.limite`, `orcamento.gasto_atual`
+- `setBudget` (linhas 454-465): `gastoAtual`, `limite` (estes ja parecem seguros, mas revisar)
+- Tambem em `cancelarTransacao` (linha 2006): `tx.valor?.toFixed(2)` - ja usa optional chaining, OK
+- `cancelRecurring` (linha 2099): `recorrente.valor_parcela?.toFixed(2)` - ja usa optional chaining, OK
 
-**Correcao:**
-- **`index.ts`** (secao de query routing): Adicionar case para `query_scope` contendo "installment"/"parcela"/"parcelamento":
-  - Buscar da tabela `parcelamentos` onde `usuario_id = userId` e `ativa = true`
-  - Formatar lista com descricao, parcela_atual/num_parcelas, valor_parcela
-  - Se nao encontrar: "Nenhum parcelamento ativo"
-
-**Arquivo:** `index.ts` - Secao de query
+**Arquivos:** `index.ts` (funcao checkBudgetAfterExpense, linhas 470-520)
 
 ---
 
-## BLOCO 5: "meus metas" / "minhas metas" mostra resumo geral (BUG SIMILAR)
+### BUG #11: Imagem causa "Maximum call stack size exceeded"
 
-**Problema:** IA classifica como `query` com `query_scope: "goal"` mas cai no resumo mensal generico.
-
-**Causa raiz:** Mesma causa do BUG #4. Sem case para goals no query router.
-
-**Correcao:**
-- **`index.ts`** (secao de query routing): Adicionar case para `query_scope === "goal"` ou `"goals"` ou `"metas"`:
-  - Buscar da tabela `metas` onde `usuario_id = userId` e `status = 'ativa'`
-  - Formatar com nome, valor_atual/valor_objetivo, percentual de progresso
-
-**Arquivo:** `index.ts` - Secao de query
-
----
-
-## BLOCO 6: Cancelamento usa lista numerada em texto (BUG MEDIO)
-
-**Problema:** "cancela" mostra lista "1. R$ 4.56 - uber" com "Responde com o numero" em texto.
-
-**Causa raiz:** O handler de cancel cria action com `options` e `pending_slot: "selection"`, e mostra lista numerada. O FSM espera resposta numerica que pode ser confundida com valor.
-
-**Correcao:**
-- **`index.ts`** (handler de cancel, onde cria lista numerada): Substituir por botoes (ate 3 transacoes) ou lista interativa (4+):
-  - Botoes com `cancel_tx_{id}` (ja existe handler na linha 3423)
-  - Lista com `cancel_tx_{id}` como row ID
-  - Remover a logica de "selecao numerica" do FSM para cancel
-
-**Arquivo:** `index.ts` - Secao de cancel
-
----
-
-## BLOCO 7: "Erro ao atualizar contexto" em todos os logs (BUG NAO-BLOQUEANTE)
-
-**Problema:** Erro aparece em TODOS os testes. Provavelmente a tabela `conversation_context` nao tem todas as colunas necessarias ou o upsert falha.
-
-**Causa raiz:** O `conversation-context.ts` faz upsert com campos como `last_card_name`, `last_goal_name`, `last_start_date`, `last_end_date`, `interaction_count` que podem nao existir na tabela.
-
-**Correcao:**
-- Verificar schema da tabela `conversation_context` e adicionar colunas faltantes via migracao SQL
-- OU simplificar o upsert para usar apenas colunas que existem
-
-**Arquivo:** Migracao SQL + `utils/conversation-context.ts`
-
----
-
-## BLOCO 8: Saudacao e Ajuda conversacionais (POLIMENTO)
-
-**Problema:** "oi" e "ajuda" retornam respostas basicas sem contexto.
-
-**Correcao (CONVERSA, nao botoes):**
-- **Saudacao:** Detectar horario (bom dia/boa tarde/boa noite), buscar ultima atividade do usuario, responder contextualmente. Ex: "Boa tarde! Vi que voce acabou de registrar um cafe. Quer adicionar mais algo?"
-- **Ajuda:** Responder com texto conversacional listando exemplos por categoria. Se o usuario responder com topico ("gastos"), detalhar. Usar `conversation_context.last_intent = "help"` para manter contexto da conversa de ajuda.
-- NAO usar botoes para saudacao nem ajuda. Manter conversa natural.
-
-**Arquivo:** `index.ts` - Handlers de saudacao e ajuda
-
----
-
-## BLOCO 9: Meta nao reconhece "ja tenho 250 para essa meta" (BUG MEDIO)
-
-**Problema:** "ja tenho 250 para essa meta" -> IA classifica como `goal` com `amount: 250` mas sem `description`. Pergunta nome da meta. Usuario responde "trafego pago" -> IA classifica como `unknown` conf 0.3.
-
-**Causa raiz:** A resposta ao slot `description` da meta e um texto solto que a IA nao consegue classificar. O FSM (context-handler) deveria capturar isso como preenchimento de slot, mas provavelmente nao tem case para goal/description.
-
-**Correcao:**
-- **`fsm/context-handler.ts`**: Garantir que quando `activeAction.intent === "goal"` e `pending_slot === "description"`, qualquer texto livre seja aceito como nome da meta (sem passar pela IA).
-- **`index.ts`** (handler de goal): Se IA detecta `goal` com `description` que ja existe, ao inves de perguntar "quer atualizar", verificar se o usuario disse "guardei/adicionei/ja tenho" e adicionar ao acumulado.
-
-**Arquivo:** `fsm/context-handler.ts` + `intents/goals.ts`
-
----
-
-## Ordem de Implementacao
-
+**Problema:** Na linha 1675 do index.ts:
 ```text
-DIA 1 (Criticos): ✅ CONCLUÍDO
-  1. BLOCO 1 - Botoes Ver todos/Por categoria ✅
-  2. BLOCO 2 - Parcelamento pedir cartao com botoes ✅
-  3. BLOCO 3 - Income forma_pagamento "outro" -> correto ✅
-  4. BLOCO 7 - Fix "Erro ao atualizar contexto" ✅
-  (Extras: BLOCO 4, 5, 6 tambem feitos)
+const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+```
+O spread operator `...` em arrays grandes (imagens de 1MB+) excede o limite de argumentos da stack do JavaScript.
 
-DIA 2 (Importantes + Polimento): ✅ CONCLUÍDO
-  5-7. BLOCO 4, 5, 6 ✅ (feitos DIA 1)
-  8. BLOCO 9 - Meta context e "ja tenho X" ✅
-  9. BLOCO 8 - Saudacao e ajuda conversacionais ✅
-
-DIA 3: Testes finais e ajustes
+**Correcao:** Substituir por conversao em chunks:
+```text
+const bytes = new Uint8Array(arrayBuffer);
+let binary = '';
+const chunkSize = 8192;
+for (let i = 0; i < bytes.length; i += chunkSize) {
+  const chunk = bytes.subarray(i, i + chunkSize);
+  binary += String.fromCharCode(...chunk);
+}
+const base64 = btoa(binary);
 ```
 
-## Arquivos Afetados
+**Arquivo:** `index.ts` (funcao `downloadWhatsAppMedia`, linha 1674-1675)
+
+---
+
+## Secao Tecnica
+
+### Ordem de Implementacao
 
 ```text
-supabase/functions/finax-worker/index.ts
-  - Reorganizar handlers de botao (view_all antes do guard)
-  - Case installment no confirm_yes tratar needsCardSelection
-  - Cases query para installments e goals
-  - Cancel com botoes/lista
-  - Saudacao e ajuda conversacionais
-
-supabase/functions/finax-worker/intents/income.ts
-  - Mapear payment_method para source
-
-supabase/functions/finax-worker/fsm/context-handler.ts
-  - Goal description aceitar texto livre
-
-supabase/functions/finax-worker/utils/conversation-context.ts
-  - Fix colunas do upsert
-
-Migracao SQL (se necessario):
-  - Adicionar colunas faltantes em conversation_context
+1. BUG #11 - Imagem stack overflow (5 min) - Fix mais simples e isolado
+2. BUG #8 - Undefined em orcamentos (10 min) - Guards rapidos
+3. BUG #2 - Deduplicacao de gastos (30 min) - Mais complexo, precisa de handlers
 ```
 
-## Principios
+### Detalhes do BUG #2
 
-- Zero regressao: todas as mudancas sao aditivas
-- Botoes APENAS para opcoes objetivas (pagamento, cartao, confirmacao)
-- Conversa para saudacao, ajuda, dialogos
-- Cada bloco pode ser deployado e testado independentemente
-- Manter contexto ativo ate finalizar a intent (nao expirar prematuramente)
+A deduplicacao sera adicionada na funcao `registerExpense` inline (linha 1742) porque essa e a versao REALMENTE usada pelo sistema (a de `intents/expense.ts` e shadowed).
+
+Logica:
+1. Antes do INSERT (linha 1817), buscar:
+   ```text
+   SELECT * FROM transacoes
+   WHERE usuario_id = userId
+     AND tipo = 'saida'
+     AND valor = valor
+     AND created_at > (now() - interval '5 minutes')
+   ORDER BY created_at DESC LIMIT 1
+   ```
+2. Se encontrar, comparar descricao normalizada (lowercase, sem acentos, trim)
+3. Se match, criar action `duplicate_confirm` e retornar mensagem com botoes
+4. Handlers de botao:
+   - `duplicate_confirm_yes`: Chamar registerExpense com flag `skip_duplicate: true` nos slots
+   - `duplicate_confirm_no`: Fechar action e responder "Ok, nao vou registrar!"
+
+### Deploy
+Todas as mudancas sao no `index.ts` do finax-worker. Um unico deploy resolve tudo.
 
