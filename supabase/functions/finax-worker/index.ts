@@ -483,29 +483,29 @@ async function checkBudgetAfterExpense(userId: string, categoria: string, valorG
     const alerts: string[] = [];
     
     for (const orcamento of orcamentos) {
-      const percentual = ((orcamento.gasto_atual + valorGasto) / orcamento.limite) * 100;
+      // ✅ FIX BUG #8: Guards ?? 0 para evitar "R$ undefined"
+      const limiteVal = orcamento.limite ?? 0;
+      const gastoAtualVal = orcamento.gasto_atual ?? 0;
+      const percentual = ((gastoAtualVal + valorGasto) / (limiteVal || 1)) * 100;
       
       // Verificar cada nível de alerta
       if (percentual >= 100 && !orcamento.alerta_100_enviado) {
-        // Alerta crítico - estourou o limite
         const tipo = orcamento.tipo === "global" ? "orçamento total" : `orçamento de ${orcamento.categoria}`;
-        alerts.push(`🚨 *Atenção!* Você atingiu 100% do ${tipo}!\n\nLimite: R$ ${orcamento.limite.toFixed(2)}\nGasto: R$ ${(orcamento.gasto_atual + valorGasto).toFixed(2)}`);
+        alerts.push(`🚨 *Atenção!* Você atingiu 100% do ${tipo}!\n\nLimite: R$ ${limiteVal.toFixed(2)}\nGasto: R$ ${(gastoAtualVal + valorGasto).toFixed(2)}`);
         
         await supabase.from("orcamentos")
           .update({ alerta_100_enviado: true })
           .eq("id", orcamento.id);
           
       } else if (percentual >= 80 && percentual < 100 && !orcamento.alerta_80_enviado) {
-        // Alerta de 80%
         const tipo = orcamento.tipo === "global" ? "orçamento total" : `orçamento de ${orcamento.categoria}`;
-        alerts.push(`⚠️ Você usou 80% do ${tipo}.\n\nRestam R$ ${(orcamento.limite - orcamento.gasto_atual - valorGasto).toFixed(2)}`);
+        alerts.push(`⚠️ Você usou 80% do ${tipo}.\n\nRestam R$ ${(limiteVal - gastoAtualVal - valorGasto).toFixed(2)}`);
         
         await supabase.from("orcamentos")
           .update({ alerta_80_enviado: true })
           .eq("id", orcamento.id);
           
       } else if (percentual >= 50 && percentual < 80 && !orcamento.alerta_50_enviado) {
-        // Alerta de 50%
         const tipo = orcamento.tipo === "global" ? "orçamento total" : `orçamento de ${orcamento.categoria}`;
         alerts.push(`💡 Você atingiu 50% do ${tipo}.`);
         
@@ -1672,7 +1672,15 @@ async function downloadWhatsAppMedia(mediaId: string, eventoId?: string): Promis
     if (!mediaResponse.ok) return null;
     
     const arrayBuffer = await mediaResponse.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    // ✅ FIX BUG #11: Conversão em chunks para evitar stack overflow em imagens grandes
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    const base64 = btoa(binary);
     
     if (eventoId) await supabase.from("eventos_brutos").update({ media_status: 'done', media_downloaded: true }).eq("id", eventoId);
     return base64;
@@ -1739,7 +1747,7 @@ import { getExpensesByCategory } from "./intents/query.ts";
 // 💰 Income handler (extraído para módulo)
 import { registerIncome as registerIncomeModule } from "./intents/income.ts";
 
-async function registerExpense(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
+async function registerExpense(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string; isDuplicate?: boolean }> {
   const valor = slots.amount!;
   const descricao = slots.description || "";
   
@@ -1753,6 +1761,41 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
   }
   
   const formaPagamento = slots.payment_method || "outro";
+  
+  // ========================================================================
+  // ✅ FIX BUG #2: DEDUPLICAÇÃO - Verificar gasto duplicado nos últimos 5 min
+  // ========================================================================
+  if (!slots._skip_duplicate) {
+    const normalizedDesc = descricao.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const { data: recentTx } = await supabase
+      .from("transacoes")
+      .select("id, descricao, valor, created_at")
+      .eq("usuario_id", userId)
+      .eq("tipo", "saida")
+      .eq("valor", valor)
+      .gte("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1);
+    
+    if (recentTx && recentTx.length > 0) {
+      const existingDesc = (recentTx[0].descricao || "").toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (existingDesc === normalizedDesc || normalizedDesc.includes(existingDesc) || existingDesc.includes(normalizedDesc)) {
+        console.log(`⚠️ [DEDUPE] Possível duplicata detectada: ${recentTx[0].id}`);
+        // Criar action para confirmação de duplicata
+        await createAction(userId, "duplicate_confirm", "duplicate_expense", {
+          ...slots,
+          original_tx_id: recentTx[0].id
+        }, null, null);
+        
+        const minutesAgo = Math.round((Date.now() - new Date(recentTx[0].created_at).getTime()) / 60000);
+        return {
+          success: false,
+          isDuplicate: true,
+          message: `⚠️ *Possível duplicata!*\n\nVi um gasto igual há ${minutesAgo} min:\n📝 ${recentTx[0].descricao} - R$ ${(recentTx[0].valor ?? 0).toFixed(2)}\n\nQuer registrar mesmo assim?`
+        };
+      }
+    }
+  }
   
   // ========================================================================
   // 💳 CORREÇÃO CRÍTICA: BUSCAR CARTÃO POR NOME E OBTER ID
@@ -1936,6 +1979,22 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
     success: true,
     message
   };
+}
+
+// ✅ Helper: Envia resultado de registerExpense com botões se for duplicata
+async function handleExpenseResult(
+  result: { success: boolean; message: string; isDuplicate?: boolean },
+  phoneNumber: string,
+  messageSource: string
+): Promise<void> {
+  if (result.isDuplicate) {
+    await sendButtons(phoneNumber, result.message, [
+      { id: "duplicate_confirm_yes", title: "✅ Sim, registrar" },
+      { id: "duplicate_confirm_no", title: "❌ Não, era erro" }
+    ], messageSource);
+  } else {
+    await sendMessage(phoneNumber, result.message, messageSource);
+  }
 }
 
 // 💰 registerIncome — delegado ao módulo intents/income.ts
@@ -2737,7 +2796,7 @@ async function processarJob(job: any): Promise<void> {
           // Se tem forma de pagamento, pode executar direto
           if (slots.payment_method) {
             const result = await registerExpense(userId, slots, undefined);
-            await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+            await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
           } else {
             // Falta forma de pagamento → perguntar
             await createAction(userId, "expense", "expense", slots, "payment_method", payload.messageId);
@@ -3005,7 +3064,12 @@ async function processarJob(job: any): Promise<void> {
           .eq("user_id", userId)
           .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
         
-        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        // ✅ Se for duplicata detectada, enviar botões em vez de mensagem simples
+        if ((result as any).isDuplicate) {
+          await handleExpenseResult(result as any, payload.phoneNumber, payload.messageSource);
+        } else {
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        }
         return;
       }
       
@@ -3279,7 +3343,7 @@ async function processarJob(job: any): Promise<void> {
               }, "payment_method", payload.messageId);
               
               // Enviar resultado do gasto atual + perguntar próximo
-              await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+              await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
               await sendButtons(
                 payload.phoneNumber,
                 `💸 R$ ${nextExpense.amount.toFixed(2)} - ${nextExpense.description}\n\nComo você pagou?`,
@@ -3294,7 +3358,7 @@ async function processarJob(job: any): Promise<void> {
               .update({ status: "done" })
               .eq("user_id", userId)
               .in("status", ["collecting", "awaiting_input"]);
-            await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+            await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
             console.log(`✅ [BUTTON] Expense registrado, todas actions fechadas`);
             return; // FIM - sem mais processamento
           }
@@ -3626,6 +3690,28 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      // ====================================================================
+      // ✅ FIX BUG #2: DUPLICATE CONFIRM HANDLERS
+      // ====================================================================
+      if (payload.buttonReplyId === "duplicate_confirm_yes") {
+        const dupAction = activeAction?.intent === "duplicate_expense" ? activeAction : null;
+        if (dupAction) {
+          const dupSlots = { ...(dupAction.slots as ExtractedSlots), _skip_duplicate: true };
+          await closeAction(dupAction.id);
+          const result = await registerExpense(userId, dupSlots);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        } else {
+          await sendMessage(payload.phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", payload.messageSource);
+        }
+        return;
+      }
+      
+      if (payload.buttonReplyId === "duplicate_confirm_no") {
+        if (activeAction) await closeAction(activeAction.id);
+        await sendMessage(payload.phoneNumber, "Ok, não vou registrar! 👍", payload.messageSource);
+        return;
+      }
+      
       // (view_all_* and view_by_category_* handlers moved before EXPIRED_BUTTON guard)
       
       // ========================================================================
@@ -3708,7 +3794,7 @@ async function processarJob(job: any): Promise<void> {
         
         if (activeAction.intent === "expense") {
           const result = await registerExpense(userId, updatedSlots, activeAction.id);
-          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
           return;
         } else if (activeAction.intent === "recurring") {
           const result = await registerRecurring(userId, updatedSlots, activeAction.id);
@@ -3905,7 +3991,11 @@ async function processarJob(job: any): Promise<void> {
           .eq("user_id", userId)
           .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
         
-        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        if ((result as any).isDuplicate) {
+          await handleExpenseResult(result as any, payload.phoneNumber, payload.messageSource);
+        } else {
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        }
         return;
       }
       
