@@ -35,3 +35,6 @@ verify_jwt = false
 
 [functions.finax-insights]
 verify_jwt = false
+
+[functions.processar-recorrentes]
+verify_jwt = false

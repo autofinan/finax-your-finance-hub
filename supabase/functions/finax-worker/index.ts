@@ -23,7 +23,7 @@ import {
   getBrasiliaISO,
   formatTimeAgo 
 } from "./utils/date-helpers.ts";
-import { queueMessage, markMessageProcessed, countPendingMessages } from "./utils/message-queue.ts";
+import { queueMessage, markMessageProcessed, countPendingMessages, processNextInQueue } from "./utils/message-queue.ts";
 import { logger } from "./utils/logger.ts";
 import { FinaxError, FinaxErrorCode } from "./utils/errors.ts";
 import { parseBrazilianAmount } from "./utils/parseAmount.ts";
@@ -3556,6 +3556,56 @@ async function processarJob(job: any): Promise<void> {
       }
       
       // ========================================================================
+      // 💳 HANDLER: Botões de fatura (pagar / lembrar)
+      // ========================================================================
+      if (payload.buttonReplyId?.startsWith("fatura_pagar_")) {
+        const faturaId = payload.buttonReplyId.replace("fatura_pagar_", "");
+        console.log(`💳 [FATURA] Marcando como paga: ${faturaId}`);
+        
+        // Buscar fatura e cartão
+        const { data: fatura } = await supabase
+          .from("faturas_cartao")
+          .select("id, valor_total, cartao_id, cartoes_credito(nome, limite_disponivel)")
+          .eq("id", faturaId)
+          .maybeSingle();
+        
+        if (fatura) {
+          // Marcar como paga
+          await supabase.from("faturas_cartao")
+            .update({ status: "paga", valor_pago: fatura.valor_total, updated_at: new Date().toISOString() })
+            .eq("id", faturaId);
+          
+          // Recompor limite do cartão
+          if (fatura.cartao_id && fatura.valor_total) {
+            await supabase.rpc("atualizar_limite_cartao", {
+              p_cartao_id: fatura.cartao_id,
+              p_valor: fatura.valor_total,
+              p_operacao: "restaurar",
+            });
+          }
+          
+          const cartaoNome = (fatura.cartoes_credito as any)?.nome || "Cartão";
+          await sendMessage(payload.phoneNumber,
+            `✅ *Fatura paga!*\n\n💳 ${cartaoNome}\n💰 R$ ${(fatura.valor_total || 0).toFixed(2)}\n\n🎉 Limite recomposto!`,
+            payload.messageSource
+          );
+        } else {
+          await sendMessage(payload.phoneNumber, `❌ Não encontrei essa fatura. Tente novamente.`, payload.messageSource);
+        }
+        return;
+      }
+      
+      if (payload.buttonReplyId?.startsWith("fatura_lembrar_")) {
+        const faturaId = payload.buttonReplyId.replace("fatura_lembrar_", "");
+        console.log(`📅 [FATURA] Lembrar depois: ${faturaId}`);
+        await sendMessage(payload.phoneNumber,
+          `📅 Beleza! Vou te lembrar de novo amanhã. Quando pagar, me diz: "paguei a fatura" 😉`,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ========================================================================
       // 🔤 PALAVRA SOLTA - GASTO
       // ========================================================================
       if (payload.buttonReplyId === "word_gasto" && activeAction?.intent === "clarify_word") {
@@ -4628,14 +4678,31 @@ async function processarJob(job: any): Promise<void> {
           }, "choice", payload.messageId);
         }
         
-        // Processar fila de mensagens pendentes
-        const pendingCount = await countPendingMessages(userId);
-        if (pendingCount > 0) {
-          console.log(`📬 [QUEUE] ${pendingCount} mensagens pendentes`);
-          await sendMessage(payload.phoneNumber, 
-            `📬 Você tem ${pendingCount} gasto${pendingCount > 1 ? 's' : ''} pendente${pendingCount > 1 ? 's' : ''} que anotei!`,
-            payload.messageSource
-          );
+        // Processar fila de mensagens pendentes AUTOMATICAMENTE
+        const nextQueued = await processNextInQueue(userId);
+        if (nextQueued) {
+          console.log(`📬 [QUEUE] Processando próximo da fila: "${nextQueued.message_text}"`);
+          // Re-invocar o pipeline para a mensagem da fila
+          const queuePayload: JobPayload = {
+            ...payload,
+            messageText: nextQueued.message_text,
+            messageId: nextQueued.message_id,
+            messageType: "text",
+            buttonReplyId: null,
+            listReplyId: null,
+          };
+          await markMessageProcessed(nextQueued.id);
+          // Enviar separador visual
+          await sendMessage(payload.phoneNumber, `📬 _Processando próximo gasto da fila..._`, payload.messageSource);
+          // Reprocessar como nova invocação (sem recursão - o worker será chamado novamente pelo trigger)
+          await supabase.from("eventos_brutos").insert({
+            conteudo: { text: nextQueued.message_text },
+            origem: "queue",
+            phone_number: payload.phoneNumber,
+            message_id: nextQueued.message_id,
+            user_id: userId,
+            status: "pendente",
+          });
         }
         return;
       }
