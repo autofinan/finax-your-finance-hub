@@ -25,7 +25,7 @@ import { motion } from 'framer-motion';
 
 const ContasPagar = () => {
   const { usuarioId } = useUsuarioId();
-  const { contas, loading, criarConta, desativarConta, registrarPagamento, calcularDiasAteVencimento } = useContasPagar(usuarioId || undefined);
+  const { contas, pagamentos, loading, criarConta, desativarConta, registrarPagamento, calcularDiasAteVencimento } = useContasPagar(usuarioId || undefined);
   
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isPayOpen, setIsPayOpen] = useState(false);
