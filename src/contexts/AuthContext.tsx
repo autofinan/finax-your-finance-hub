@@ -185,7 +185,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (invokeError) {
         console.error('❌ [AUTH] Erro ao verificar OTP:', invokeError);
-        setError(invokeError.message || 'Erro ao verificar código');
+        // Extract user-friendly message from FunctionsHttpError context
+        let errorMessage = 'Erro ao verificar código';
+        try {
+          if (invokeError.context) {
+            const errorBody = await invokeError.context.json();
+            errorMessage = errorBody?.message || errorBody?.error || errorMessage;
+          }
+        } catch {
+          errorMessage = invokeError.message || errorMessage;
+        }
+        setError(errorMessage);
         return false;
       }
 
