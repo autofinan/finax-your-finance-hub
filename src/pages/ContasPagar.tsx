@@ -68,6 +68,14 @@ const ContasPagar = () => {
   };
 
   const getStatusBadge = (conta: ContaPagar) => {
+    // ✅ FIX DASH-3: Verificar se já foi pago este mês
+    const pagoEsteMes = pagamentos.find(p => p.conta_id === conta.id);
+    
+    if (pagoEsteMes) {
+      const dataPag = new Date(pagoEsteMes.data_pagamento).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+      return <Badge className="gap-1 bg-emerald-500/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/30"><CheckCircle2 className="w-3 h-3" /> Pago em {dataPag}</Badge>;
+    }
+
     const dias = calcularDiasAteVencimento(conta.dia_vencimento);
     
     if (dias === null) return null;

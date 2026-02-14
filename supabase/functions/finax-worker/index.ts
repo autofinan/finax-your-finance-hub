@@ -164,6 +164,8 @@ function normalizeText(text: string): string {
 
 // v3.2: Detecta query_scope a partir do texto normalizado
 function detectQueryScope(normalized: string): string {
+  // ✅ FIX WA-4: Detectar "relatório semanal" ANTES do fallback
+  if ((normalized.includes("relatorio") || normalized.includes("report")) && normalized.includes("semanal")) return "weekly_report";
   if (normalized.includes("cartao") || normalized.includes("cartoes") || normalized.includes("limite")) return "cards";
   if (normalized.includes("pendente") || normalized.includes("pendentes")) return "pending";
   if (normalized.includes("categoria") || normalized.includes("categorias")) return "category";
@@ -3250,13 +3252,24 @@ async function processarJob(job: any): Promise<void> {
         const totalGeral = sorted.reduce((sum, [_, val]) => sum + val, 0);
         catMsg += `\n💸 *Total: R$ ${totalGeral.toFixed(2)}*`;
         
-        const topCats = sorted.slice(0, 3);
-        const detailButtons = topCats.map(([cat]) => ({
-          id: `view_all_expenses_${catTimeRange}_${cat}`,
-          title: `📋 ${cat.slice(0, 16)}`
-        }));
-        
-        await sendButtons(payload.phoneNumber, catMsg, detailButtons, payload.messageSource);
+        // ✅ FIX WA-3: Usar lista interativa quando há 4+ categorias
+        if (sorted.length > 3) {
+          const sections = [{
+            title: "Categorias",
+            rows: sorted.map(([cat]) => ({
+              id: `view_all_expenses_${catTimeRange}_${cat}`,
+              title: `${catEmojis2[cat] || "💸"} ${cat}`.slice(0, 24),
+              description: `R$ ${byCat[cat].toFixed(2)}`
+            }))
+          }];
+          await sendListMessage(payload.phoneNumber, catMsg, "Ver categoria", sections, payload.messageSource);
+        } else {
+          const detailButtons = sorted.map(([cat]) => ({
+            id: `view_all_expenses_${catTimeRange}_${cat}`,
+            title: `📋 ${cat.slice(0, 16)}`
+          }));
+          await sendButtons(payload.phoneNumber, catMsg, detailButtons, payload.messageSource);
+        }
         return;
       }
       
@@ -3289,8 +3302,66 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // ✏️ EDIT - Correção de forma de pagamento
+      // ✏️ EDIT - Correção de forma de pagamento OU cartão
       if (payload.buttonReplyId.startsWith("edit_") && activeAction?.intent === "edit") {
+        // ✅ FIX WA-1/WA-6: Handler para edit_card_{id}
+        if (payload.buttonReplyId.startsWith("edit_card_")) {
+          const editCardId = payload.buttonReplyId.replace("edit_card_", "");
+          const { data: editCard } = await supabase
+            .from("cartoes_credito")
+            .select("id, nome")
+            .eq("id", editCardId)
+            .single();
+          
+          if (editCard && activeAction.slots.transaction_id) {
+            await supabase.from("transacoes")
+              .update({ cartao_id: editCard.id, forma_pagamento: "credito" })
+              .eq("id", activeAction.slots.transaction_id);
+            await closeAction(activeAction.id);
+            await sendMessage(payload.phoneNumber, 
+              `✅ *Corrigido!*\n\n💳 Agora está no *${editCard.nome}*`,
+              payload.messageSource);
+            return;
+          }
+        }
+        
+        // ✅ FIX WA-6: Se edit_credito → listar cartões em vez de corrigir direto
+        if (payload.buttonReplyId === "edit_credito" && activeAction.slots.transaction_id) {
+          const editCards = await listCardsForUser(userId);
+          if (editCards.length > 1) {
+            // Múltiplos cartões → pedir seleção
+            if (editCards.length <= 3) {
+              const cardBtns = editCards.map(c => ({
+                id: `edit_card_${c.id}`,
+                title: (c.nome || "Cartão").slice(0, 20)
+              }));
+              await updateAction(activeAction.id, { pending_slot: "card" });
+              await sendButtons(payload.phoneNumber, "💳 Qual cartão?", cardBtns, payload.messageSource);
+            } else {
+              const sections = [{
+                title: "Seus cartões",
+                rows: editCards.map(c => ({
+                  id: `edit_card_${c.id}`,
+                  title: (c.nome || "Cartão").slice(0, 24)
+                }))
+              }];
+              await updateAction(activeAction.id, { pending_slot: "card" });
+              await sendListMessage(payload.phoneNumber, "💳 Qual cartão?", "Selecionar", sections, payload.messageSource);
+            }
+            return;
+          } else if (editCards.length === 1) {
+            // 1 cartão → corrigir direto para crédito nesse cartão
+            await supabase.from("transacoes")
+              .update({ forma_pagamento: "credito", cartao_id: editCards[0].id })
+              .eq("id", activeAction.slots.transaction_id);
+            await closeAction(activeAction.id);
+            await sendMessage(payload.phoneNumber, 
+              `✅ *Corrigido!*\n\n💳 Agora é crédito no *${editCards[0].nome}*`,
+              payload.messageSource);
+            return;
+          }
+        }
+        
         const editAliases: Record<string, string> = {
           "edit_pix": "pix",
           "edit_debito": "debito",
@@ -4336,7 +4407,63 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      // Se não mencionou → oferecer opções
+      // ✅ FIX WA-1: Detectar correção de CARTÃO ("não foi no Sicredi", "era no Nubank")
+      // Se a transação já é crédito E a mensagem menciona um nome de cartão → trocar cartão
+      const editNormalized = normalizeText(conteudoProcessado);
+      const userCards = await listCardsForUser(userId);
+      
+      if (lastTx.forma_pagamento === "credito" && userCards.length > 0) {
+        // Verificar se a mensagem menciona algum cartão pelo nome
+        const mentionedCard = userCards.find(c => {
+          const cardNorm = normalizeText(c.nome || "");
+          return cardNorm && editNormalized.includes(cardNorm);
+        });
+        
+        if (mentionedCard) {
+          // Usuário mencionou cartão específico → corrigir direto
+          console.log(`✏️ [EDIT] Correção de cartão detectada: ${mentionedCard.nome}`);
+          await supabase.from("transacoes")
+            .update({ cartao_id: mentionedCard.id })
+            .eq("id", lastTx.id);
+          await sendMessage(payload.phoneNumber, 
+            `✅ *Corrigido!*\n\n💳 Agora está no *${mentionedCard.nome}*`,
+            payload.messageSource
+          );
+          return;
+        }
+        
+        // Mensagem não menciona cartão específico mas parece correção de cartão
+        // ("não foi no X" ou "era no Y" sem match)
+        if (editNormalized.includes("cartao") || editNormalized.includes("nao foi no") || editNormalized.includes("era no")) {
+          // Oferecer lista de cartões
+          if (userCards.length <= 3) {
+            const cardBtns = userCards.map(c => ({
+              id: `edit_card_${c.id}`,
+              title: (c.nome || "Cartão").slice(0, 20)
+            }));
+            await createAction(userId, "edit", "edit", { transaction_id: lastTx.id }, "card", payload.messageId);
+            await sendButtons(payload.phoneNumber,
+              `📝 R$ ${lastTx.valor?.toFixed(2)} - ${lastTx.descricao || lastTx.categoria}\n\nQual o cartão correto?`,
+              cardBtns, payload.messageSource);
+          } else {
+            const sections = [{
+              title: "Seus cartões",
+              rows: userCards.map(c => ({
+                id: `edit_card_${c.id}`,
+                title: (c.nome || "Cartão").slice(0, 24),
+                description: `Disponível: R$ ${(c.limite_disponivel ?? 0).toFixed(2)}`
+              }))
+            }];
+            await createAction(userId, "edit", "edit", { transaction_id: lastTx.id }, "card", payload.messageId);
+            await sendListMessage(payload.phoneNumber,
+              `📝 R$ ${lastTx.valor?.toFixed(2)} - ${lastTx.descricao || lastTx.categoria}\n\nQual o cartão correto?`,
+              "Selecionar cartão", sections, payload.messageSource);
+          }
+          return;
+        }
+      }
+      
+      // Se não mencionou → oferecer opções de pagamento (fluxo original)
       await sendButtons(
         payload.phoneNumber,
         `📝 *Corrigir:* R$ ${lastTx.valor?.toFixed(2)} - ${lastTx.descricao || lastTx.categoria}\n\nQual a forma correta?`,
@@ -5097,6 +5224,62 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         return;
       }
       
+      // ✅ FIX WA-2: Detectar intenção de ADICIONAR a meta existente
+      // Palavras que indicam "já tenho X guardado" ou "adicionar X à meta"
+      const ADD_INDICATORS = ["tenho", "guardei", "juntei", "adicionei", "depositar", "depositei", "adicionar", "acrescentar", "coloquei", "poupei", "economizei"];
+      const isAddIntent = ADD_INDICATORS.some(w => normalized.includes(w));
+      
+      if (isAddIntent && slots.amount && slots.description) {
+        // Verificar se já existe meta com nome similar
+        const { data: existingGoals } = await supabase
+          .from("savings_goals")
+          .select("id, name, current_amount, target_amount")
+          .eq("user_id", userId)
+          .eq("status", "active");
+        
+        const goalName = normalizeText(slots.description);
+        const matchedGoal = existingGoals?.find(g => {
+          const gName = normalizeText(g.name);
+          return gName.includes(goalName) || goalName.includes(gName);
+        });
+        
+        if (matchedGoal) {
+          // Meta encontrada → adicionar ao acumulado
+          console.log(`🎯 [GOAL] Adicionando R$ ${slots.amount} à meta "${matchedGoal.name}"`);
+          const result = await addToGoal(userId, matchedGoal.id, slots.amount);
+          await sendMessage(payload.phoneNumber, result, payload.messageSource);
+          return;
+        }
+        
+        // Se tem múltiplas metas e não deu match → pedir seleção
+        if (existingGoals && existingGoals.length > 0) {
+          if (existingGoals.length <= 3) {
+            const goalButtons = existingGoals.map(m => ({
+              id: `goal_add_${m.id}`,
+              title: m.name.slice(0, 20)
+            }));
+            await createAction(userId, "add_goal_progress", "goal", { amount: slots.amount }, "goal_id", payload.messageId);
+            await sendButtons(payload.phoneNumber,
+              `💰 R$ ${slots.amount.toFixed(2)}\n\nEm qual meta quer adicionar?`,
+              goalButtons, payload.messageSource);
+          } else {
+            const sections = [{
+              title: "Suas metas",
+              rows: existingGoals.map(m => ({
+                id: `goal_add_${m.id}`,
+                title: m.name.slice(0, 24),
+                description: `R$ ${Number(m.current_amount).toFixed(2)} / R$ ${Number(m.target_amount).toFixed(2)}`
+              }))
+            }];
+            await createAction(userId, "add_goal_progress", "goal", { amount: slots.amount }, "goal_id", payload.messageId);
+            await sendListMessage(payload.phoneNumber,
+              `💰 R$ ${slots.amount.toFixed(2)}\n\nEm qual meta quer adicionar?`,
+              "Selecionar meta", sections, payload.messageSource);
+          }
+          return;
+        }
+      }
+      
       // Criar nova meta
       if (slots.amount && slots.description) {
         const result = await createGoal({
@@ -5117,8 +5300,6 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         return;
       }
       if (!slots.description) {
-        // ✅ BLOCO 9: Criar action com pending_slot "description" para que
-        // o FSM capture texto livre como nome da meta (sem passar pela IA)
         await createAction(userId, "goal", "goal", slots, "description", payload.messageId);
         await sendMessage(payload.phoneNumber, "🎯 Qual o nome da meta? (ex: Viagem, Carro, Emergência...)", payload.messageSource);
         return;
@@ -5394,6 +5575,24 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       });
       
       switch (queryScope) {
+        // ✅ FIX WA-4: Handler para "relatório semanal" on-demand
+        case "weekly_report": {
+          console.log(`📊 [QUERY] Roteando para: WEEKLY REPORT`);
+          
+          const { data: relatorio } = await supabase.rpc("fn_relatorio_semanal", {
+            p_usuario_id: userId,
+            p_tipo_periodo: "semana_atual"
+          });
+          
+          if (relatorio && relatorio.totais && (relatorio.totais.entradas > 0 || relatorio.totais.saidas > 0)) {
+            const textoRelatorio = await gerarTextoRelatorioInline(relatorio, nomeUsuario);
+            await sendMessage(payload.phoneNumber, textoRelatorio, payload.messageSource);
+          } else {
+            await sendMessage(payload.phoneNumber, "📊 Sem dados suficientes para o relatório semanal.\n\nRegistre seus gastos e entradas primeiro! 💸", payload.messageSource);
+          }
+          return;
+        }
+        
         case "cards":
           console.log(`📊 [QUERY] Roteando para: CARDS`);
           const cardsResult = await queryCardLimits(userId);
@@ -5818,8 +6017,38 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     // ========================================================================
     if ((decision.actionType === "chat" || decision.actionType === "unknown") &&
         activeAction !== null && 
-        (activeAction.intent === "expense" || activeAction.intent === "income") &&
-        activeAction.pending_slot) {
+        (activeAction.intent === "expense" || activeAction.intent === "income" || activeAction.intent === "duplicate_expense") &&
+        (activeAction.pending_slot || activeAction.intent === "duplicate_expense")) {
+      
+      // ✅ FIX WA-7: Handle "sim"/"não" como texto para duplicate_confirm
+      if (activeAction.intent === "duplicate_expense") {
+        const dupNormalized = normalizeText(conteudoProcessado);
+        if (dupNormalized.includes("nao") || dupNormalized.includes("não") || dupNormalized === "n") {
+          await closeAction(activeAction.id);
+          await sendMessage(payload.phoneNumber, "Ok, não vou registrar! 👍", payload.messageSource);
+          return;
+        }
+        if (dupNormalized.includes("sim") || dupNormalized === "s" || dupNormalized.includes("registra")) {
+          const dupSlots = { ...(activeAction.slots as ExtractedSlots), _skip_duplicate: true };
+          await closeAction(activeAction.id);
+          const result = await registerExpense(userId, dupSlots);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          return;
+        }
+      }
+      
+      if (!activeAction.pending_slot) {
+        // duplicate_expense without pending_slot and no clear yes/no → re-ask
+        await sendButtons(payload.phoneNumber,
+          "Quer registrar mesmo assim?",
+          [
+            { id: "duplicate_confirm_yes", title: "✅ Sim" },
+            { id: "duplicate_confirm_no", title: "❌ Não" }
+          ],
+          payload.messageSource);
+        return;
+      }
+      
       console.log(`🛡️ [GUARD] Bloqueando chat - action ativa: ${activeAction.intent} aguardando ${activeAction.pending_slot}`);
       
       // Tentar extrair o slot pendente da mensagem atual

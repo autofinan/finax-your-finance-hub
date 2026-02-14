@@ -211,33 +211,85 @@ const Transacoes = () => {
                 </Select>
               </div>
               
-              {/* Linha 2: Filtro por Período de Datas */}
-              <div className="flex flex-col sm:flex-row items-center gap-2">
-                <div className="flex items-center gap-2 text-slate-500">
-                  <CalendarDays className="w-4 h-4" />
-                  <span className="text-sm">Período:</span>
-                </div>
-                <Input
-                  type="date"
-                  value={dataInicio}
-                  onChange={(e) => setDataInicio(e.target.value)}
-                  className="w-full sm:w-[160px] h-10 bg-slate-800/50 border-slate-700 text-white rounded-xl focus:border-indigo-500"
-                />
-                <span className="text-slate-500 text-sm">até</span>
-                <Input
-                  type="date"
-                  value={dataFim}
-                  onChange={(e) => setDataFim(e.target.value)}
-                  className="w-full sm:w-[160px] h-10 bg-slate-800/50 border-slate-700 text-white rounded-xl focus:border-indigo-500"
-                />
-                {(dataInicio || dataFim) && (
+              {/* Linha 2: Filtro por Período de Datas com Atalhos */}
+              <div className="flex flex-col gap-2">
+                {/* Atalhos Rápidos - FIX DASH-2 */}
+                <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
                   <button
-                    onClick={() => { setDataInicio(''); setDataFim(''); }}
-                    className="text-xs text-slate-400 hover:text-white underline"
+                    onClick={() => {
+                      const today = new Date().toISOString().split('T')[0];
+                      setDataInicio(today);
+                      setDataFim(today);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-indigo-400 border border-slate-700 hover:border-indigo-500/30 transition-all whitespace-nowrap"
                   >
-                    Limpar
+                    Hoje
                   </button>
-                )}
+                  <button
+                    onClick={() => {
+                      const end = new Date();
+                      const start = new Date();
+                      start.setDate(start.getDate() - 6);
+                      setDataInicio(start.toISOString().split('T')[0]);
+                      setDataFim(end.toISOString().split('T')[0]);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-indigo-400 border border-slate-700 hover:border-indigo-500/30 transition-all whitespace-nowrap"
+                  >
+                    7 dias
+                  </button>
+                  <button
+                    onClick={() => {
+                      const end = new Date();
+                      const start = new Date();
+                      start.setDate(start.getDate() - 29);
+                      setDataInicio(start.toISOString().split('T')[0]);
+                      setDataFim(end.toISOString().split('T')[0]);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-indigo-400 border border-slate-700 hover:border-indigo-500/30 transition-all whitespace-nowrap"
+                  >
+                    30 dias
+                  </button>
+                  <button
+                    onClick={() => {
+                      const now = new Date();
+                      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                      setDataInicio(start.toISOString().split('T')[0]);
+                      setDataFim(end.toISOString().split('T')[0]);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-indigo-400 border border-slate-700 hover:border-indigo-500/30 transition-all whitespace-nowrap"
+                  >
+                    Este mês
+                  </button>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center gap-2">
+                  <div className="flex items-center gap-2 text-slate-500">
+                    <CalendarDays className="w-4 h-4" />
+                    <span className="text-sm">Período:</span>
+                  </div>
+                  <Input
+                    type="date"
+                    value={dataInicio}
+                    onChange={(e) => setDataInicio(e.target.value)}
+                    className="w-full sm:w-[160px] h-10 bg-slate-800/50 border-slate-700 text-white rounded-xl focus:border-indigo-500"
+                  />
+                  <span className="text-slate-500 text-sm">até</span>
+                  <Input
+                    type="date"
+                    value={dataFim}
+                    onChange={(e) => setDataFim(e.target.value)}
+                    className="w-full sm:w-[160px] h-10 bg-slate-800/50 border-slate-700 text-white rounded-xl focus:border-indigo-500"
+                  />
+                  {(dataInicio || dataFim) && (
+                    <button
+                      onClick={() => { setDataInicio(''); setDataFim(''); }}
+                      className="text-xs text-slate-400 hover:text-white underline"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </motion.div>
