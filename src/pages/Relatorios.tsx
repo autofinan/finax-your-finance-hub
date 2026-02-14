@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useTransacoes } from '@/hooks/useTransacoes';
-import { useAuth } from '@/contexts/AuthContext';
+import { useUsuarioId } from '@/hooks/useUsuarioId';
 import {
   BarChart,
   Bar,
@@ -32,8 +32,8 @@ import { motion } from 'framer-motion';
 import { BarChart3, LineChartIcon, PieChartIcon, TrendingUp } from 'lucide-react';
 
 const Relatorios = () => {
-  const { user } = useAuth();
-  const { transacoes, loading } = useTransacoes(user?.id);
+  const { usuarioId } = useUsuarioId();
+  const { transacoes, loading } = useTransacoes(usuarioId || undefined);
   const [periodo, setPeriodo] = useState('3');
 
   const meses = useMemo(() => {

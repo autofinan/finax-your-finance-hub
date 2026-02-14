@@ -1,4 +1,5 @@
 import { AppLayout } from '@/components/layout/AppLayout';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -26,11 +27,26 @@ const Configuracoes = () => {
     }
   }, [user]);
 
-  const handleSave = () => {
-    toast({
-      title: 'Configurações salvas',
-      description: 'Suas preferências foram atualizadas com sucesso.',
-    });
+  const handleSave = async () => {
+    if (!user?.id) return;
+    try {
+      const { error } = await supabase
+        .from('usuarios')
+        .update({ nome: nome })
+        .eq('id', user.id);
+      if (error) throw error;
+      toast({
+        title: 'Configurações salvas',
+        description: 'Suas preferências foram atualizadas com sucesso.',
+      });
+    } catch (error) {
+      console.error('Erro ao salvar:', error);
+      toast({
+        title: 'Erro',
+        description: 'Não foi possível salvar as configurações.',
+        variant: 'destructive',
+      });
+    }
   };
 
   const handleExport = () => {

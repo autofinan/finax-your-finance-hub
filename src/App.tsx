@@ -48,8 +48,8 @@ const App = () => (
             <Route path="/relatorios" element={<ProtectedRoute><Relatorios /></ProtectedRoute>} />
             <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
             <Route path="/configuracoes" element={<ProtectedRoute><Configuracoes /></ProtectedRoute>} />
-            <Route path="/eventos" element={<Eventos />} />
-            <Route path="/metas" element={<Metas />} />
+            <Route path="/eventos" element={<ProtectedRoute><Eventos /></ProtectedRoute>} />
+            <Route path="/metas" element={<ProtectedRoute><Metas /></ProtectedRoute>} />
             
             <Route path="*" element={<NotFound />} />
           </Routes>
