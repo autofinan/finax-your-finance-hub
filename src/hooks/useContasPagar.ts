@@ -59,6 +59,19 @@ export function useContasPagar(usuarioIdProp?: string) {
       if (error) throw error;
       setContas((data as ContaPagar[]) || []);
 
+      // ✅ FIX DASH-3: Buscar pagamentos do mês atual para mostrar status
+      const mesAtual = new Date();
+      mesAtual.setDate(1);
+      mesAtual.setHours(0, 0, 0, 0);
+      
+      const { data: pagsMes } = await supabase
+        .from('pagamentos')
+        .select('*')
+        .eq('usuario_id', usuarioId)
+        .gte('data_pagamento', mesAtual.toISOString());
+      
+      setPagamentos((pagsMes as Pagamento[]) || []);
+
     } catch (error) {
       console.error('Erro ao buscar contas:', error);
       toast({

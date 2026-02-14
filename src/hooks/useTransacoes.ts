@@ -23,7 +23,8 @@ export function useTransacoes(usuarioIdProp?: string) {
       let query = supabase
         .from('transacoes')
         .select('*')
-        .order('data', { ascending: false });
+        .order('data', { ascending: false })
+        .order('created_at', { ascending: false });
 
       if (usuarioId) {
         query = query.eq('usuario_id', usuarioId);

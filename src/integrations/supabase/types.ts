@@ -2699,6 +2699,7 @@ export type Database = {
           id_cartao: string | null
           id_recorrente: string | null
           idempotency_key: string | null
+          is_parcelado: boolean | null
           merchant: string | null
           observacao: string | null
           origem: string | null
@@ -2734,6 +2735,7 @@ export type Database = {
           id_cartao?: string | null
           id_recorrente?: string | null
           idempotency_key?: string | null
+          is_parcelado?: boolean | null
           merchant?: string | null
           observacao?: string | null
           origem?: string | null
@@ -2769,6 +2771,7 @@ export type Database = {
           id_cartao?: string | null
           id_recorrente?: string | null
           idempotency_key?: string | null
+          is_parcelado?: boolean | null
           merchant?: string | null
           observacao?: string | null
           origem?: string | null

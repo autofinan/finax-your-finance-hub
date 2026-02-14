@@ -1,0 +1,1 @@
+ALTER TABLE public.transacoes ADD COLUMN IF NOT EXISTS is_parcelado BOOLEAN DEFAULT false;
