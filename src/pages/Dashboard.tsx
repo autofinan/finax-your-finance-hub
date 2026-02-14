@@ -4,6 +4,7 @@ import { RecentTransactions } from '@/components/dashboard/RecentTransactions';
 import { ExpenseChart } from '@/components/dashboard/ExpenseChart';
 import { PlanoCard } from '@/components/dashboard/PlanoCard';
 import { BudgetCard } from '@/components/dashboard/BudgetCard';
+import { InsightDoDia } from '@/components/dashboard/InsightDoDia';
 import { QuickActions } from '@/components/dashboard/QuickActions';
 import { useTransacoes } from '@/hooks/useTransacoes';
 import { useGastosRecorrentes } from '@/hooks/useGastosRecorrentes';
@@ -86,16 +87,22 @@ const Dashboard = () => {
     });
   };
 
-  // Mock data para gráfico de fluxo
-  const flowData = [
-    { name: 'Seg', value: 4000 },
-    { name: 'Ter', value: 3000 },
-    { name: 'Qua', value: 5000 },
-    { name: 'Qui', value: 2780 },
-    { name: 'Sex', value: 1890 },
-    { name: 'Sáb', value: 2390 },
-    { name: 'Dom', value: 3490 },
-  ];
+  // Dados reais do fluxo semanal (últimos 7 dias)
+  const flowData = useMemo(() => {
+    const dias = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+    const hoje = new Date();
+    const resultado = [];
+    for (let i = 6; i >= 0; i--) {
+      const dia = new Date(hoje);
+      dia.setDate(hoje.getDate() - i);
+      const diaStr = dia.toISOString().split('T')[0];
+      const totalDia = transacoes
+        .filter((t) => t.data === diaStr && t.tipo === 'saida')
+        .reduce((acc, t) => acc + Number(t.valor), 0);
+      resultado.push({ name: dias[dia.getDay()], value: totalDia });
+    }
+    return resultado;
+  }, [transacoes]);
 
   return (
     <AppLayout>
@@ -194,17 +201,7 @@ const Dashboard = () => {
               </div>
               <div className="flex-1">
                 <h3 className="font-bold text-white mb-2">💡 Insight do Dia</h3>
-                <p className="text-slate-300 leading-relaxed mb-4">
-                  Você está gastando <span className="text-white font-bold">23% a menos</span> em transporte este mês comparado ao anterior. Continue assim e você pode economizar até <span className="text-emerald-400 font-bold">R$ 450</span> até o final do ano!
-                </p>
-                <div className="flex items-center gap-3">
-                  <button className="px-4 py-2 bg-indigo-500 rounded-lg text-white text-sm font-bold hover:bg-indigo-600 transition-all">
-                    Ver detalhes
-                  </button>
-                  <button className="px-4 py-2 bg-white/5 rounded-lg text-slate-400 text-sm font-bold hover:bg-white/10 transition-all">
-                    Próximo insight
-                  </button>
-                </div>
+                <InsightDoDia transacoes={transacoes} stats={stats} />
               </div>
             </div>
           </motion.div>

@@ -82,13 +82,20 @@ export function useFaturas(usuarioIdProp?: string) {
       // Atualizar faturas em aberto
       setFaturasEmAberto((prev) => prev.filter((f) => f.id !== id));
       
-      // ✅ FIX DASH-4: Atualizar parcelas vinculadas a esta fatura
-      // Chamar RPC ou edge function se necessário, mas o trigger no banco já deve cuidar
-      // Se não, adicionar lógica aqui:
-      if (data && data.cartao_id && data.mes && data.ano) {
-        // Encontrar parcelas que vencem neste mês/ano para este cartão
-        // e marcar como pagas se estiverem pendentes
-        // (Isso idealmente seria no backend, mas podemos forçar refresh)
+      // ✅ FIX DASH-4: Recompor limite disponível do cartão
+      if (data && data.cartao_id && valorPago > 0) {
+        const { data: cartao } = await supabase
+          .from('cartoes_credito')
+          .select('limite_disponivel')
+          .eq('id', data.cartao_id)
+          .single();
+        
+        if (cartao) {
+          await supabase
+            .from('cartoes_credito')
+            .update({ limite_disponivel: (cartao.limite_disponivel || 0) + valorPago })
+            .eq('id', data.cartao_id);
+        }
       }
       
       toast({
