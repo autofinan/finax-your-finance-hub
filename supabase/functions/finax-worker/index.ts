@@ -905,6 +905,21 @@ Quando o HISTORICO mostra conversa sobre um topico especifico:
 - NAO mude de assunto a menos que o usuario mude explicitamente
 - Se o usuario diz "paguei" + nome que aparece no historico recente = pay_bill
 
+## REGRA CRITICA: CONTINUIDADE DE CONVERSA (FOLLOW-UP)
+
+Quando o usuario envia mensagem CURTA que parece continuar a conversa anterior:
+- "e transporte" → Se a ultima pergunta foi "quanto gastei com alimentação", entenda como "quanto gastei com transporte"
+- "e lazer" → mesma logica: repete a consulta anterior trocando a categoria
+- "e esse mes?" → repete a ultima consulta com periodo = mes atual
+- "e na semana?" → repete a ultima consulta com periodo = semana
+
+REGRA: Se a mensagem comeca com "e " ou "e o/a " seguido de categoria/periodo, copie o actionType e slots da ultima interacao e substitua apenas o campo mencionado.
+- actionType: query (mesmo tipo da consulta anterior)
+- Mantenha time_range, query_scope do historico
+- Troque apenas: category, card, ou time_range conforme a mensagem
+
+NUNCA classifique follow-ups como "set_budget", "expense" ou "unknown". Se o historico mostra query, o follow-up e query.
+
 RESPONDA APENAS COM JSON. SEM MARKDOWN. SEM EXPLICAÇÕES ADICIONAIS.`;
 
 // ============================================================================
@@ -4790,7 +4805,7 @@ async function processarJob(job: any): Promise<void> {
           await markAsExecuted(decision.decisionId, result.success ?? true);
         }
         
-        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+        await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
         
         // ✅ APÓS registrar expense que foi reclassificado de pay_bill → oferecer criar fatura
         if (slots.suggest_bill_after && slots.description) {
@@ -5779,8 +5794,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           console.log(`📊 [QUERY] Roteando para: WEEKLY REPORT`);
           
           const { data: relatorio } = await supabase.rpc("fn_relatorio_semanal", {
-            p_usuario_id: userId,
-            p_tipo_periodo: "semana_atual"
+            p_usuario_id: userId
           });
           
           if (relatorio && relatorio.totais && (relatorio.totais.entradas > 0 || relatorio.totais.saidas > 0)) {
@@ -5994,8 +6008,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           if (timeRange === "week" || timeRange === "weekly" || timeRange === "semana" || timeRange === "semanal") {
             console.log(`📊 [QUERY] Summary + week → roteando para WEEKLY REPORT`);
             const { data: relatorio } = await supabase.rpc("fn_relatorio_semanal", {
-              p_usuario_id: userId,
-              p_tipo_periodo: "semana_atual"
+              p_usuario_id: userId
             });
             if (relatorio && relatorio.totais && (relatorio.totais.entradas > 0 || relatorio.totais.saidas > 0)) {
               const textoRelatorio = await gerarTextoRelatorioInline(relatorio, nomeUsuario);
@@ -6359,6 +6372,99 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     
     // Threshold elevado para chat: precisa de alta confiança
     const CHAT_CONFIDENCE_THRESHOLD = 0.85;
+
+    // ========================================================================
+    // 🔍 VERIFICAR HELP CONTEXT ANTES DO ROTEAMENTO (Bug #5 fix)
+    // ========================================================================
+    const helpCtxPreChat = await getConversationContext(userId);
+    if (helpCtxPreChat?.lastIntent === "help" && decision.actionType !== "control") {
+      // Usuário está respondendo a "precisa de ajuda com o quê?" mas IA classificou como chat/outro
+      let helpResponse = "";
+      
+      if (/\b(gasto|registr|anotar|lanc|compra|despesa)\b/i.test(conteudoProcessado)) {
+        helpResponse = `💸 *Registrar gastos é simples!*\n\n` +
+          `É só me dizer assim:\n\n` +
+          `• "café 5 pix"\n` +
+          `• "almoço 30 débito"\n` +
+          `• "uber 15 crédito"\n\n` +
+          `Eu pergunto o que faltar!\n\n` +
+          `Também dá pra mandar:\n` +
+          `• "ontem jantar 80 cartão"\n` +
+          `• "dia 05/02 mercado 150 débito"\n\n` +
+          `Quer testar agora? 😊`;
+      } else if (/\b(cartao|cartões|credito|limite)\b/i.test(conteudoProcessado)) {
+        helpResponse = `💳 *Sobre cartões de crédito:*\n\n` +
+          `Ver seus cartões:\n` +
+          `• "meus cartões"\n\n` +
+          `Adicionar novo:\n` +
+          `• "adicionar cartão Nubank limite 5000"\n\n` +
+          `Gasto no crédito:\n` +
+          `• "uber 15 crédito"\n\n` +
+          `O que quer fazer?`;
+      } else if (/\b(resumo|saldo|quanto|gastei|relatorio)\b/i.test(conteudoProcessado)) {
+        helpResponse = `📊 *Ver seu resumo:*\n\n` +
+          `• "quanto gastei esse mês?"\n` +
+          `• "saldo"\n` +
+          `• "gastos da semana"\n` +
+          `• "detalhe alimentação"\n\n` +
+          `Quer ver algum desses agora?`;
+      } else if (/\b(meta|metas|economia|economizar|poupar)\b/i.test(conteudoProcessado)) {
+        helpResponse = `🎯 *Metas de economia:*\n\n` +
+          `Criar meta:\n` +
+          `• "meta viagem 5000"\n\n` +
+          `Adicionar valor:\n` +
+          `• "guardei 200 pra viagem"\n\n` +
+          `Ver metas:\n` +
+          `• "minhas metas"\n\n` +
+          `Quer criar uma meta?`;
+      } else if (/\b(recorrente|fixo|mensal|conta)\b/i.test(conteudoProcessado)) {
+        helpResponse = `🔄 *Gastos recorrentes:*\n\n` +
+          `Criar recorrente:\n` +
+          `• "spotify 22 todo mês"\n` +
+          `• "academia 99 mensal"\n\n` +
+          `Ver recorrentes:\n` +
+          `• "meus gastos fixos"\n\n` +
+          `O que quer fazer?`;
+      } else if (/\b(parcel|parcela)\b/i.test(conteudoProcessado)) {
+        helpResponse = `📦 *Parcelamentos:*\n\n` +
+          `Registrar:\n` +
+          `• "tv 3000 crédito 12x"\n\n` +
+          `Ver parcelamentos:\n` +
+          `• "meus parcelamentos"\n\n` +
+          `Quer registrar um?`;
+      } else if (/\b(exemplo|como|registrar)\b/i.test(conteudoProcessado)) {
+        helpResponse = `💡 *Exemplos de uso do Finax:*\n\n` +
+          `💸 *Gastos:*\n` +
+          `• "café 5 pix"\n` +
+          `• "uber 15 crédito"\n` +
+          `• "mercado 200 débito"\n\n` +
+          `💰 *Receitas:*\n` +
+          `• "recebi 3000 pix"\n` +
+          `• "salário 5000"\n\n` +
+          `📊 *Consultas:*\n` +
+          `• "quanto gastei esse mês?"\n` +
+          `• "saldo"\n\n` +
+          `Quer testar agora? 😊`;
+      }
+      
+      if (helpResponse) {
+        await updateConversationContext(userId, { lastIntent: null });
+        await sendMessage(payload.phoneNumber, helpResponse, payload.messageSource);
+        return;
+      }
+      
+      // Não entendeu o tópico
+      await sendMessage(payload.phoneNumber,
+        `Não entendi bem... 🤔\n\n` +
+        `Você quer ajuda com:\n` +
+        `• Registrar gastos?\n` +
+        `• Cartões?\n` +
+        `• Ver resumo?\n` +
+        `• Metas?\n` +
+        `• Parcelamentos?\n\n` +
+        `Me diz qual!`, payload.messageSource);
+      return;
+    }
 
     // ========================================================================
     // 💬 CHAT - Consultor Financeiro Conversacional
