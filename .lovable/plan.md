@@ -1,165 +1,156 @@
 
-# Plano: Memoria Conversacional Completa (10 mensagens + Contexto Proativo)
 
-## Resumo
+# Plano: Correcoes dos Testes do Bloco 1-13
 
-Corrigir o bug principal (historico buscado mas ignorado pela IA) e implementar memoria conversacional robusta que funciona para TODAS as situacoes, nao apenas contas.
+## Problemas Identificados nos Testes
 
-## O Bug Central
+### BUG 1: Tabela `parcelas` nao existe (CRITICO)
+**Teste 2.1** - Parcelamento registra transacao mae mas falha ao criar parcelas.
+O codigo em `installment.ts` (linha 222) insere na tabela `parcelas`, mas ela NAO existe no banco. So existe `parcelamentos`.
 
-O sistema tem DOIS pontos onde a IA e chamada:
+**Log:** `Could not find the table 'public.parcelas' in the schema cache`
 
-1. **`index.ts` linha 980** - `callAIForDecision()` recebe `history` como parametro mas **IGNORA** na linha 1005
-2. **`decision/engine.ts` linha 464** - `callAIForDecision()` da engine **NAO recebe** historico nenhum
+**Fix:** Criar tabela `parcelas` via migracao SQL com as colunas usadas pelo codigo.
 
-O fluxo principal passa por `decisionEngine()` no index.ts (linha 1102), que chama `callAIForDecision` do index.ts na linha 1289 e **passa o history** (linha 1297). O problema e que dentro da funcao (linha 1005), o history nao e injetado no prompt.
+### BUG 2: Query "meus parcelamentos" retorna vazio (CRITICO)
+**Teste 2.3** - A query em `index.ts` (linha 5807) busca da tabela `parcelas` que nao existe. Mesmo apos criar a tabela, a query nao vai funcionar se as parcelas nao foram salvas (por causa do Bug 1).
 
-## Mudancas
+**Fix:** Corrigido automaticamente ao resolver o Bug 1.
 
-### 1. index.ts - Injetar historico no prompt da IA (BUG PRINCIPAL)
+### BUG 3: Credito nao pergunta cartao no fluxo de botoes (CRITICO)
+**Teste final (pag 40-41)** - Quando usuario envia "cremozinho 5" -> seleciona [Credito] via botao, o handler `pay_credito` (linha 3405-3458) registra direto SEM perguntar qual cartao. A resolucao de cartao (`resolveCreditCard`) so existe no fluxo principal da engine (linha 4636), nao no handler de botoes.
 
-**Linha 1005**: Adicionar history ao prompt enviado para a IA
+**Fix:** No handler `pay_credito` (linha 3412), antes de registrar, verificar se `payment_method === "credito"` e chamar `resolveCreditCard`. Se precisa de selecao de cartao, criar action com slot pendente `card`.
 
-```text
-ANTES:
-  messages: [
-    { role: "system", content: PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo },
-    { role: "user", content: message }
-  ]
+### BUG 4: Credito com padrao aprendido nao confirma cartao
+**Teste (pag 41)** - "cafe 1 no credito" -> Registra direto no Sicredi sem confirmar. O padrao aprendido escolhe o cartao automaticamente, mas deveria perguntar "Posso registrar no Sicredi?" com opcao de trocar.
 
-DEPOIS:
-  messages: [
-    { role: "system", content: PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo +
-      (history ? "\n\n--- HISTORICO RECENTE ---\n" + history + "\n---\n\n" +
-      "REGRA: Use o historico para entender contexto. " +
-      "Se o Bot enviou lembrete de conta (agua, luz, gas, internet, aluguel) " +
-      "e o usuario confirma pagamento, classifique como pay_bill, " +
-      "categoria moradia, NAO alimentacao." : "")
-    },
-    { role: "user", content: message }
-  ]
-```
+**Fix:** No fluxo principal de expense com credito (linha 4636), quando `resolveCreditCard` retorna sucesso com 1 cartao (auto-selecionado), adicionar etapa de confirmacao: "Registrar no [Cartao]?" com botoes [Sim] e [Outro cartao].
 
-### 2. index.ts - Aumentar janela de historico para 10 mensagens
+NOTA: Esse comportamento e mais complexo e pode ser opcional. A regra sugerida pelo usuario e boa (perguntar se usuario usa o cartao padrao), mas pode adicionar fricao desnecessaria para quem so tem 1 cartao. Implementaremos apenas quando ha 2+ cartoes.
 
-**Linha 4336**: Mudar `.limit(3)` para `.limit(10)`
+### BUG 5: "RELATORIO SEMANAL" mostra resumo do MES (IMPORTANTE)
+**Teste 3.4** - IA classifica corretamente como `query_scope: "summary", time_range: "week"`, mas o case `"summary"` (linha 5884) faz `break` e cai no fallback que chama `getMonthlySummary()` (linha 6026). Nao ha tratamento para `summary + week`.
 
-**Linha 4338**: Melhorar formato para incluir mais contexto do bot
+**Fix:** No case `"summary"` (linha 5884), verificar se `time_range === "week"` e redirecionar para o handler `weekly_report` que ja existe e funciona.
 
-```text
-ANTES:
-  .limit(3);
-  const historicoFormatado = historico?.map(h =>
-    `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 80)}...`
-  ).reverse().join("\n") || "";
+### BUG 6: "recebi 500" nao pergunta forma de pagamento (MENOR)
+**Teste 1.7** - O teste esperava botoes [Pix] [Dinheiro] [Transferencia], mas o income registra direto sem perguntar. Isso porque `hasAllRequiredSlots("income", slots)` retorna true (income so requer `amount`).
 
-DEPOIS:
-  .limit(10);
-  const historicoFormatado = historico?.map(h =>
-    `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 200) || "(sem resposta)"}`
-  ).reverse().join("\n---\n") || "";
-```
+**Analise:** O comportamento atual e CORRETO pela definicao de slots (income so requer amount). Se o usuario quer perguntar source, precisamos adicionar `source` como slot obrigatorio. MAS isso adiciona fricao. 
 
-### 3. index.ts - Tambem injetar historico na engine.ts (via contexto)
+**Fix:** Nao alterar agora - comportamento correto. Entradas sem source sao registradas como "outro". Se quiser mudar no futuro, basta adicionar source a SLOT_REQUIREMENTS.
 
-A `decisionEngine` em `decision/engine.ts` tambem chama sua propria `callAIForDecision` (linha 274) que **NAO recebe historico**. Precisamos passar o historico para la tambem.
+### BUG 7: "ja tenho 500 para o trefego pago" - IA nao entende (IMPORTANTE)
+**Teste 4.3** - IA classifica como `unknown` (conf: 0.3). O texto tem erro de ortografia ("trefego" vs "trafego") e a IA nao consegue mapear. O codigo de add-to-goal (linha 5323) depende de `isAddIntent && slots.amount && slots.description`, mas a IA retornou `slots: {}`.
 
-Na engine.ts, a funcao `decisionEngine` (linha 201) recebe `input: DecisionInput` que ja tem campo `context`. Vamos adicionar `history` ao context que e passado pela index.ts.
+**Fix:** Melhorar o PROMPT_FINAX_UNIVERSAL para incluir exemplos de `goal` com verbo "tenho" + valor + meta. Adicionar: `"ja tenho 500 para X" -> goal, slots: {amount: 500, description: "X"}`.
 
-Mas o fluxo principal no index.ts usa sua propria `decisionEngine` (linha 1102), nao a da engine.ts. Entao a correcao da linha 1005 ja cobre o caso principal. A engine.ts so e usada como fallback/import.
+### BUG 8: "guardei 200" registra como entrada, nao como contribuicao de meta (IMPORTANTE)
+**Teste 4.4** - IA classifica como `income` em vez de `goal`. O verbo "guardei" esta na lista ADD_INDICATORS (linha 5320), mas so e verificado DENTRO do bloco `if (decision.actionType === "goal")`.
 
-### 4. conversation-context.ts - Aumentar TTL para 24h
+**Fix:** Adicionar deteccao de "guardei" ANTES do roteamento da engine, ou melhorar o prompt para que a IA classifique "guardei 200" como `goal` quando o usuario tem metas ativas.
 
-**Linha 20**: Mudar `CONTEXT_TTL_MINUTES = 30` para `CONTEXT_TTL_MINUTES = 1440` (24 horas)
+### BUG 9: Contexto ajuda -> "registrar gastos" perde contexto (MENOR)
+**Teste 6.2** - Apos "ajuda" e menu de opcoes, usuario responde "registrar gastos" e o sistema acha que e uma mensagem ambigua (chat guard). O historico de 10 mensagens deveria ajudar, mas a IA classifica como `chat` (conf: 0.7) e o chat guard bloqueia.
 
-Isso garante que se o usuario demorar para responder (ex: recebe lembrete as 9h, responde as 18h), o contexto ainda existe.
+**Fix:** Apos enviar menu de ajuda, salvar contexto `topic: "help"` para que respostas subsequentes sejam tratadas como continuacao da ajuda, nao como mensagem independente.
 
-### 5. lembrar-contas/index.ts - Atualizar conversation_context ao enviar lembrete
+### BUG 10: Botao de duplicata expirado (MENOR)
+**Teste 1.5** - Botao `duplicate_confirm_no` expirou antes de ser clicado. O contexto foi perdido entre o envio do botao e o clique.
 
-Apos enviar WhatsApp com sucesso (depois da linha 153), fazer upsert no `conversation_context` com:
-- `current_topic: "pay_bill"`
-- `last_intent: "pay_bill"`
-- `expires_at: agora + 24h`
+**Analise:** Isso e um problema de timing - o edge function reiniciou (shutdown/boot) entre o envio e o clique. O TTL do contexto ja foi aumentado para 24h, mas a action pode ter expirado.
 
-### 6. ciclo-fatura/index.ts - Atualizar conversation_context ao alertar fatura
+**Fix:** Aumentar timeout de cleanup de actions para evitar que actions recentes sejam limpas prematuramente.
 
-Apos enviar alerta de vencimento (apos linhas 252 e 271), fazer upsert no `conversation_context` com:
-- `current_topic: "pay_bill"`
-- `last_intent: "pay_bill"`
-- `last_card_name: cartao.nome`
-- `expires_at: agora + 24h`
+### BUG 11: Grafico do Dashboard nao funciona (FRONTEND)
+**Teste 12.1** - O grafico de fluxo semanal nao renderiza dados. O problema e que `t.data` no banco contem timestamps com timezone (`2026-02-15 17:37:02+00`), mas o filtro no Dashboard (linha 100) compara com `diaStr` que e `YYYY-MM-DD`. A comparacao `t.data === diaStr` sempre falha porque `t.data` inclui hora.
 
-### 7. processar-recorrentes/index.ts - Atualizar conversation_context ao notificar
+**Fix:** Mudar a comparacao para `t.data.startsWith(diaStr)` ou usar `.split('T')[0]`.
 
-Apos enviar notificacao (apos linha 178), fazer upsert no `conversation_context` com:
-- `current_topic: "recurring"`
-- `last_intent: "recurring_processed"`
-- `expires_at: agora + 1h`
+### BUG 12: Transacoes nao ordenam mais recente primeiro (FRONTEND)
+**Teste 9.2** - Quando mostra "todas as transacoes", a mais antiga aparece primeiro. O hook `useTransacoes` (linha 26) ja ordena `ascending: false`, mas a pagina `Transacoes.tsx` pode estar revertendo a ordem na renderizacao ou o filtro altera a ordem.
 
-### 8. PROMPT_FINAX_UNIVERSAL - Adicionar regra de contexto
+**Fix:** Verificar se `filteredTransacoes` preserva a ordem. A query ja tem `order('data', { ascending: false })`.
 
-Adicionar ao final do prompt (antes da linha 882 que fecha o template literal) uma secao sobre uso do historico:
+### BUG 13: `logs_sistema` constraint rejeita level "warn" (MENOR)
+**Logs** - O logger usa `'warn'` mas a constraint CHECK da tabela so aceita `['info', 'warning', 'error', 'debug']`.
+
+**Fix:** Alterar a constraint para aceitar `'warn'` ou mudar o logger para usar `'warning'`.
+
+### BUG 14: Cardoes com 4+ opcoes nao mostra lista completa
+**Teste 1.3/1.4 (pag 2)** - Usuario tem mais de 3 cartoes mas so ve 2 opcoes como botoes + "Outros". O usuario quer que com 1 cartao = auto-seleciona, 2 = 2 botoes, 3 = 3 botoes, 4+ = lista interativa do WhatsApp.
+
+**Fix:** Ja esta implementado no `credit-flow.ts` (usa lista para 4+). O problema e que no handler de botoes `pay_credito` (Bug 3) isso nao e chamado.
+
+---
+
+## Secao Tecnica - Arquivos e Mudancas
 
 ```text
-## REGRA CRITICA: HISTORICO DA CONVERSA
+MIGRACOES SQL:
+  1. Criar tabela 'parcelas' com colunas:
+     - id (uuid PK)
+     - parcelamento_id (uuid FK -> transacoes.id)
+     - usuario_id (uuid)
+     - numero_parcela (int)
+     - total_parcelas (int)
+     - valor (numeric)
+     - fatura_id (uuid FK -> faturas_cartao.id)
+     - cartao_id (uuid FK -> cartoes_credito.id)
+     - status (text: pendente/futura/paga)
+     - mes_referencia (date)
+     - descricao (text)
+     - created_at (timestamptz)
+     + RLS policies para usuario_id
+  
+  2. Alterar constraint logs_sistema_level_check:
+     DROP CONSTRAINT logs_sistema_level_check
+     ADD CONSTRAINT logs_sistema_level_check CHECK (level IN ('info','warn','warning','error','debug'))
 
-Quando o HISTORICO mostra que voce (Bot) enviou:
-- Lembrete de conta (agua, luz, gas, internet, aluguel, condominio, energia)
-- Alerta de fatura de cartao
-- Confirmacao de recorrente
-
-E o usuario responde com valor ou confirma pagamento:
-- Classifique como pay_bill (NAO expense)
-- Categoria: moradia (para contas de consumo)
-- "agua", "luz", "gas", "internet" = conta de consumo, NUNCA alimentacao
-- Use o historico para desambiguar
-
-Quando o HISTORICO mostra conversa sobre um topico especifico:
-- Mantenha o contexto da conversa
-- NAO mude de assunto a menos que o usuario mude explicitamente
-```
-
-## Secao Tecnica - Arquivos Afetados
-
-```text
 EDITAR:
   supabase/functions/finax-worker/index.ts
-    L1005: Injetar history no prompt (FIX PRINCIPAL)
-    L4336: limit(3) → limit(10)
-    L4338: Melhorar formato historico (200 chars, separador ---)
-    L~880: Adicionar regra de contexto no PROMPT_FINAX_UNIVERSAL
+    L3412: Handler pay_credito - adicionar resolveCreditCard antes de registrar
+    L5884: Case "summary" - verificar time_range === "week" e rotear para weekly_report
+    L5323: Goal add - melhorar deteccao quando IA classifica "guardei" como income
 
-  supabase/functions/finax-worker/utils/conversation-context.ts
-    L20: CONTEXT_TTL_MINUTES = 30 → 1440
+  supabase/functions/finax-worker/index.ts (PROMPT)
+    Adicionar exemplos de goal: "ja tenho X para Y" -> goal
+    Adicionar regra: "guardei X" sem destino claro = goal (nao income)
 
-  supabase/functions/lembrar-contas/index.ts
-    Apos L153: Upsert conversation_context (pay_bill)
+  src/pages/Dashboard.tsx
+    L100: Mudar filtro de data para usar startsWith ou split('T')[0]
 
-  supabase/functions/ciclo-fatura/index.ts
-    Apos L252 e L271: Upsert conversation_context (pay_bill + card_name)
-
-  supabase/functions/processar-recorrentes/index.ts
-    Apos L178: Upsert conversation_context (recurring)
+  src/pages/Transacoes.tsx
+    Verificar ordenacao de transacoes
 
 DEPLOY:
-  finax-worker, lembrar-contas, ciclo-fatura, processar-recorrentes
+  finax-worker
 ```
 
-## Resultado Esperado
+## Prioridade de Implementacao
 
 ```text
-Bot: "Sua conta agua vence hoje!"
-  → Salva context: {topic: "pay_bill", expires: +24h}
-  → Salva no historico_conversas
+1. [CRITICO] Criar tabela parcelas (SQL)                     - 5 min
+2. [CRITICO] Handler pay_credito -> resolveCreditCard         - 15 min
+3. [IMPORTANTE] Summary + week -> weekly_report               - 5 min
+4. [IMPORTANTE] Goal: "guardei/tenho" -> melhorar prompt      - 10 min
+5. [FRONTEND] Dashboard grafico filtro de data                - 5 min
+6. [FRONTEND] Transacoes ordenacao                            - 5 min
+7. [MENOR] logs_sistema constraint warn                       - 2 min
+8. [MENOR] Contexto "ajuda" -> resposta subsequente           - 10 min
+```
 
-User: "Ja paguei a agua, foi 55"
-  → Busca ultimas 10 msgs do historico
-  → IA ve: "Bot disse conta agua vence + user diz paguei 55"
-  → IA classifica: pay_bill, categoria moradia
-  → Bot: "Paguei conta de agua R$ 55.00. Como pagou?"
+## Resultado Esperado Apos Correcoes
 
-User: "cafe 8"
-  → Historico mostra conversa sobre conta, mas nova mensagem e claramente gasto
-  → IA classifica: expense, cafe, R$ 8.00
-  → Contexto funciona para TUDO, nao so contas
+```text
+"perfume 120 credito 3x" -> Parcelas criadas na tabela parcelas ✅
+"meus parcelamentos" -> Lista parcelas ativas ✅
+"cremozinho 5" -> [Credito] -> "Qual cartao?" ✅
+"cafe 1 no credito" (2+ cartoes) -> "Qual cartao?" ✅
+"RELATORIO SEMANAL" -> Resumo dos ultimos 7 dias ✅
+"guardei 200" (com metas ativas) -> "Em qual meta?" ✅
+"ja tenho 500 para trafego" -> Adiciona a meta ✅
+Dashboard grafico -> Mostra dados reais ✅
+Transacoes -> Mais recente primeiro ✅
 ```
