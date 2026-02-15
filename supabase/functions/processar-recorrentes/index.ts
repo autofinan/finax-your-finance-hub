@@ -175,7 +175,19 @@ serve(async (req) => {
             `_Se o valor mudou, me diz: "corrigir ${rec.descricao} para X"_`;
 
           const sent = await sendWhatsApp(usuario.phone_number, msg);
-          if (sent) notificados++;
+          if (sent) {
+            notificados++;
+
+            // Atualizar conversation_context
+            const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(); // 1h
+            await supabase.from("conversation_context").upsert({
+              user_id: rec.usuario_id,
+              current_topic: "recurring",
+              last_intent: "recurring_processed",
+              last_interaction_at: new Date().toISOString(),
+              expires_at: expiresAt
+            }, { onConflict: "user_id" });
+          }
 
           // Rate limiting
           await new Promise((r) => setTimeout(r, 500));

@@ -879,6 +879,24 @@ Context: action (start|end)
 5. Confidence reflete minha certeza?
 6. Se ambíguo (< 0.5), retornei unknown?
 
+## REGRA CRITICA: HISTORICO DA CONVERSA
+
+Quando o HISTORICO mostra que voce (Bot) enviou:
+- Lembrete de conta (agua, luz, gas, internet, aluguel, condominio, energia)
+- Alerta de fatura de cartao
+- Confirmacao de recorrente processada
+
+E o usuario responde com valor ou confirma pagamento:
+- Classifique como pay_bill (NAO expense)
+- Categoria: moradia (para contas de consumo)
+- "agua", "luz", "gas", "internet" = conta de consumo, NUNCA alimentacao
+- Use o historico para desambiguar
+
+Quando o HISTORICO mostra conversa sobre um topico especifico:
+- Mantenha o contexto da conversa
+- NAO mude de assunto a menos que o usuario mude explicitamente
+- Se o usuario diz "paguei" + nome que aparece no historico recente = pay_bill
+
 RESPONDA APENAS COM JSON. SEM MARKDOWN. SEM EXPLICAÇÕES ADICIONAIS.`;
 
 // ============================================================================
@@ -1002,7 +1020,13 @@ CONTEXTO ATIVO (usuário está no meio de uma ação):
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo },
+          { role: "system", content: PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo +
+            (history ? "\n\n--- HISTORICO RECENTE DA CONVERSA (use para entender contexto) ---\n" + history + "\n--- FIM DO HISTORICO ---\n\n" +
+            "REGRA CRITICA: Use o historico acima para entender o contexto da conversa. " +
+            "Se o Bot enviou lembrete de conta (agua, luz, gas, internet, aluguel, condominio, energia) " +
+            "e o usuario confirma pagamento ou informa valor, classifique como pay_bill, " +
+            "categoria moradia, NAO alimentacao. 'agua', 'luz', 'gas' no contexto de contas = moradia." : "")
+          },
           { role: "user", content: message }
         ],
       }),
@@ -4333,9 +4357,9 @@ async function processarJob(job: any): Promise<void> {
       .select("user_message, ai_response")
       .eq("phone_number", payload.phoneNumber)
       .order("created_at", { ascending: false })
-      .limit(3);
+      .limit(10);
     
-    const historicoFormatado = historico?.map(h => `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 80)}...`).reverse().join("\n") || "";
+    const historicoFormatado = historico?.map(h => `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 200) || "(sem resposta)"}`).reverse().join("\n---\n") || "";
     
     // 🔒 DECISION ENGINE - Única fonte de verdade
     // ✅ [v6.1] Agora a IA sempre é chamada e resolve referências temporais dinamicamente

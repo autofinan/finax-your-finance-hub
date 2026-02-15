@@ -253,6 +253,17 @@ serve(async (req) => {
 
             results.faturasAlertadas++;
             console.log(`📬 [CICLO-FATURA] Alerta enviado: ${cartao.nome} (${diasAteVencimento} dias)`);
+
+            // Atualizar conversation_context
+            const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+            await supabase.from("conversation_context").upsert({
+              user_id: cartao.usuario_id,
+              current_topic: "pay_bill",
+              last_intent: "pay_bill",
+              last_card_name: cartao.nome,
+              last_interaction_at: new Date().toISOString(),
+              expires_at: expiresAt
+            }, { onConflict: "user_id" });
           }
         }
 
@@ -270,6 +281,17 @@ serve(async (req) => {
               ]
             );
             results.faturasAlertadas++;
+
+            // Atualizar conversation_context (vencimento hoje)
+            const expiresAt2 = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+            await supabase.from("conversation_context").upsert({
+              user_id: cartao.usuario_id,
+              current_topic: "pay_bill",
+              last_intent: "pay_bill",
+              last_card_name: cartao.nome,
+              last_interaction_at: new Date().toISOString(),
+              expires_at: expiresAt2
+            }, { onConflict: "user_id" });
           }
         }
 
