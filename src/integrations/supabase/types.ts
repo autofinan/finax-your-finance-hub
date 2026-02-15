@@ -2116,6 +2116,87 @@ export type Database = {
           },
         ]
       }
+      parcelas: {
+        Row: {
+          cartao_id: string | null
+          created_at: string | null
+          descricao: string | null
+          fatura_id: string | null
+          id: string
+          mes_referencia: string
+          numero_parcela: number
+          parcelamento_id: string | null
+          status: string | null
+          total_parcelas: number
+          usuario_id: string
+          valor: number
+        }
+        Insert: {
+          cartao_id?: string | null
+          created_at?: string | null
+          descricao?: string | null
+          fatura_id?: string | null
+          id?: string
+          mes_referencia: string
+          numero_parcela: number
+          parcelamento_id?: string | null
+          status?: string | null
+          total_parcelas: number
+          usuario_id: string
+          valor: number
+        }
+        Update: {
+          cartao_id?: string | null
+          created_at?: string | null
+          descricao?: string | null
+          fatura_id?: string | null
+          id?: string
+          mes_referencia?: string
+          numero_parcela?: number
+          parcelamento_id?: string | null
+          status?: string | null
+          total_parcelas?: number
+          usuario_id?: string
+          valor?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "parcelas_cartao_id_fkey"
+            columns: ["cartao_id"]
+            isOneToOne: false
+            referencedRelation: "cartoes_credito"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "parcelas_fatura_id_fkey"
+            columns: ["fatura_id"]
+            isOneToOne: false
+            referencedRelation: "faturas_cartao"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "parcelas_fatura_id_fkey"
+            columns: ["fatura_id"]
+            isOneToOne: false
+            referencedRelation: "vw_faturas_em_aberto"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "parcelas_parcelamento_id_fkey"
+            columns: ["parcelamento_id"]
+            isOneToOne: false
+            referencedRelation: "transacoes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "parcelas_parcelamento_id_fkey"
+            columns: ["parcelamento_id"]
+            isOneToOne: false
+            referencedRelation: "vw_transacoes_mes_atual"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       pending_messages: {
         Row: {
           created_at: string | null
