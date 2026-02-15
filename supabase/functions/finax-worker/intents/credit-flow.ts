@@ -126,39 +126,9 @@ export async function resolveCreditCard(
   }
   
   // ========================================================================
-  // CASO 5: 4+ cartões → 2 mais usados como botões + "Outros" → lista
+  // CASO 5: 4+ cartões → lista interativa direto (mais rápido)
   // ========================================================================
-  console.log(`💳 [CREDIT] ${cards.length} cartões - padrão 2+Outros`);
-  
-  // Buscar 2 cartões mais usados (últimos 30 dias)
-  const { data: recentTxs } = await supabase
-    .from("transacoes")
-    .select("cartao_id")
-    .eq("usuario_id", userId)
-    .eq("forma_pagamento", "credito")
-    .gte("data", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
-    .not("cartao_id", "is", null);
-  
-  // Contar uso de cada cartão
-  const usage: Record<string, number> = {};
-  for (const tx of (recentTxs || [])) {
-    if (tx.cartao_id) {
-      usage[tx.cartao_id] = (usage[tx.cartao_id] || 0) + 1;
-    }
-  }
-  
-  // Ordenar por uso
-  const sorted = [...cards].sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
-  const top2 = sorted.slice(0, 2);
-  
-  // Criar botões: 2 mais usados + "Outros"
-  const cardButtons = [
-    ...top2.map(c => ({
-      id: `card_${c.id}`,
-      title: (c.nome || "Cartão").slice(0, 20)
-    })),
-    { id: "card_others", title: "📋 Outros" }
-  ];
+  console.log(`💳 [CREDIT] ${cards.length} cartões - lista interativa direta`);
   
   return {
     success: false,
@@ -166,9 +136,7 @@ export async function resolveCreditCard(
     cardOptions: cards.map(c => ({ id: c.id, nome: c.nome })),
     message: `💳 Qual cartão?`,
     missingSlot: "card",
-    cardButtons,
-    // Guardar lista completa para quando clicar "Outros"
-    useListMessage: false, // NÃO enviar lista direto, esperar o botão "Outros"
+    useListMessage: true,
     listSections: [{
       title: "Seus cartões",
       rows: cards.map(c => {
