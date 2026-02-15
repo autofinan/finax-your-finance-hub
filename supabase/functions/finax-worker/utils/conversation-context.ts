@@ -17,7 +17,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-const CONTEXT_TTL_MINUTES = 30;
+const CONTEXT_TTL_MINUTES = 1440; // 24 horas - garante contexto mesmo se usuário demora para responder
 
 // ============================================================================
 // 📦 TIPOS

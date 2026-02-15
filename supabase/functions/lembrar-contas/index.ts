@@ -152,6 +152,16 @@ serve(async (req) => {
 
           enviados++;
           console.log(`✅ Lembrete enviado: ${conta.nome} -> ${conta.phone_number}`);
+
+          // Atualizar conversation_context para que a IA saiba que enviamos lembrete
+          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          await supabase.from("conversation_context").upsert({
+            user_id: conta.usuario_id,
+            current_topic: "pay_bill",
+            last_intent: "pay_bill",
+            last_interaction_at: new Date().toISOString(),
+            expires_at: expiresAt
+          }, { onConflict: "user_id" });
         } else {
           erros++;
           console.log(`⚠️ Falha ao enviar para: ${conta.phone_number}`);
