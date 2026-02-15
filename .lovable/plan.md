@@ -1,206 +1,165 @@
 
-# Plano: Notificacoes Automaticas, Recorrentes e Melhorias de Fila
+# Plano: Memoria Conversacional Completa (10 mensagens + Contexto Proativo)
 
-## Diagnostico do Estado Atual
+## Resumo
 
-### O que JA EXISTE e funciona:
-- `lembrar-contas/index.ts` - Edge function pronta para lembrar contas a pagar (usa `fn_contas_para_lembrar` RPC)
-- `ciclo-fatura/index.ts` - Edge function pronta para fechar faturas e alertar vencimentos (7, 3, 1 dias)
-- `fn_process_recorrentes` - RPC no banco que registra transacoes de gastos recorrentes automaticamente
-- Sistema de fila (`message-queue.ts`) com enfileiramento e deteccao de slot response
-- Handlers `limit_force_yes`, `limit_other_card`, `limit_cancel` para limite insuficiente
-- `linkTransactionToContext` e `context_id` no `registerExpense` para vincular gastos a viagens
+Corrigir o bug principal (historico buscado mas ignorado pela IA) e implementar memoria conversacional robusta que funciona para TODAS as situacoes, nao apenas contas.
 
-### O que NAO funciona / FALTA:
-1. **NENHUM cron job** para `lembrar-contas` e `ciclo-fatura` (so existem crons para relatorios semanal/mensal, finax-worker fallback, e finax-insights)
-2. **NENHUM cron job** para `fn_process_recorrentes` - recorrentes nunca sao processadas automaticamente
-3. **Nenhuma edge function** para notificar usuario sobre recorrentes processadas via WhatsApp
-4. **Fila de gastos rapidos**: Apos registrar um gasto, o sistema so INFORMA "voce tem N pendentes" mas NAO processa automaticamente o proximo
-5. **Viagem**: `registerExpense` (modular) ja vincula `context_id`, mas o index.ts nao informa ao usuario que o gasto foi vinculado ao evento
+## O Bug Central
 
----
+O sistema tem DOIS pontos onde a IA e chamada:
 
-## Solucao por Item
+1. **`index.ts` linha 980** - `callAIForDecision()` recebe `history` como parametro mas **IGNORA** na linha 1005
+2. **`decision/engine.ts` linha 464** - `callAIForDecision()` da engine **NAO recebe** historico nenhum
 
-### 1. Notificacoes automaticas (Contas + Faturas) - CRON JOBS
+O fluxo principal passa por `decisionEngine()` no index.ts (linha 1102), que chama `callAIForDecision` do index.ts na linha 1289 e **passa o history** (linha 1297). O problema e que dentro da funcao (linha 1005), o history nao e injetado no prompt.
 
-**Problema:** As edge functions `lembrar-contas` e `ciclo-fatura` existem e funcionam, mas nao tem cron jobs agendados.
+## Mudancas
 
-**Solucao:** Criar 2 cron jobs via SQL:
-- `lembrar-contas`: Executar diariamente as 9h (horario de Brasilia = 12h UTC)
-- `ciclo-fatura`: Executar diariamente as 8h (horario de Brasilia = 11h UTC)
+### 1. index.ts - Injetar historico no prompt da IA (BUG PRINCIPAL)
 
-**Importante sobre 24h window:** Ambas as functions ja usam a API do WhatsApp para enviar mensagens. Dentro da janela de 24h (usuario ja mandou mensagem), a mensagem sera entregue gratuitamente. Fora da janela, a Meta rejeita a mensagem. O `lembrar-contas` ja trata isso (retorna `response.ok`). O `ciclo-fatura` usa Vonage sandbox que tambem respeita a janela.
-
-**Melhoria:** Adicionar fallback no `ciclo-fatura` para tentar enviar via Meta API primeiro (mesmo canal que o usuario usa), e so usar Vonage como backup. Isso maximiza entrega dentro da janela de 24h.
-
-### 2. Fechamento automatico de fatura - JA IMPLEMENTADO
-
-O `ciclo-fatura/index.ts` ja:
-- Fecha faturas no dia de fechamento
-- Alerta em 7, 3 e 1 dias antes do vencimento
-- Marca como atrasada se passou do vencimento
-- Envia mensagem formatada com valor
-
-**Melhoria:** Adicionar botoes interativos na mensagem de vencimento (via Meta API, nao Vonage sandbox que nao suporta botoes). Botoes: "Pagar agora" / "Lembrar amanha".
-
-### 3. Recorrentes processam automaticamente - CRON + NOTIFICACAO
-
-**Problema:** `fn_process_recorrentes` existe no banco mas nao tem cron job. E nao notifica o usuario.
-
-**Solucao:**
-1. Criar edge function `processar-recorrentes/index.ts` que:
-   - Chama `supabase.rpc("fn_process_recorrentes")`
-   - Busca recorrentes processadas (onde `proxima_execucao` foi atualizada hoje)
-   - Envia notificacao WhatsApp para cada usuario: "Registrei Netflix R$ 55.00"
-2. Criar cron job diario as 7h (10h UTC) para essa edge function
-
-### 4. Gastos rapidos em sequencia (fila funcional)
-
-**Problema:** Apos registrar um gasto, o sistema so diz "voce tem N pendentes" mas nao processa o proximo automaticamente.
-
-**Solucao:** No `index.ts`, apos cada `registerExpense` bem-sucedido (linhas 4600-4640):
-1. Em vez de apenas informar o count, chamar `processNextInQueue(userId)` do `message-queue.ts`
-2. Se retornar uma mensagem, reprocessa-la como se fosse uma nova mensagem (re-invoke o pipeline)
-3. Adicionar loop com limite de 5 mensagens para evitar recursao infinita
-4. Manter a mensagem informativa mas processar em sequencia
-
-### 5. Viagem vincula gastos - PARCIALMENTE FUNCIONAL
-
-**Problema:** O `registerExpense` ja salva `context_id`, mas o usuario nao recebe feedback visual.
-
-**Solucao:** No `index.ts`, apos `registerExpense` retornar sucesso:
-1. Verificar se ha `activeContext` para o usuario
-2. Se sim, adicionar tag na mensagem de confirmacao: "📍 Viagem SP"
-
-### 6. Limite insuficiente - JA FUNCIONA
-
-Os handlers `limit_force_yes`, `limit_other_card`, `limit_cancel` ja existem nas linhas 3734-3762 do index.ts. O `credit-flow.ts` ja retorna botoes com essas opcoes quando o limite e insuficiente.
-
-**Verificacao:** Este item JA ESTA IMPLEMENTADO e funcional.
-
----
-
-## Secao Tecnica
-
-### Novos Cron Jobs (SQL - NAO usar migracao, contem dados sensíveis)
-
-Executar via "Run SQL" no Supabase:
+**Linha 1005**: Adicionar history ao prompt enviado para a IA
 
 ```text
--- CRON 1: Lembrar contas a pagar (diario 9h Brasilia = 12h UTC)
-SELECT cron.schedule(
-  'lembrar-contas-diario',
-  '0 12 * * *',
-  $$
-  SELECT net.http_post(
-    url:='https://[PROJECT_REF].supabase.co/functions/v1/lembrar-contas',
-    headers:='{"Content-Type":"application/json","Authorization":"Bearer [ANON_KEY]"}'::jsonb,
-    body:='{}'::jsonb
-  );
-  $$
-);
+ANTES:
+  messages: [
+    { role: "system", content: PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo },
+    { role: "user", content: message }
+  ]
 
--- CRON 2: Ciclo de fatura (diario 8h Brasilia = 11h UTC)
-SELECT cron.schedule(
-  'ciclo-fatura-diario',
-  '0 11 * * *',
-  $$
-  SELECT net.http_post(
-    url:='https://[PROJECT_REF].supabase.co/functions/v1/ciclo-fatura',
-    headers:='{"Content-Type":"application/json","Authorization":"Bearer [ANON_KEY]"}'::jsonb,
-    body:='{}'::jsonb
-  );
-  $$
-);
-
--- CRON 3: Processar recorrentes (diario 7h Brasilia = 10h UTC)
-SELECT cron.schedule(
-  'processar-recorrentes-diario',
-  '0 10 * * *',
-  $$
-  SELECT net.http_post(
-    url:='https://[PROJECT_REF].supabase.co/functions/v1/processar-recorrentes',
-    headers:='{"Content-Type":"application/json","Authorization":"Bearer [ANON_KEY]"}'::jsonb,
-    body:='{}'::jsonb
-  );
-  $$
-);
+DEPOIS:
+  messages: [
+    { role: "system", content: PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo +
+      (history ? "\n\n--- HISTORICO RECENTE ---\n" + history + "\n---\n\n" +
+      "REGRA: Use o historico para entender contexto. " +
+      "Se o Bot enviou lembrete de conta (agua, luz, gas, internet, aluguel) " +
+      "e o usuario confirma pagamento, classifique como pay_bill, " +
+      "categoria moradia, NAO alimentacao." : "")
+    },
+    { role: "user", content: message }
+  ]
 ```
 
-### Nova Edge Function: `processar-recorrentes/index.ts`
+### 2. index.ts - Aumentar janela de historico para 10 mensagens
 
-Responsabilidades:
-1. Chamar `fn_process_recorrentes` para registrar transacoes no banco
-2. Buscar recorrentes que foram processadas hoje (ultima_execucao = today)
-3. Para cada uma, buscar telefone do usuario via join com `usuarios`
-4. Enviar WhatsApp: "Registrei [descricao] R$ [valor]"
-5. Usar Meta API (mesmo canal do finax-worker) para maximizar entrega dentro da janela 24h
+**Linha 4336**: Mudar `.limit(3)` para `.limit(10)`
 
-### Modificacao: `ciclo-fatura/index.ts`
+**Linha 4338**: Melhorar formato para incluir mais contexto do bot
 
-1. Adicionar fallback Meta API (alem do Vonage) usando `WHATSAPP_ACCESS_TOKEN`
-2. Adicionar botoes interativos nas mensagens de vencimento (via Meta API)
-3. Adicionar handler no `index.ts` para botoes `fatura_pagar_[id]` e `fatura_lembrar_[id]`
-
-### Modificacao: `finax-worker/index.ts`
-
-**Fila de gastos (linhas 4631-4639):**
-Substituir notificacao passiva por processamento ativo:
 ```text
-// ANTES: So informa
-await sendMessage(..., "Voce tem N pendentes");
+ANTES:
+  .limit(3);
+  const historicoFormatado = historico?.map(h =>
+    `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 80)}...`
+  ).reverse().join("\n") || "";
 
-// DEPOIS: Processa automaticamente
-const nextMsg = await processNextInQueue(userId);
-if (nextMsg) {
-  // Re-processar como nova mensagem
-  const newPayload = { ...payload, messageText: nextMsg.message_text, messageId: nextMsg.message_id };
-  // Processar inline (sem recursao - max 5)
-  await markMessageProcessed(nextMsg.id);
-  // ... re-invoke pipeline
-}
+DEPOIS:
+  .limit(10);
+  const historicoFormatado = historico?.map(h =>
+    `User: ${h.user_message}\nBot: ${h.ai_response?.slice(0, 200) || "(sem resposta)"}`
+  ).reverse().join("\n---\n") || "";
 ```
 
-**Contexto de viagem (apos registerExpense):**
+### 3. index.ts - Tambem injetar historico na engine.ts (via contexto)
+
+A `decisionEngine` em `decision/engine.ts` tambem chama sua propria `callAIForDecision` (linha 274) que **NAO recebe historico**. Precisamos passar o historico para la tambem.
+
+Na engine.ts, a funcao `decisionEngine` (linha 201) recebe `input: DecisionInput` que ja tem campo `context`. Vamos adicionar `history` ao context que e passado pela index.ts.
+
+Mas o fluxo principal no index.ts usa sua propria `decisionEngine` (linha 1102), nao a da engine.ts. Entao a correcao da linha 1005 ja cobre o caso principal. A engine.ts so e usada como fallback/import.
+
+### 4. conversation-context.ts - Aumentar TTL para 24h
+
+**Linha 20**: Mudar `CONTEXT_TTL_MINUTES = 30` para `CONTEXT_TTL_MINUTES = 1440` (24 horas)
+
+Isso garante que se o usuario demorar para responder (ex: recebe lembrete as 9h, responde as 18h), o contexto ainda existe.
+
+### 5. lembrar-contas/index.ts - Atualizar conversation_context ao enviar lembrete
+
+Apos enviar WhatsApp com sucesso (depois da linha 153), fazer upsert no `conversation_context` com:
+- `current_topic: "pay_bill"`
+- `last_intent: "pay_bill"`
+- `expires_at: agora + 24h`
+
+### 6. ciclo-fatura/index.ts - Atualizar conversation_context ao alertar fatura
+
+Apos enviar alerta de vencimento (apos linhas 252 e 271), fazer upsert no `conversation_context` com:
+- `current_topic: "pay_bill"`
+- `last_intent: "pay_bill"`
+- `last_card_name: cartao.nome`
+- `expires_at: agora + 24h`
+
+### 7. processar-recorrentes/index.ts - Atualizar conversation_context ao notificar
+
+Apos enviar notificacao (apos linha 178), fazer upsert no `conversation_context` com:
+- `current_topic: "recurring"`
+- `last_intent: "recurring_processed"`
+- `expires_at: agora + 1h`
+
+### 8. PROMPT_FINAX_UNIVERSAL - Adicionar regra de contexto
+
+Adicionar ao final do prompt (antes da linha 882 que fecha o template literal) uma secao sobre uso do historico:
+
 ```text
-if (result.success && result.transactionId) {
-  const ctx = await getActiveContext(userId);
-  if (ctx) {
-    result.message += "\n📍 " + ctx.label;
-  }
-}
+## REGRA CRITICA: HISTORICO DA CONVERSA
+
+Quando o HISTORICO mostra que voce (Bot) enviou:
+- Lembrete de conta (agua, luz, gas, internet, aluguel, condominio, energia)
+- Alerta de fatura de cartao
+- Confirmacao de recorrente
+
+E o usuario responde com valor ou confirma pagamento:
+- Classifique como pay_bill (NAO expense)
+- Categoria: moradia (para contas de consumo)
+- "agua", "luz", "gas", "internet" = conta de consumo, NUNCA alimentacao
+- Use o historico para desambiguar
+
+Quando o HISTORICO mostra conversa sobre um topico especifico:
+- Mantenha o contexto da conversa
+- NAO mude de assunto a menos que o usuario mude explicitamente
 ```
 
----
-
-## Arquivos Afetados
+## Secao Tecnica - Arquivos Afetados
 
 ```text
-CRIAR:
-  supabase/functions/processar-recorrentes/index.ts (nova edge function)
-
 EDITAR:
-  supabase/functions/ciclo-fatura/index.ts
-    - Adicionar Meta API como canal primario
-    - Adicionar botoes interativos nas mensagens
-
   supabase/functions/finax-worker/index.ts
-    - Fila: substituir notificacao por processamento ativo (linhas 4631-4639)
-    - Viagem: adicionar tag de contexto na mensagem de confirmacao
-    - Handlers: adicionar fatura_pagar_* e fatura_lembrar_*
+    L1005: Injetar history no prompt (FIX PRINCIPAL)
+    L4336: limit(3) → limit(10)
+    L4338: Melhorar formato historico (200 chars, separador ---)
+    L~880: Adicionar regra de contexto no PROMPT_FINAX_UNIVERSAL
 
-SQL (Run SQL, nao migracao):
-    - 3 cron jobs (lembrar-contas, ciclo-fatura, processar-recorrentes)
+  supabase/functions/finax-worker/utils/conversation-context.ts
+    L20: CONTEXT_TTL_MINUTES = 30 → 1440
+
+  supabase/functions/lembrar-contas/index.ts
+    Apos L153: Upsert conversation_context (pay_bill)
+
+  supabase/functions/ciclo-fatura/index.ts
+    Apos L252 e L271: Upsert conversation_context (pay_bill + card_name)
+
+  supabase/functions/processar-recorrentes/index.ts
+    Apos L178: Upsert conversation_context (recurring)
+
+DEPLOY:
+  finax-worker, lembrar-contas, ciclo-fatura, processar-recorrentes
 ```
 
-## Resumo de Status
+## Resultado Esperado
 
-| Item | Status Atual | Acao |
-|------|-------------|------|
-| 1. Notificacoes contas/faturas | Edge functions prontas, SEM cron | Criar 2 cron jobs + melhorar canal |
-| 2. Fechamento de fatura | Funciona, sem botoes | Adicionar botoes interativos |
-| 3. Recorrentes automaticas | RPC pronta, SEM cron, SEM notificacao | Nova edge function + cron |
-| 4. Fila de gastos rapidos | Enfileira mas nao processa | Processar automaticamente |
-| 5. Viagem vincula gastos | context_id salvo, sem feedback | Adicionar tag visual |
-| 6. Limite insuficiente | JA FUNCIONA | Nenhuma acao necessaria |
+```text
+Bot: "Sua conta agua vence hoje!"
+  → Salva context: {topic: "pay_bill", expires: +24h}
+  → Salva no historico_conversas
+
+User: "Ja paguei a agua, foi 55"
+  → Busca ultimas 10 msgs do historico
+  → IA ve: "Bot disse conta agua vence + user diz paguei 55"
+  → IA classifica: pay_bill, categoria moradia
+  → Bot: "Paguei conta de agua R$ 55.00. Como pagou?"
+
+User: "cafe 8"
+  → Historico mostra conversa sobre conta, mas nova mensagem e claramente gasto
+  → IA classifica: expense, cafe, R$ 8.00
+  → Contexto funciona para TUDO, nao so contas
+```
