@@ -715,10 +715,18 @@ Slots: bill_name, amount
 Exemplos: "Paguei energia, deu 184"
 
 ### goal - Meta de economia ⚠️ PRIORIDADE sobre set_context se tiver valor
-Guardar dinheiro para objetivo.
-Indicadores: "meta", "juntar", "guardar", "economizar"
+Guardar dinheiro para objetivo OU adicionar progresso a meta existente.
+Indicadores: "meta", "juntar", "guardar", "economizar", "guardei", "juntei", "tenho X para Y", "poupei", "depositei"
 Slots: amount, description, deadline
-Exemplos: "Criar meta de 5000 para viagem"
+Exemplos: 
+  - "Criar meta de 5000 para viagem"
+  - "guardei 200" → goal (NÃO income!) - slots: {amount: 200}
+  - "ja tenho 500 para o trafego pago" → goal - slots: {amount: 500, description: "trafego pago"}
+  - "juntei 300 pro carro" → goal - slots: {amount: 300, description: "carro"}
+  - "poupei 150" → goal - slots: {amount: 150}
+
+⚠️ REGRA CRITICA: "guardei", "juntei", "poupei", "economizei" + valor = SEMPRE goal, NUNCA income!
+"guardar dinheiro" é sobre METAS, não sobre receber dinheiro.
 
 ### purchase - Consulta de compra ⚠️ PRIORIDADE sobre chat se for pergunta com valor
 Perguntar se DEVE comprar algo específico.
@@ -3404,9 +3412,44 @@ async function processarJob(job: any): Promise<void> {
       
       // FORMA DE PAGAMENTO
       if (payload.buttonReplyId.startsWith("pay_")) {
-        const paymentMethod = PAYMENT_ALIASES[payload.buttonReplyId];
+      const paymentMethod = PAYMENT_ALIASES[payload.buttonReplyId];
         if (paymentMethod && activeAction && activeAction.intent === "expense") {
           const updatedSlots = { ...activeAction.slots, payment_method: paymentMethod };
+          
+          // ✅ BUG 3 FIX: Se crédito, resolver cartão ANTES de registrar
+          if (paymentMethod === "credito") {
+            const { resolveCreditCard } = await import("./intents/credit-flow.ts");
+            const creditResult = await resolveCreditCard(userId, updatedSlots);
+            
+            if (!creditResult.success) {
+              // Precisa perguntar qual cartão
+              if (creditResult.missingSlot === "card") {
+                const slotsWithOptions = {
+                  ...updatedSlots,
+                  card_options: creditResult.cardOptions || []
+                };
+                await updateAction(activeAction.id, { slots: slotsWithOptions, pending_slot: "card" });
+                
+                if (creditResult.useListMessage && creditResult.listSections) {
+                  await sendListMessage(payload.phoneNumber, creditResult.message, "Escolher cartão", creditResult.listSections, payload.messageSource);
+                } else if (creditResult.cardButtons) {
+                  await sendButtons(payload.phoneNumber, creditResult.message, creditResult.cardButtons, payload.messageSource);
+                } else {
+                  await sendMessage(payload.phoneNumber, creditResult.message, payload.messageSource);
+                }
+                return;
+              }
+              await sendMessage(payload.phoneNumber, creditResult.message, payload.messageSource);
+              return;
+            }
+            
+            // Cartão resolvido → atualizar slots
+            updatedSlots.card_id = creditResult.cardId;
+            updatedSlots.fatura_id = creditResult.invoiceId;
+            updatedSlots.card = creditResult.cardName;
+            console.log(`💳 [BUTTON-CREDIT] Vinculado: ${creditResult.cardName}`);
+          }
+          
           const missing = getMissingSlots("expense", updatedSlots);
           
           if (missing.length === 0) {
@@ -4556,6 +4599,71 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     // 💰 INCOME - Contrato: required = ["amount"]
     // ========================================================================
+    // ✅ BUG 8 FIX: Reclassificar "guardei/juntei/poupei" como goal, não income
+    if (decision.actionType === "income") {
+      const guardeiNorm = normalizeText(conteudoProcessado);
+      const GOAL_VERBS = ["guardei", "juntei", "poupei", "economizei", "depositei"];
+      const isGoalVerb = GOAL_VERBS.some(v => guardeiNorm.includes(v));
+      
+      if (isGoalVerb && decision.slots.amount) {
+        console.log(`🎯 [RECLASSIFY] "${conteudoProcessado}" reclassificado de income → goal (verbo de acumulação)`);
+        decision.actionType = "goal";
+        // Re-rotear para o bloco de goal (que já está acima)
+        // Precisamos buscar metas ativas para saber para onde direcionar
+        const { data: activeMetas } = await supabase
+          .from("savings_goals")
+          .select("id, name, current_amount, target_amount")
+          .eq("user_id", userId)
+          .eq("status", "active");
+        
+        if (activeMetas && activeMetas.length > 0) {
+          const { addToGoal } = await import("./intents/goals.ts");
+          
+          // Se tem description, tentar match direto
+          if (decision.slots.description) {
+            const goalName = normalizeText(String(decision.slots.description));
+            const matched = activeMetas.find(g => {
+              const gName = normalizeText(g.name);
+              return gName.includes(goalName) || goalName.includes(gName);
+            });
+            if (matched) {
+              const result = await addToGoal(userId, matched.id, decision.slots.amount as number);
+              await sendMessage(payload.phoneNumber, result, payload.messageSource);
+              return;
+            }
+          }
+          
+          // Sem match → perguntar qual meta
+          if (activeMetas.length <= 3) {
+            const goalButtons = activeMetas.map(m => ({
+              id: `goal_add_${m.id}`,
+              title: m.name.slice(0, 20)
+            }));
+            await createAction(userId, "add_goal_progress", "goal", { amount: decision.slots.amount }, "goal_id", payload.messageId);
+            await sendButtons(payload.phoneNumber,
+              `💰 R$ ${(decision.slots.amount as number).toFixed(2)}\n\nEm qual meta quer adicionar?`,
+              goalButtons, payload.messageSource);
+          } else {
+            const sections = [{
+              title: "Suas metas",
+              rows: activeMetas.map(m => ({
+                id: `goal_add_${m.id}`,
+                title: m.name.slice(0, 24),
+                description: `R$ ${Number(m.current_amount).toFixed(2)} / R$ ${Number(m.target_amount).toFixed(2)}`
+              }))
+            }];
+            await createAction(userId, "add_goal_progress", "goal", { amount: decision.slots.amount }, "goal_id", payload.messageId);
+            await sendListMessage(payload.phoneNumber,
+              `💰 R$ ${(decision.slots.amount as number).toFixed(2)}\n\nEm qual meta quer adicionar?`,
+              "Selecionar meta", sections, payload.messageSource);
+          }
+          return;
+        }
+        // Sem metas ativas → registrar como income normalmente (fallthrough)
+        console.log(`💰 [RECLASSIFY] Sem metas ativas, mantendo como income`);
+        decision.actionType = "income";
+      }
+    }
     if (decision.actionType === "income") {
       const slots = decision.slots;
       const missing = getMissingSlots("income", slots);
@@ -5881,9 +5989,26 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           return;
         }
         
-        case "summary":
-        default:
+        case "summary": {
+          // ✅ BUG 5 FIX: Se time_range é "week", rotear para weekly_report
+          if (timeRange === "week" || timeRange === "weekly" || timeRange === "semana" || timeRange === "semanal") {
+            console.log(`📊 [QUERY] Summary + week → roteando para WEEKLY REPORT`);
+            const { data: relatorio } = await supabase.rpc("fn_relatorio_semanal", {
+              p_usuario_id: userId,
+              p_tipo_periodo: "semana_atual"
+            });
+            if (relatorio && relatorio.totais && (relatorio.totais.entradas > 0 || relatorio.totais.saidas > 0)) {
+              const textoRelatorio = await gerarTextoRelatorioInline(relatorio, nomeUsuario);
+              await sendMessage(payload.phoneNumber, textoRelatorio, payload.messageSource);
+            } else {
+              await sendMessage(payload.phoneNumber, "📊 Sem dados suficientes para o relatório semanal.\n\nRegistre seus gastos e entradas primeiro! 💸", payload.messageSource);
+            }
+            return;
+          }
           // Continua para fallback checks
+          break;
+        }
+        default:
           break;
       }
       

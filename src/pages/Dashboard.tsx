@@ -97,7 +97,7 @@ const Dashboard = () => {
       dia.setDate(hoje.getDate() - i);
       const diaStr = dia.toISOString().split('T')[0];
       const totalDia = transacoes
-        .filter((t) => t.data === diaStr && t.tipo === 'saida')
+        .filter((t) => t.data && t.data.split('T')[0] === diaStr && t.tipo === 'saida')
         .reduce((acc, t) => acc + Number(t.valor), 0);
       resultado.push({ name: dias[dia.getDay()], value: totalDia });
     }
