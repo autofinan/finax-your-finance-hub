@@ -1425,7 +1425,7 @@ function extractSlotValue(message: string, slotType: string): any {
 // ============================================================================
 // ⏱️ TTL CONFIGURÁVEL PARA ACTIONS (15 minutos)
 // ============================================================================
-const ACTION_TTL_MINUTES = 30;
+const ACTION_TTL_MINUTES = 60;
 
 async function getActiveAction(userId: string): Promise<ActiveAction | null> {
   const ttlAgo = new Date(Date.now() - ACTION_TTL_MINUTES * 60 * 1000).toISOString();

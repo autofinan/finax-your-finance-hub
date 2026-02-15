@@ -17,7 +17,7 @@ export type ActionType = "expense" | "income" | "card_event" | "add_card" | "bil
 
 export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: string[] }> = {
   expense: { required: ["amount", "payment_method"], optional: ["description", "category", "card", "card_id"] },
-  income: { required: ["amount"], optional: ["description", "source"] },
+  income: { required: ["amount", "source"], optional: ["description"] },
   card_event: { required: ["card", "value"], optional: ["field"] },
   add_card: { required: ["card_name", "limit"], optional: ["due_day", "closing_day"] },
   bill: { required: ["bill_name", "due_day"], optional: ["estimated_value"] },
