@@ -122,7 +122,7 @@ export function AppLayout({ children }: AppLayoutProps) {
               </div>
               <div>
                 <SheetTitle className="text-xl font-black text-white text-left">Finax</SheetTitle>
-                <p className="text-xs text-slate-500 font-medium">Finance Hub</p>
+                <p className="text-xs text-slate-500 font-medium">Converse. Organize. Evolua.</p>
               </div>
             </div>
           </SheetHeader>
