@@ -1,144 +1,146 @@
-# Plano: Correcao de 4 Bugs (Recorrencia Duplicada, UI Recorrentes, Parcelamento, Confirmacao de Cartao)
+
+# Plano: Correcao de 3 Bugs + Analise do Fluxo de Cartao
 
 ---
 
-## Bug #1: Recorrencia Processada 2x (Aluguel duplicado)
+## Bug #1: Nao consegue apagar gastos recorrentes no site
 
-**Causa raiz:** A query em `processar-recorrentes/index.ts` linha 72 usa:
+**Causa raiz:** A politica RLS de DELETE na tabela `gastos_recorrentes` usa `usuario_id = auth.uid()`. O sistema de autenticacao cria um usuario Supabase Auth com o MESMO UUID da tabela `usuarios`, e o frontend chama `supabase.auth.setSession()` com os tokens recebidos.
 
+**Problema provavel:** A sessao Supabase Auth pode ter expirado (token JWT expira apos ~1h). Quando expira, `auth.uid()` retorna NULL e o DELETE falha silenciosamente (RLS bloqueia, retorna 0 rows deleted, sem erro).
+
+O hook `useGastosRecorrentes` nao verifica se o delete realmente funcionou - ele apenas remove o item do estado local otimisticamente.
+
+**Fix (src/hooks/useGastosRecorrentes.ts):**
+- Apos o delete, verificar se o registro ainda existe
+- Se ainda existir, tentar refresh da sessao Supabase Auth e tentar novamente
+- Mostrar erro claro se falhar
+
+**Fix (src/contexts/AuthContext.tsx):**
+- Adicionar listener para `onAuthStateChange` para auto-refresh de tokens
+- Garantir que a sessao Supabase Auth esteja ativa antes de operacoes criticas
+
+**Alternativa mais robusta:** Adicionar fallback no hook - se o delete via RLS falhar, chamar uma edge function que usa service_role_key para deletar.
+
+---
+
+## Bug #2: Logo do Finax no painel interno
+
+**Causa raiz:** O Sidebar (desktop) e o AppLayout (mobile drawer) usam um div com gradiente e a letra "F" em vez da imagem real do logo Finax. O arquivo `src/assets/finax-logo-transparent.png` existe e ja e usado na pagina de Auth.
+
+**Fix (src/components/layout/Sidebar.tsx):**
+- Substituir o div com "F" pela imagem `finax-logo-transparent.png` (linhas 55-57)
+
+**Fix (src/components/layout/AppLayout.tsx):**
+- Substituir o div com "F" pela imagem `finax-logo-transparent.png` (linhas 120-122)
+
+---
+
+## Bug #3: Verificar cancelamento de recorrentes via WhatsApp
+
+O fluxo de cancelamento via WhatsApp ja existe no `index.ts` (linha 5720+). Quando o usuario diz "cancelar aluguel", o sistema:
+1. Busca recorrentes por nome
+2. Mostra botoes/lista para selecao
+3. Ao selecionar, desativa (`ativo: false`)
+
+O fluxo ja funciona. Nao e necessario correcao aqui.
+
+---
+
+## Analise do Fluxo de Cartao de Credito
+
+### O que ja esta correto:
+
+1. **Gasto pontual:** `credit-flow.ts` resolve cartao, busca/cria fatura, deduz limite, atualiza fatura. OK.
+2. **Parcelamento:** `installment.ts` deduz limite TOTAL imediatamente, cria parcelas em faturas futuras. OK.
+3. **Pagamento de fatura:** `restoreCardLimitOnPayment` restaura limite ao pagar. OK.
+4. **Fechamento automatico:** `ciclo-fatura/index.ts` CRON fecha faturas no dia correto, cria proxima fatura. OK.
+
+### Problemas identificados:
+
+**P1: Timezone em `getOrCreateInvoice` (credit-flow.ts linhas 254-264)**
+- Usa `new Date()` que retorna UTC, nao Brasilia
+- Se sao 22h BRT (01h UTC dia seguinte), o dia calculado esta errado
+- Isso pode colocar uma compra na fatura errada
+
+**Fix:** Usar data de Brasilia (UTC-3) para calcular mes/ano da fatura:
 ```text
-.or(`dia_mes.eq.${diaHoje},proxima_execucao.lte.${hojeISO}`)
+// Antes: const hoje = new Date();
+// Depois: calcular diaAtual com offset -3
 ```
 
-No dia 15/02, o aluguel (dia_mes=15) e processado e `proxima_execucao` e atualizada para `2026-03-15`. Porem, a data esta sendo definida com `new Date()` que usa UTC. Como o CRON roda as 7h BRT (10h UTC), `new Date().getDate()` retorna o dia correto. MAS se a `proxima_execucao` anterior nao existia (era NULL) OU foi setada incorretamente, a condicao `proxima_execucao.lte.${hojeISO}` tambem bate, causando dupla execucao.
+**P2: Timezone em `getOrCreateFutureInvoice` (installment.ts linhas 349-365)**
+- Mesmo problema de timezone
 
-**Evidencia no banco:** O aluguel tem `proxima_execucao: 2026-02-16` e `ultima_execucao: 2026-02-16`, confirmando que processou no dia 16 tambem. Isso aconteceu porque no dia 15 a proxima_execucao era NULL, entao o OR bateu em `dia_mes=15`. Depois, `proxima_execucao` foi setada para `2026-02-16` (usando UTC + 1 mes errado). No dia 16, `proxima_execucao.lte.2026-02-16` bateu de novo.
+**P3: Pagamento parcial nao implementado**
+O `restoreCardLimitOnPayment` sempre seta `status: "paga"`. Se o usuario pagar metade:
+- O limite deve subir proporcionalmente
+- O status deve permanecer "fechada" (nao "paga")
+- Deve mostrar saldo restante
 
-**Problema secundario:** A categoria do aluguel no banco e "outros" (foi cadastrado via WhatsApp sem categoria correta). A notificacao mostra a categoria do registro, que e "outros".
+**Fix (credit-flow.ts `restoreCardLimitOnPayment`):**
+- Verificar se `valorPago >= fatura.valor_total` para decidir status
+- Se parcial: status = "fechada", `valor_pago += valorPago`
+- Se total: status = "paga"
 
-**Fix (processar-recorrentes/index.ts):**
-
-1. Adicionar verificacao de `ultima_execucao` - se ja processou no mes atual, pular
-2. Usar data de Brasilia para calcular `diaHoje` e `proxima_execucao`
-3. Priorizar `proxima_execucao` sobre `dia_mes` quando ambos existem
-
-```text
-Logica corrigida:
-- Buscar recorrentes WHERE ativo=true
-- Para cada: verificar se ultima_execucao ja e do mes atual → pular
-- Verificar se dia_mes == diaHoje OU proxima_execucao <= hojeISO
-- Ao atualizar proxima_execucao, usar data de Brasilia e setar dia_mes correto
-```
-
-**Fix categoria aluguel:** Corrigir no banco a categoria do registro de "outros" para "moradia".
-
----
-
-## Bug #2: Pagina Recorrentes sem data da proxima cobranca
-
-**Causa raiz:** O componente `Recorrentes.tsx` nao exibe os campos `proxima_execucao` nem `ultima_execucao`, apesar de existirem no banco.
-
-**Fix (src/pages/Recorrentes.tsx):**
-Adicionar na area de informacoes de cada item:
-
-- "Proxima cobranca: DD/MM/AAAA" (campo `proxima_execucao`)
-- "Ultima cobranca: DD/MM/AAAA" (campo `ultima_execucao`)
-
----
-
-## Bug #3: Parcelamentos lancam todas as parcelas de uma vez
-
-**Problema:** Quando o usuario diz "perfume 120 em 3x", o sistema cria 3 registros na tabela `parcelas` imediatamente (parcela 1 pendente, parcela 2 e 3 futuras). Isso polui a visualizacao de transacoes e confunde o usuario.
-
-**Solucao proposta:** Manter a criacao das parcelas na tabela `parcelas` (para controle de faturas), mas NAO criar transacoes futuras em `transacoes`. Apenas a parcela do mes atual gera transacao. As proximas parcelas serao processadas pelo CRON mensal (similar a recorrentes).
-
-**Fix (intents/installment.ts):**
-
-- Manter a logica atual de criar registros em `parcelas` (necessario para vincular a faturas)
-- Verificar que apenas 1 transacao e criada em `transacoes` (a transacao mae com valor da parcela, nao o total)
-- Adicionar um novo handler no CRON `processar-recorrentes` que tambem processa parcelas com status "futura" cujo `mes_referencia` corresponde ao mes atual
-
-**Fix (processar-recorrentes/index.ts):**
-
-- Apos processar gastos recorrentes, buscar parcelas com `status = 'futura'` e `mes_referencia` do mes atual
-- Criar transacao para cada parcela e atualizar status para "pendente"
-- Notificar usuario via WhatsApp
-
-E TBM SOBRE AS PARCELAS TENHO O PROBLEMA QUE REGISTREI UM GASTO PARCELADO DEPOIS DA CRIAÇÃO DA TABELA PARCELAS, AS PARCELAS ESTÃO INDO PARA A TABELA E DEBITANDO NO CARTÃO, POREM NÃO ESTA INDO PARA A ABA PARCELAMENTOS E APARECENDO NO SITE O QUE FOI PARCELADO, PRECISA SER ARRUMADO. E TBBM GARANTIR QUE ESTA OBEDECENDO O PADRÃO DOS CARTÕES. COMPREI ALGO PARCELADO, O LIMITE É USADO O VALOR COMPLETO NO LIMITE, AO PAGAMENTO DE CADA PARCELA NA FATURA DO CARTÃO, O VALOR DA PARCELA ABRE NO LIMITE. 
-
----
-
-## Bug #4: Cartao de credito auto-selecionado sem confirmar com usuario
-
-**Problema:** O sistema de memoria (`patterns.ts`) aprende que "cafe" sempre vai no "Sicredi Credito" e aplica automaticamente. O campo `requiresConfirmation` existe no retorno de `applyUserPatterns` mas NAO e verificado no `index.ts` (linha 4498). O cartao e aplicado silenciosamente.
-
-**Fix (index.ts, linhas ~4498-4503):**
-Quando `patternResult.requiresConfirmation === true` E o padrao incluiu `card_id`:
-
-1. Aplicar os slots normalmente
-2. Mas ANTES de executar, enviar botoes de confirmacao:
-  - "[Sim, Sicredi Credito]" → continua normalmente
-  - "[Nao, outro cartao]" → abre lista/botoes de selecao de cartao
-3. Salvar action com status `awaiting_confirmation` e slot pendente `card_confirm`
-
-```text
-Fluxo corrigido:
-"cafe 1,50 credito"
-→ Padrao encontrado: Sicredi Credito (conf: 0.8)
-→ "Cafe R$ 1,50 no Sicredi Credito, certo?"
-   [Sim, registrar] [Nao, outro cartao]
-→ Se "Sim" → registra + confirma padrao (confidence +0.15)
-→ Se "Nao" → mostra lista de cartoes
-```
-
-Apos a primeira confirmacao (`last_confirmed_by_user = true`), as proximas vezes o padrao sera aplicado direto sem perguntar.
+**P4: Compra apos fechamento no mesmo dia**
+O `getOrCreateInvoice` usa `hoje.getDate() >= diaFechamento`. Compras no dia do fechamento VÃO para a proxima fatura (correto se considerarmos que o fechamento acontece no inicio do dia). Isso esta OK para o padrao simplificado.
 
 ---
 
 ## Secao Tecnica - Arquivos e Mudancas
 
 ```text
-supabase/functions/processar-recorrentes/index.ts
-  - Adicionar guard de dedup: verificar ultima_execucao do mes atual
-  - Usar timezone de Brasilia para diaHoje
-  - Adicionar processamento de parcelas futuras do mes atual
-  - Corrigir calculo de proxima_execucao
+src/hooks/useGastosRecorrentes.ts
+  - deleteGasto: adicionar verificacao pos-delete
+  - Se RLS bloqueou, tentar refresh da sessao e retry
+  - Alternativa: chamar edge function com service_role
 
-src/pages/Recorrentes.tsx
-  - Exibir proxima_execucao e ultima_execucao em cada card
-  - Formatar datas no padrao DD/MM/AAAA
+src/contexts/AuthContext.tsx
+  - Adicionar supabase.auth.onAuthStateChange listener
+  - Auto-refresh de sessao quando token expira
 
-supabase/functions/finax-worker/index.ts
-  - Linhas ~4498-4503: Verificar requiresConfirmation
-  - Se true + card_id inferido → enviar botoes confirmacao
-  - Handler para button "pattern_confirm_yes" e "pattern_confirm_no"
+src/components/layout/Sidebar.tsx
+  - Linha 55-57: substituir div "F" pela imagem finax-logo-transparent.png
+  - import finaxLogo from "@/assets/finax-logo-transparent.png"
+
+src/components/layout/AppLayout.tsx
+  - Linha 120-122: substituir div "F" pela imagem finax-logo-transparent.png
+
+supabase/functions/finax-worker/intents/credit-flow.ts
+  - getOrCreateInvoice (L254): usar timezone Brasilia
+  - restoreCardLimitOnPayment (L347-382): suportar pagamento parcial
+    - Se valorPago < valor_total: status = "fechada", valor_pago += valorPago
+    - Se valorPago >= valor_total: status = "paga"
 
 supabase/functions/finax-worker/intents/installment.ts
-  - Verificar que transacao mae usa valor_parcela (nao valor_total)
-  - Garantir que parcelas futuras NAO criem transacoes em transacoes
+  - getOrCreateFutureInvoice (L349): usar timezone Brasilia
 
-SQL: UPDATE gastos_recorrentes SET categoria = 'moradia' 
-     WHERE id = 'd4221c80-424d-4373-aae1-99229e98f76b';
+supabase/functions/ciclo-fatura/index.ts
+  - Ja usa UTC, mas como o CRON roda as 8h BRT (11h UTC), o dia
+    esta correto na maioria dos casos. Mesmo assim, corrigir para
+    usar Brasilia explicitamente.
 
-DEPLOY: processar-recorrentes, finax-worker
+DEPLOY: finax-worker, ciclo-fatura
 ```
 
 ## Ordem de Execucao
 
 ```text
-1. SQL - Corrigir categoria do aluguel para 'moradia'
-2. processar-recorrentes - Guard dedup + timezone + parcelas
-3. Recorrentes.tsx - Exibir datas de proxima/ultima cobranca
-4. index.ts - Confirmacao de padrao de cartao com botoes
-5. Deploy processar-recorrentes + finax-worker
-6. Testar fluxos
+1. Sidebar.tsx + AppLayout.tsx - Logo do Finax
+2. AuthContext.tsx - Auto-refresh de sessao Supabase Auth
+3. useGastosRecorrentes.ts - Verificacao pos-delete + retry
+4. credit-flow.ts - Timezone + pagamento parcial
+5. installment.ts - Timezone
+6. ciclo-fatura - Timezone
+7. Deploy edge functions
 ```
 
 ## Resultado Esperado
 
 ```text
-Aluguel dia 15 → processa 1x, notifica com categoria "moradia"     OK
-Recorrentes UI → mostra "Proxima: 15/03/2026"                      OK
-"perfume 120 3x" → 1 transacao agora, proximas via CRON mensal     OK
-"cafe 1,50 credito" → "No Sicredi Credito?" [Sim] [Nao, outro]    OK
+Deletar recorrente no site → funciona (com retry se sessao expirou)
+Logo Finax → aparece corretamente no sidebar e mobile drawer
+Compra 23h BRT → vai para fatura correta (Brasilia, nao UTC)
+"paguei 500 da fatura" (total 1200) → parcial, limite +500, status "fechada"
 ```
