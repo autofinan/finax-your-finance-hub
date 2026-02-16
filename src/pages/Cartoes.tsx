@@ -24,16 +24,15 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Plus, Trash2, CreditCard, Calendar, DollarSign, TrendingUp, AlertTriangle, Pencil } from 'lucide-react';
+import { Plus, Trash2, CreditCard, Calendar, DollarSign, TrendingUp, AlertTriangle, Pencil, Receipt } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
-import { FaturaDetail } from '@/components/cartoes/FaturaDetail';
+import { FaturaDetailModal } from '@/components/cartoes/FaturaDetailModal';
 
 const Cartoes = () => {
-  // Usar usuarioId do WhatsApp (não auth.uid)
   const { usuarioId } = useUsuarioId();
   const { cartoes, loading, addCartao, updateCartao, deleteCartao } = useCartoes(usuarioId || undefined);
-  const { faturasEmAberto } = useFaturas(usuarioId || undefined);
+  const { faturasEmAberto, pagarFatura } = useFaturas(usuarioId || undefined);
   const [formOpen, setFormOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CartaoCredito | null>(null);
@@ -43,7 +42,18 @@ const Cartoes = () => {
   const [diaVencimento, setDiaVencimento] = useState('');
   const [formLoading, setFormLoading] = useState(false);
   
-  // Preencher form quando abrir edição
+  // Fatura detail modal state
+  const [detailModal, setDetailModal] = useState<{
+    open: boolean;
+    faturaId: string;
+    cartaoNome: string;
+    mes: number | null;
+    ano: number | null;
+    valorTotal: number | null;
+    valorPago: number | null;
+    status: string | null;
+  }>({ open: false, faturaId: '', cartaoNome: '', mes: null, ano: null, valorTotal: null, valorPago: null, status: null });
+
   useEffect(() => {
     if (editingCard) {
       setNome(editingCard.nome || '');
@@ -61,7 +71,6 @@ const Cartoes = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nome) return;
-
     setFormLoading(true);
     try {
       await addCartao({
@@ -95,7 +104,6 @@ const Cartoes = () => {
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingCard || !nome) return;
-
     setFormLoading(true);
     try {
       await updateCartao(editingCard.id, {
@@ -115,6 +123,21 @@ const Cartoes = () => {
     return faturasEmAberto.find((f) => f.cartao_id === cartaoId);
   };
 
+  const openFaturaDetail = (cartao: CartaoCredito) => {
+    const fatura = getFaturaAberta(cartao.id);
+    if (!fatura) return;
+    setDetailModal({
+      open: true,
+      faturaId: fatura.id!,
+      cartaoNome: cartao.nome || 'Cartão',
+      mes: fatura.mes,
+      ano: fatura.ano,
+      valorTotal: fatura.valor_total,
+      valorPago: fatura.valor_pago ?? 0,
+      status: fatura.status,
+    });
+  };
+
   const totalLimite = cartoes.reduce((acc, c) => acc + Number(c.limite_total || 0), 0);
   const totalDisponivel = cartoes.reduce((acc, c) => acc + Number(c.limite_disponivel || 0), 0);
   const totalUsado = totalLimite - totalDisponivel;
@@ -122,72 +145,50 @@ const Cartoes = () => {
   return (
     <AppLayout>
       <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 p-6 lg:p-8">
-        {/* Background Effects */}
         <div className="fixed inset-0 pointer-events-none overflow-hidden">
           <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full" />
           <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full" />
         </div>
-
         <div className="fixed inset-0 bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
 
         <div className="relative z-10 max-w-[1800px] mx-auto space-y-6">
           {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4"
-          >
+          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
             <div>
               <p className="text-slate-500 font-medium mb-1">Controle de crédito</p>
-              <h1 className="text-4xl font-bold text-white">
-                Cartões de Crédito <span className="text-indigo-400">💳</span>
-              </h1>
+              <h1 className="text-4xl font-bold text-white">Cartões de Crédito <span className="text-indigo-400">💳</span></h1>
             </div>
-            <button
-              onClick={() => setFormOpen(true)}
-              className="flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-blue-500 px-6 py-3 rounded-xl font-bold text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all hover:scale-[1.02]"
-            >
-              <Plus className="w-5 h-5" />
-              Novo Cartão
+            <button onClick={() => setFormOpen(true)}
+              className="flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-blue-500 px-6 py-3 rounded-xl font-bold text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all hover:scale-[1.02]">
+              <Plus className="w-5 h-5" /> Novo Cartão
             </button>
           </motion.div>
 
           {/* Stats */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="grid grid-cols-1 sm:grid-cols-3 gap-4"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+            className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-slate-900/40 backdrop-blur-xl border border-indigo-500/20 rounded-2xl p-4 hover:border-indigo-500/40 transition-all">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-indigo-500/10">
-                  <DollarSign className="w-5 h-5 text-indigo-400" />
-                </div>
+                <div className="p-2.5 rounded-xl bg-indigo-500/10"><DollarSign className="w-5 h-5 text-indigo-400" /></div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Limite Total</p>
                   <p className="text-xl font-bold text-indigo-400">{formatCurrency(totalLimite)}</p>
                 </div>
               </div>
             </div>
-
             <div className="bg-slate-900/40 backdrop-blur-xl border border-emerald-500/20 rounded-2xl p-4 hover:border-emerald-500/40 transition-all">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-emerald-500/10">
-                  <TrendingUp className="w-5 h-5 text-emerald-400" />
-                </div>
+                <div className="p-2.5 rounded-xl bg-emerald-500/10"><TrendingUp className="w-5 h-5 text-emerald-400" /></div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Disponível</p>
                   <p className="text-xl font-bold text-emerald-400">{formatCurrency(totalDisponivel)}</p>
                 </div>
               </div>
             </div>
-
             <div className="bg-slate-900/40 backdrop-blur-xl border border-amber-500/20 rounded-2xl p-4 hover:border-amber-500/40 transition-all">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-amber-500/10">
-                  <AlertTriangle className="w-5 h-5 text-amber-400" />
-                </div>
+                <div className="p-2.5 rounded-xl bg-amber-500/10"><AlertTriangle className="w-5 h-5 text-amber-400" /></div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Em Uso</p>
                   <p className="text-xl font-bold text-amber-400">{formatCurrency(totalUsado)}</p>
@@ -208,11 +209,8 @@ const Cartoes = () => {
               ))}
             </div>
           ) : cartoes.length === 0 ? (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-16 text-center"
-            >
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+              className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-16 text-center">
               <CreditCard className="w-16 h-16 mx-auto text-slate-600 mb-4" />
               <h3 className="text-xl font-bold text-white mb-2">Nenhum cartão cadastrado</h3>
               <p className="text-slate-500">Adicione seus cartões para acompanhar limites e faturas</p>
@@ -221,58 +219,38 @@ const Cartoes = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {cartoes.map((cartao, index) => {
                 const faturaAberta = getFaturaAberta(cartao.id);
-                const percentUsado = cartao.limite_total 
+                const percentUsado = cartao.limite_total
                   ? ((Number(cartao.limite_total) - Number(cartao.limite_disponivel || 0)) / Number(cartao.limite_total)) * 100
                   : 0;
 
                 return (
-                  <motion.div
-                    key={cartao.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
+                  <motion.div key={cartao.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05 }}
-                    className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all duration-300 group"
-                  >
+                    className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all duration-300 group">
                     <div className="flex items-start justify-between mb-6">
                       <div className="p-4 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 group-hover:from-indigo-500/30 group-hover:to-purple-500/30 transition-all">
                         <CreditCard className="w-8 h-8 text-indigo-400" />
                       </div>
                       <div className="flex items-center gap-1">
-                        {/* Botão Editar */}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleOpenEdit(cartao)}
-                          className="text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
+                        <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(cartao)}
+                          className="text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity">
                           <Pencil className="w-5 h-5" />
                         </Button>
-                        {/* Botão Excluir */}
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="text-slate-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity"
-                            >
+                            <Button variant="ghost" size="icon"
+                              className="text-slate-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity">
                               <Trash2 className="w-5 h-5" />
                             </Button>
                           </AlertDialogTrigger>
                           <AlertDialogContent className="bg-slate-900 border-slate-700">
                             <AlertDialogHeader>
                               <AlertDialogTitle className="text-white">Excluir cartão?</AlertDialogTitle>
-                              <AlertDialogDescription className="text-slate-400">
-                                Esta ação não pode ser desfeita.
-                              </AlertDialogDescription>
+                              <AlertDialogDescription className="text-slate-400">Esta ação não pode ser desfeita.</AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
                               <AlertDialogCancel className="bg-slate-800 border-slate-700 text-white">Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => deleteCartao(cartao.id)}
-                                className="bg-red-500 hover:bg-red-600"
-                              >
-                                Excluir
-                              </AlertDialogAction>
+                              <AlertDialogAction onClick={() => deleteCartao(cartao.id)} className="bg-red-500 hover:bg-red-600">Excluir</AlertDialogAction>
                             </AlertDialogFooter>
                           </AlertDialogContent>
                         </AlertDialog>
@@ -280,30 +258,23 @@ const Cartoes = () => {
                     </div>
 
                     <h3 className="font-bold text-xl text-white mb-4">{cartao.nome || 'Sem nome'}</h3>
-                    
+
                     <div className="space-y-4">
                       <div>
                         <div className="flex justify-between text-sm mb-2">
                           <span className="text-slate-500">Limite usado</span>
-                          <span className={cn(
-                            "font-bold",
+                          <span className={cn("font-bold",
                             percentUsado > 80 ? "text-red-400" : percentUsado > 50 ? "text-amber-400" : "text-emerald-400"
-                          )}>
-                            {percentUsado.toFixed(0)}%
-                          </span>
+                          )}>{percentUsado.toFixed(0)}%</span>
                         </div>
                         <div className="h-3 bg-slate-800 rounded-full overflow-hidden">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${Math.min(percentUsado, 100)}%` }}
+                          <motion.div initial={{ width: 0 }} animate={{ width: `${Math.min(percentUsado, 100)}%` }}
                             transition={{ duration: 0.5, delay: index * 0.1 }}
-                            className={cn(
-                              "h-full rounded-full",
-                              percentUsado > 80 ? "bg-gradient-to-r from-red-500 to-red-400" : 
-                              percentUsado > 50 ? "bg-gradient-to-r from-amber-500 to-amber-400" : 
+                            className={cn("h-full rounded-full",
+                              percentUsado > 80 ? "bg-gradient-to-r from-red-500 to-red-400" :
+                              percentUsado > 50 ? "bg-gradient-to-r from-amber-500 to-amber-400" :
                               "bg-gradient-to-r from-emerald-500 to-emerald-400"
-                            )}
-                          />
+                            )} />
                         </div>
                       </div>
 
@@ -333,13 +304,13 @@ const Cartoes = () => {
                               {formatCurrency(faturaAberta.valor_total)}
                             </span>
                           </div>
-                          <FaturaDetail 
-                            faturaId={faturaAberta.id!}
-                            cartaoId={cartao.id}
-                            mes={faturaAberta.mes}
-                            ano={faturaAberta.ano}
-                            valorTotal={faturaAberta.valor_total}
-                          />
+                          <button
+                            onClick={() => openFaturaDetail(cartao)}
+                            className="flex items-center gap-2 mt-3 text-sm text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
+                          >
+                            <Receipt className="w-4 h-4" />
+                            Detalhar fatura
+                          </button>
                         </div>
                       )}
                     </div>
@@ -351,143 +322,78 @@ const Cartoes = () => {
         </div>
       </div>
 
+      {/* Fatura Detail Modal */}
+      <FaturaDetailModal
+        open={detailModal.open}
+        onClose={() => setDetailModal(prev => ({ ...prev, open: false }))}
+        faturaId={detailModal.faturaId}
+        cartaoNome={detailModal.cartaoNome}
+        mes={detailModal.mes}
+        ano={detailModal.ano}
+        valorTotal={detailModal.valorTotal}
+        valorPago={detailModal.valorPago}
+        status={detailModal.status}
+        onPagar={pagarFatura}
+      />
+
+      {/* Dialog Novo Cartão */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className="sm:max-w-md bg-slate-900 border-slate-700 text-white">
-          <DialogHeader>
-            <DialogTitle className="text-xl">Novo Cartão de Crédito</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle className="text-xl">Novo Cartão de Crédito</DialogTitle></DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label className="text-slate-300">Nome do Cartão</Label>
-              <Input
-                placeholder="Ex: Nubank, Itaú..."
-                value={nome}
-                onChange={(e) => setNome(e.target.value)}
-                required
-                className="bg-slate-800 border-slate-700 text-white"
-              />
+              <Input placeholder="Ex: Nubank, Itaú..." value={nome} onChange={(e) => setNome(e.target.value)} required className="bg-slate-800 border-slate-700 text-white" />
             </div>
-
             <div className="space-y-2">
               <Label className="text-slate-300">Limite Total (R$)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0,00"
-                value={limiteTotal}
-                onChange={(e) => setLimiteTotal(e.target.value)}
-                className="bg-slate-800 border-slate-700 text-white"
-              />
+              <Input type="number" step="0.01" min="0" placeholder="0,00" value={limiteTotal} onChange={(e) => setLimiteTotal(e.target.value)} className="bg-slate-800 border-slate-700 text-white" />
             </div>
-
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-slate-300">Dia Fechamento</Label>
-                <Input
-                  type="number"
-                  min="1"
-                  max="31"
-                  placeholder="Ex: 15"
-                  value={diaFechamento}
-                  onChange={(e) => setDiaFechamento(e.target.value)}
-                  className="bg-slate-800 border-slate-700 text-white"
-                />
+                <Input type="number" min="1" max="31" placeholder="Ex: 15" value={diaFechamento} onChange={(e) => setDiaFechamento(e.target.value)} className="bg-slate-800 border-slate-700 text-white" />
               </div>
               <div className="space-y-2">
                 <Label className="text-slate-300">Dia Vencimento</Label>
-                <Input
-                  type="number"
-                  min="1"
-                  max="31"
-                  placeholder="Ex: 25"
-                  value={diaVencimento}
-                  onChange={(e) => setDiaVencimento(e.target.value)}
-                  className="bg-slate-800 border-slate-700 text-white"
-                />
+                <Input type="number" min="1" max="31" placeholder="Ex: 25" value={diaVencimento} onChange={(e) => setDiaVencimento(e.target.value)} className="bg-slate-800 border-slate-700 text-white" />
               </div>
             </div>
-
-            <Button 
-              type="submit" 
-              className="w-full bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90" 
-              disabled={formLoading}
-            >
+            <Button type="submit" className="w-full bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90" disabled={formLoading}>
               {formLoading ? 'Salvando...' : 'Adicionar Cartão'}
             </Button>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* Dialog de Edição */}
-      <Dialog open={editOpen} onOpenChange={(open) => {
-        setEditOpen(open);
-        if (!open) resetForm();
-      }}>
+      {/* Dialog Edição */}
+      <Dialog open={editOpen} onOpenChange={(open) => { setEditOpen(open); if (!open) resetForm(); }}>
         <DialogContent className="sm:max-w-md bg-slate-900 border-slate-700 text-white">
           <DialogHeader>
             <DialogTitle className="text-xl flex items-center gap-2">
-              <Pencil className="w-5 h-5 text-indigo-400" />
-              Editar Cartão
+              <Pencil className="w-5 h-5 text-indigo-400" /> Editar Cartão
             </DialogTitle>
           </DialogHeader>
           <form onSubmit={handleEditSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label className="text-slate-300">Nome do Cartão</Label>
-              <Input
-                placeholder="Ex: Nubank, Itaú..."
-                value={nome}
-                onChange={(e) => setNome(e.target.value)}
-                required
-                className="bg-slate-800 border-slate-700 text-white"
-              />
+              <Input placeholder="Ex: Nubank, Itaú..." value={nome} onChange={(e) => setNome(e.target.value)} required className="bg-slate-800 border-slate-700 text-white" />
             </div>
-
             <div className="space-y-2">
               <Label className="text-slate-300">Limite Total (R$)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0,00"
-                value={limiteTotal}
-                onChange={(e) => setLimiteTotal(e.target.value)}
-                className="bg-slate-800 border-slate-700 text-white"
-              />
+              <Input type="number" step="0.01" min="0" placeholder="0,00" value={limiteTotal} onChange={(e) => setLimiteTotal(e.target.value)} className="bg-slate-800 border-slate-700 text-white" />
             </div>
-
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-slate-300">Dia Fechamento</Label>
-                <Input
-                  type="number"
-                  min="1"
-                  max="31"
-                  placeholder="Ex: 15"
-                  value={diaFechamento}
-                  onChange={(e) => setDiaFechamento(e.target.value)}
-                  className="bg-slate-800 border-slate-700 text-white"
-                />
+                <Input type="number" min="1" max="31" placeholder="Ex: 15" value={diaFechamento} onChange={(e) => setDiaFechamento(e.target.value)} className="bg-slate-800 border-slate-700 text-white" />
               </div>
               <div className="space-y-2">
                 <Label className="text-slate-300">Dia Vencimento</Label>
-                <Input
-                  type="number"
-                  min="1"
-                  max="31"
-                  placeholder="Ex: 25"
-                  value={diaVencimento}
-                  onChange={(e) => setDiaVencimento(e.target.value)}
-                  className="bg-slate-800 border-slate-700 text-white"
-                />
+                <Input type="number" min="1" max="31" placeholder="Ex: 25" value={diaVencimento} onChange={(e) => setDiaVencimento(e.target.value)} className="bg-slate-800 border-slate-700 text-white" />
               </div>
             </div>
-
-            <Button 
-              type="submit" 
-              className="w-full bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90" 
-              disabled={formLoading}
-            >
+            <Button type="submit" className="w-full bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90" disabled={formLoading}>
               {formLoading ? 'Salvando...' : 'Salvar Alterações'}
             </Button>
           </form>

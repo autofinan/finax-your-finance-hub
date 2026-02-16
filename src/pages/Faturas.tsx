@@ -4,25 +4,25 @@ import { useCartoes } from '@/hooks/useCartoes';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { Button } from '@/components/ui/button';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Receipt, Check, CreditCard, Calendar, AlertTriangle, CheckCircle, DollarSign } from 'lucide-react';
+import { Receipt, Check, CreditCard, Calendar, AlertTriangle, CheckCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
+import { useState } from 'react';
+import { FaturaDetailModal } from '@/components/cartoes/FaturaDetailModal';
 
 const Faturas = () => {
-  // Usar usuarioId do WhatsApp (não auth.uid)
   const { usuarioId } = useUsuarioId();
   const { faturas, faturasEmAberto, loading, pagarFatura } = useFaturas(usuarioId || undefined);
   const { cartoes } = useCartoes(usuarioId || undefined);
+
+  const [detailModal, setDetailModal] = useState<{
+    open: boolean; faturaId: string; cartaoNome: string;
+    mes: number | null; ano: number | null; valorTotal: number | null;
+    valorPago: number | null; status: string | null;
+  }>({ open: false, faturaId: '', cartaoNome: '', mes: null, ano: null, valorTotal: null, valorPago: null, status: null });
 
   const formatCurrency = (value: number | null) => {
     if (value === null) return 'R$ 0,00';
@@ -37,8 +37,18 @@ const Faturas = () => {
 
   const getMesNome = (mes: number | null) => {
     if (!mes) return '';
-    const meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
     return meses[mes - 1] || '';
+  };
+
+  const openDetail = (f: any) => {
+    setDetailModal({
+      open: true, faturaId: f.id,
+      cartaoNome: getCartaoNome(f.cartao_id),
+      mes: f.mes, ano: f.ano,
+      valorTotal: f.valor_total, valorPago: f.valor_pago ?? 0,
+      status: f.status,
+    });
   };
 
   const totalEmAberto = faturasEmAberto.reduce((acc, f) => acc + Number(f.valor_total || 0), 0);
@@ -48,65 +58,46 @@ const Faturas = () => {
   return (
     <AppLayout>
       <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 p-6 lg:p-8">
-        {/* Background Effects */}
         <div className="fixed inset-0 pointer-events-none overflow-hidden">
           <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full" />
           <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full" />
         </div>
-
         <div className="fixed inset-0 bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
 
         <div className="relative z-10 max-w-[1800px] mx-auto space-y-6">
           {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4"
-          >
+          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
             <div>
               <p className="text-slate-500 font-medium mb-1">Controle de faturas</p>
-              <h1 className="text-4xl font-bold text-white">
-                Faturas <span className="text-indigo-400">📄</span>
-              </h1>
+              <h1 className="text-4xl font-bold text-white">Faturas <span className="text-indigo-400">📄</span></h1>
             </div>
           </motion.div>
 
           {/* Stats */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="grid grid-cols-1 sm:grid-cols-3 gap-4"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+            className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-slate-900/40 backdrop-blur-xl border border-red-500/20 rounded-2xl p-4 hover:border-red-500/40 transition-all">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-red-500/10">
-                  <AlertTriangle className="w-5 h-5 text-red-400" />
-                </div>
+                <div className="p-2.5 rounded-xl bg-red-500/10"><AlertTriangle className="w-5 h-5 text-red-400" /></div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Em Aberto</p>
                   <p className="text-xl font-bold text-red-400">{formatCurrency(totalEmAberto)}</p>
                 </div>
               </div>
             </div>
-
             <div className="bg-slate-900/40 backdrop-blur-xl border border-emerald-500/20 rounded-2xl p-4 hover:border-emerald-500/40 transition-all">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-emerald-500/10">
-                  <CheckCircle className="w-5 h-5 text-emerald-400" />
-                </div>
+                <div className="p-2.5 rounded-xl bg-emerald-500/10"><CheckCircle className="w-5 h-5 text-emerald-400" /></div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Total Pago</p>
                   <p className="text-xl font-bold text-emerald-400">{formatCurrency(totalPago)}</p>
                 </div>
               </div>
             </div>
-
             <div className="bg-slate-900/40 backdrop-blur-xl border border-indigo-500/20 rounded-2xl p-4 hover:border-indigo-500/40 transition-all">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-indigo-500/10">
-                  <Receipt className="w-5 h-5 text-indigo-400" />
-                </div>
+                <div className="p-2.5 rounded-xl bg-indigo-500/10"><Receipt className="w-5 h-5 text-indigo-400" /></div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Qtd. Faturas</p>
                   <p className="text-xl font-bold text-indigo-400">{faturas.length}</p>
@@ -116,16 +107,9 @@ const Faturas = () => {
           </motion.div>
 
           {/* Faturas em Aberto */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="space-y-4"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="space-y-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-red-500/10">
-                <AlertTriangle className="w-5 h-5 text-red-400" />
-              </div>
+              <div className="p-2 rounded-lg bg-red-500/10"><AlertTriangle className="w-5 h-5 text-red-400" /></div>
               <h2 className="text-xl font-bold text-white">Faturas em Aberto</h2>
             </div>
 
@@ -135,10 +119,7 @@ const Faturas = () => {
                   <div key={i} className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-5 animate-pulse">
                     <div className="flex items-center gap-4">
                       <div className="w-14 h-14 rounded-xl bg-slate-800" />
-                      <div className="flex-1">
-                        <div className="h-4 bg-slate-800 rounded w-32 mb-2" />
-                        <div className="h-3 bg-slate-800 rounded w-20" />
-                      </div>
+                      <div className="flex-1"><div className="h-4 bg-slate-800 rounded w-32 mb-2" /><div className="h-3 bg-slate-800 rounded w-20" /></div>
                     </div>
                   </div>
                 ))}
@@ -152,36 +133,28 @@ const Faturas = () => {
             ) : (
               <div className="space-y-3">
                 {faturasEmAberto.map((fatura, index) => (
-                  <motion.div
-                    key={fatura.id}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
+                  <motion.div key={fatura.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.05 }}
-                    className="bg-slate-900/40 backdrop-blur-xl border-l-4 border-l-red-500 border border-white/5 rounded-2xl p-5 hover:border-red-500/30 transition-all"
-                  >
+                    className="bg-slate-900/40 backdrop-blur-xl border-l-4 border-l-red-500 border border-white/5 rounded-2xl p-5 hover:border-red-500/30 transition-all cursor-pointer"
+                    onClick={() => openDetail(fatura)}>
                     <div className="flex items-center gap-4">
-                      <div className="p-4 rounded-xl bg-red-500/10">
-                        <CreditCard className="w-6 h-6 text-red-400" />
-                      </div>
+                      <div className="p-4 rounded-xl bg-red-500/10"><CreditCard className="w-6 h-6 text-red-400" /></div>
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-lg text-white">{getCartaoNome(fatura.cartao_id)}</p>
                         <div className="flex items-center gap-2 text-sm text-slate-500">
-                          <Calendar className="w-4 h-4" />
-                          {getMesNome(fatura.mes)} {fatura.ano}
+                          <Calendar className="w-4 h-4" /> {getMesNome(fatura.mes)} {fatura.ano}
                         </div>
                       </div>
                       <div className="flex items-center gap-4">
                         <div className="text-right">
-                          <p className="font-bold text-2xl text-red-400">
-                            {formatCurrency(fatura.valor_total)}
-                          </p>
+                          <p className="font-bold text-2xl text-red-400">{formatCurrency(fatura.valor_total)}</p>
                           <p className="text-xs text-slate-500 capitalize">{fatura.status}</p>
                         </div>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
-                            <Button className="bg-gradient-to-r from-emerald-500 to-green-500 hover:opacity-90">
-                              <Check className="w-4 h-4 mr-2" />
-                              Pagar
+                            <Button className="bg-gradient-to-r from-emerald-500 to-green-500 hover:opacity-90"
+                              onClick={(e) => e.stopPropagation()}>
+                              <Check className="w-4 h-4 mr-2" /> Pagar
                             </Button>
                           </AlertDialogTrigger>
                           <AlertDialogContent className="bg-slate-900 border-slate-700">
@@ -195,10 +168,7 @@ const Faturas = () => {
                               <AlertDialogCancel className="bg-slate-800 border-slate-700 text-white">Cancelar</AlertDialogCancel>
                               <AlertDialogAction
                                 onClick={() => fatura.id && pagarFatura(fatura.id, fatura.valor_total || 0)}
-                                className="bg-emerald-500 hover:bg-emerald-600"
-                              >
-                                Confirmar Pagamento
-                              </AlertDialogAction>
+                                className="bg-emerald-500 hover:bg-emerald-600">Confirmar Pagamento</AlertDialogAction>
                             </AlertDialogFooter>
                           </AlertDialogContent>
                         </AlertDialog>
@@ -211,16 +181,9 @@ const Faturas = () => {
           </motion.div>
 
           {/* Histórico */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="space-y-4"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="space-y-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-indigo-500/10">
-                <Receipt className="w-5 h-5 text-indigo-400" />
-              </div>
+              <div className="p-2 rounded-lg bg-indigo-500/10"><Receipt className="w-5 h-5 text-indigo-400" /></div>
               <h2 className="text-xl font-bold text-white">Histórico de Faturas</h2>
             </div>
 
@@ -230,10 +193,7 @@ const Faturas = () => {
                   <div key={i} className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-5 animate-pulse">
                     <div className="flex items-center gap-4">
                       <div className="w-14 h-14 rounded-xl bg-slate-800" />
-                      <div className="flex-1">
-                        <div className="h-4 bg-slate-800 rounded w-32 mb-2" />
-                        <div className="h-3 bg-slate-800 rounded w-20" />
-                      </div>
+                      <div className="flex-1"><div className="h-4 bg-slate-800 rounded w-32 mb-2" /><div className="h-3 bg-slate-800 rounded w-20" /></div>
                     </div>
                   </div>
                 ))}
@@ -246,39 +206,25 @@ const Faturas = () => {
             ) : (
               <div className="space-y-3">
                 {faturas.map((fatura, index) => (
-                  <motion.div
-                    key={fatura.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
+                  <motion.div key={fatura.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.3 + index * 0.03 }}
+                    onClick={() => openDetail(fatura)}
                     className={cn(
-                      "bg-slate-900/40 backdrop-blur-xl border rounded-2xl p-5 transition-all",
+                      "bg-slate-900/40 backdrop-blur-xl border rounded-2xl p-5 transition-all cursor-pointer hover:border-indigo-500/30",
                       fatura.status === 'paga' ? "border-emerald-500/20 opacity-70" : "border-white/5"
-                    )}
-                  >
+                    )}>
                     <div className="flex items-center gap-4">
-                      <div className={cn(
-                        "p-4 rounded-xl",
-                        fatura.status === 'paga' ? "bg-emerald-500/10" : "bg-slate-800"
-                      )}>
-                        {fatura.status === 'paga' ? (
-                          <Check className="w-6 h-6 text-emerald-400" />
-                        ) : (
-                          <CreditCard className="w-6 h-6 text-slate-500" />
-                        )}
+                      <div className={cn("p-4 rounded-xl", fatura.status === 'paga' ? "bg-emerald-500/10" : "bg-slate-800")}>
+                        {fatura.status === 'paga' ? <Check className="w-6 h-6 text-emerald-400" /> : <CreditCard className="w-6 h-6 text-slate-500" />}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-lg text-white">{getCartaoNome(fatura.cartao_id)}</p>
                         <div className="flex items-center gap-2 text-sm text-slate-500">
-                          <Calendar className="w-4 h-4" />
-                          {getMesNome(fatura.mes)} {fatura.ano}
+                          <Calendar className="w-4 h-4" /> {getMesNome(fatura.mes)} {fatura.ano}
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className={cn(
-                          "font-bold text-xl",
-                          fatura.status === 'paga' ? "text-emerald-400" : "text-white"
-                        )}>
+                        <p className={cn("font-bold text-xl", fatura.status === 'paga' ? "text-emerald-400" : "text-white")}>
                           {formatCurrency(fatura.valor_total)}
                         </p>
                         <p className="text-xs text-slate-500 capitalize">{fatura.status}</p>
@@ -291,6 +237,20 @@ const Faturas = () => {
           </motion.div>
         </div>
       </div>
+
+      {/* Detail Modal */}
+      <FaturaDetailModal
+        open={detailModal.open}
+        onClose={() => setDetailModal(prev => ({ ...prev, open: false }))}
+        faturaId={detailModal.faturaId}
+        cartaoNome={detailModal.cartaoNome}
+        mes={detailModal.mes}
+        ano={detailModal.ano}
+        valorTotal={detailModal.valorTotal}
+        valorPago={detailModal.valorPago}
+        status={detailModal.status}
+        onPagar={pagarFatura}
+      />
     </AppLayout>
   );
 };
