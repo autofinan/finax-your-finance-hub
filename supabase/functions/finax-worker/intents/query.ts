@@ -375,6 +375,43 @@ export async function getInvoiceDetail(userId: string, cardName?: string, mes?: 
     if (match) cardFilter = match.id;
   }
   
+  // If no card specified, check how many cards user has
+  if (!cardName) {
+    const { data: allCards } = await supabase
+      .from("cartoes_credito")
+      .select("id, nome")
+      .eq("usuario_id", userId)
+      .eq("ativo", true);
+    
+    if (allCards && allCards.length > 1) {
+      // Check which cards have invoices for this month
+      const { data: faturas } = await supabase
+        .from("faturas_cartao")
+        .select("cartao_id, valor_total, status")
+        .eq("usuario_id", userId)
+        .eq("mes", targetMes)
+        .eq("ano", targetAno);
+      
+      if (faturas && faturas.length > 1) {
+        const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+        let msg = `📋 Qual fatura de *${meses[targetMes - 1]}/${targetAno}* quer ver?\n\n`;
+        
+        for (const f of faturas) {
+          const card = allCards.find(c => c.id === f.cartao_id);
+          const nome = card?.nome || "Cartão";
+          msg += `💳 *${nome}* — R$ ${Number(f.valor_total || 0).toFixed(2)} (${f.status})\n`;
+        }
+        
+        msg += `\nResponda com o nome do cartão, ex: "fatura do ${allCards[0]?.nome || 'Nubank'}"`;
+        return msg;
+      } else if (faturas && faturas.length === 1) {
+        cardFilter = faturas[0].cartao_id;
+      }
+    } else if (allCards && allCards.length === 1) {
+      cardFilter = allCards[0].id;
+    }
+  }
+  
   // Get invoice(s)
   let query = supabase
     .from("faturas_cartao")
@@ -411,7 +448,7 @@ export async function getInvoiceDetail(userId: string, cardName?: string, mes?: 
     // Get transactions for this invoice
     const { data: txs } = await supabase
       .from("transacoes")
-      .select("descricao, valor, categoria, data, parcela")
+      .select("descricao, valor, categoria, data, parcela, is_parcelado")
       .eq("fatura_id", fatura.id)
       .eq("tipo", "saida")
       .order("data", { ascending: false });
@@ -423,31 +460,69 @@ export async function getInvoiceDetail(userId: string, cardName?: string, mes?: 
       .eq("fatura_id", fatura.id)
       .order("numero_parcela", { ascending: true });
     
-    const items: string[] = [];
+    // Get active recurrentes for this card
+    const { data: recorrentes } = await supabase
+      .from("gastos_recorrentes")
+      .select("descricao, valor_parcela, categoria")
+      .eq("usuario_id", userId)
+      .eq("ativo", true)
+      .eq("tipo_recorrencia", "mensal");
+    
     const categoryEmojis: Record<string, string> = {
       alimentacao: "🍔", mercado: "🛒", transporte: "🚗", saude: "🏥",
       lazer: "🎮", moradia: "🏠", compras: "🛍️", servicos: "✂️", outros: "📦"
     };
     
-    // Transactions
-    for (const tx of (txs || [])) {
-      const emoji = categoryEmojis[tx.categoria || "outros"] || "📦";
-      const parcelaTag = tx.parcela ? ` (${tx.parcela})` : "";
-      items.push(`${emoji} ${tx.descricao || tx.categoria}${parcelaTag} — R$ ${Number(tx.valor).toFixed(2)}`);
-    }
+    // Separate by type
+    const pontuais = (txs || []).filter(t => !t.is_parcelado && !t.parcela);
+    const parcelasTx = (txs || []).filter(t => t.is_parcelado || t.parcela);
     
-    // Parcelas without matching transaction
+    // Parcelas section
+    const allParcelas: string[] = [];
+    for (const p of parcelasTx) {
+      const emoji = categoryEmojis[p.categoria || "outros"] || "📦";
+      const tag = p.parcela ? ` (${p.parcela})` : "";
+      allParcelas.push(`  ${emoji} ${p.descricao || p.categoria}${tag} — R$ ${Number(p.valor).toFixed(2)}`);
+    }
     for (const p of (parcelas || [])) {
-      const hasTx = (txs || []).some(t => t.descricao === p.descricao && t.parcela === `${p.numero_parcela}/${p.total_parcelas}`);
+      const tag = `${p.numero_parcela}/${p.total_parcelas}`;
+      const hasTx = parcelasTx.some(t => t.descricao === p.descricao && t.parcela === tag);
       if (!hasTx) {
-        items.push(`📦 ${p.descricao} (${p.numero_parcela}/${p.total_parcelas}) — R$ ${Number(p.valor).toFixed(2)}`);
+        allParcelas.push(`  📦 ${p.descricao} (${tag}) — R$ ${Number(p.valor).toFixed(2)}`);
       }
     }
     
-    if (items.length === 0) {
+    if (allParcelas.length > 0) {
+      const totalP = parcelasTx.reduce((s, t) => s + Number(t.valor), 0) + 
+        (parcelas || []).filter(p => !parcelasTx.some(t => t.parcela === `${p.numero_parcela}/${p.total_parcelas}` && t.descricao === p.descricao)).reduce((s, p) => s + Number(p.valor), 0);
+      response += `📦 *Parcelamentos (R$ ${totalP.toFixed(2)})*\n`;
+      response += allParcelas.join("\n") + "\n\n";
+    }
+    
+    // Pontuais section
+    if (pontuais.length > 0) {
+      const totalPont = pontuais.reduce((s, t) => s + Number(t.valor), 0);
+      response += `💸 *Gastos Pontuais (R$ ${totalPont.toFixed(2)})*\n`;
+      for (const t of pontuais) {
+        const emoji = categoryEmojis[t.categoria || "outros"] || "📦";
+        response += `  ${emoji} ${t.descricao || t.categoria} — R$ ${Number(t.valor).toFixed(2)}\n`;
+      }
+      response += "\n";
+    }
+    
+    // Recorrentes section
+    if (recorrentes && recorrentes.length > 0) {
+      const totalRec = recorrentes.reduce((s, r) => s + Number(r.valor_parcela), 0);
+      response += `🔄 *Recorrentes (R$ ${totalRec.toFixed(2)})*\n`;
+      for (const r of recorrentes) {
+        const emoji = categoryEmojis[r.categoria || "outros"] || "📦";
+        response += `  ${emoji} ${r.descricao || r.categoria} — R$ ${Number(r.valor_parcela).toFixed(2)}\n`;
+      }
+      response += "\n";
+    }
+    
+    if (allParcelas.length === 0 && pontuais.length === 0 && (!recorrentes || recorrentes.length === 0)) {
       response += "_Nenhuma compra registrada_\n\n";
-    } else {
-      response += items.join("\n") + "\n\n";
     }
     
     const pago = Number(fatura.valor_pago || 0);
