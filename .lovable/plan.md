@@ -1,127 +1,144 @@
-# Plano: Correcao dos 5 Bugs Criticos
-
-## Bug #1: 4+ Cartoes mostra botoes em vez de lista
-
-**Causa raiz:** Em `credit-flow.ts` linha 170, o CASO 5 (4+ cartoes) retorna `useListMessage: false`. O handler no `index.ts` verifica `useListMessage` primeiro - como e `false`, cai para `cardButtons` e envia 3 botoes (2 top + Outros) em vez da lista.
-
-**Requisito do usuario:** 4+ cartoes = lista interativa direto (mais rapido, sem "Outros").
-
-**Fix:** Em `credit-flow.ts`, alterar CASO 5:
-
-- Remover logica de "2 mais usados + Outros"
-- Retornar `useListMessage: true` com a lista completa de cartoes
-- Manter CASO 3 (1 cartao = auto) e CASO 4 (2-3 = botoes)
+# Plano: Correcao de 4 Bugs (Recorrencia Duplicada, UI Recorrentes, Parcelamento, Confirmacao de Cartao)
 
 ---
 
-## Bug #2: Duplicata sem botoes
+## Bug #1: Recorrencia Processada 2x (Aluguel duplicado)
 
-**Causa raiz:** Em `index.ts` linha 4793, o fluxo principal de expense usa `sendMessage` para enviar o resultado. A funcao `handleExpenseResult` (linha 2019) e que verifica `isDuplicate` e envia botoes, mas NAO e chamada nesse ponto.
-
-**Fix:** Substituir `sendMessage(payload.phoneNumber, result.message, ...)` por `handleExpenseResult(result, payload.phoneNumber, payload.messageSource)` na linha 4793.
-
----
-
-## Bug #3: Relatorio semanal sem dados
-
-**Causa raiz:** A RPC `fn_relatorio_semanal` aceita parametros `(p_usuario_id, p_data_inicio, p_data_fim)`. O codigo chama com `{ p_usuario_id, p_tipo_periodo: "semana_atual" }`. O parametro `p_tipo_periodo` NAO existe na funcao -- PostgREST rejeita parametros desconhecidos, causando erro silencioso.
-
-A propria RPC, quando recebe `p_data_inicio = NULL`, calcula a semana automaticamente (segunda a domingo). Para a semana ATUAL funcionar, basta chamar sem datas.
-
-**Fix:** Remover `p_tipo_periodo` das 3 chamadas a `fn_relatorio_semanal` no `index.ts` (linhas 549, 5781, 5996). Chamar apenas com `{ p_usuario_id: userId }`.
-
----
-
-# 🔴 BUG 4 CRÍTICO: PERDA DE CONTEXTO CONVERSACIONAL
-
----
-
-## ❌ PROBLEMA IDENTIFICADO:
-
-```
-User: "QUANTO GASTEI COM ALIMENTAÇÃO ESSE MES?"
-Bot: [Lista de gastos com alimentação] ✅
-
-User: "E TRANSPORTE" ← Continuação da pergunta
-Bot: "Qual valor de limite mensal você quer definir?" ❌❌❌
-
-PROBLEMA: Bot perdeu COMPLETAMENTE o contexto!
-- Não entendeu que "E TRANSPORTE" = "quanto gastei com transporte"
-- Classificou como orçamento (totalmente errado)
-```
-
----
-
-## 🔍 CAUSA RAIZ:
-
-### **1. Histórico NÃO está sendo usado pela IA**
-
-Mesmo com a correção de memória que fizemos, a IA ainda não está vendo o contexto.
-
-**Possíveis causas:**
-
-- Histórico não está sendo injetado no prompt (implementação incompleta)
-- IA ignora histórico mesmo quando presente
-- Sistema Prompt não instrui sobre continuidade de conversa
-
----
-
-## Bug #5: Follow-up de ajuda vai para o Chat (IA generica)
-
-**Causa raiz:** Apos "ajuda" → menu, o contexto `lastIntent: "help"` e salvo. Mas quando o usuario responde "preciso de ajuda com o registro de gastos", a IA classifica como `chat` (nao `control`). O handler de help follow-up (linha 6432) so e executado DENTRO do bloco `if (decision.actionType === "control")`, que nunca e alcancado.
-
-Resultado: a mensagem vai para `generateChatResponse` que da conselhos genericos de consultor financeiro em vez de mostrar exemplos praticos do Finax.
-
-**Fix:** Mover a verificacao de `helpCtx?.lastIntent === "help"` para ANTES do roteamento por `actionType`. Assim, independente de como a IA classifica, se o contexto e de ajuda, o follow-up e tratado pelo handler correto.
-
-Posicao: logo antes do bloco `if (decision.actionType === "chat")` (linha 6366), inserir:
+**Causa raiz:** A query em `processar-recorrentes/index.ts` linha 72 usa:
 
 ```text
-// Verificar help context ANTES do roteamento
-const helpCtx = await getConversationContext(userId);
-if (helpCtx?.lastIntent === "help") {
-  // [mesma logica das linhas 6436-6509, copiada aqui]
-  // Se match → responder e return
-  // Se nao match → pedir clarificacao e return
-}
+.or(`dia_mes.eq.${diaHoje},proxima_execucao.lte.${hojeISO}`)
 ```
+
+No dia 15/02, o aluguel (dia_mes=15) e processado e `proxima_execucao` e atualizada para `2026-03-15`. Porem, a data esta sendo definida com `new Date()` que usa UTC. Como o CRON roda as 7h BRT (10h UTC), `new Date().getDate()` retorna o dia correto. MAS se a `proxima_execucao` anterior nao existia (era NULL) OU foi setada incorretamente, a condicao `proxima_execucao.lte.${hojeISO}` tambem bate, causando dupla execucao.
+
+**Evidencia no banco:** O aluguel tem `proxima_execucao: 2026-02-16` e `ultima_execucao: 2026-02-16`, confirmando que processou no dia 16 tambem. Isso aconteceu porque no dia 15 a proxima_execucao era NULL, entao o OR bateu em `dia_mes=15`. Depois, `proxima_execucao` foi setada para `2026-02-16` (usando UTC + 1 mes errado). No dia 16, `proxima_execucao.lte.2026-02-16` bateu de novo.
+
+**Problema secundario:** A categoria do aluguel no banco e "outros" (foi cadastrado via WhatsApp sem categoria correta). A notificacao mostra a categoria do registro, que e "outros".
+
+**Fix (processar-recorrentes/index.ts):**
+
+1. Adicionar verificacao de `ultima_execucao` - se ja processou no mes atual, pular
+2. Usar data de Brasilia para calcular `diaHoje` e `proxima_execucao`
+3. Priorizar `proxima_execucao` sobre `dia_mes` quando ambos existem
+
+```text
+Logica corrigida:
+- Buscar recorrentes WHERE ativo=true
+- Para cada: verificar se ultima_execucao ja e do mes atual → pular
+- Verificar se dia_mes == diaHoje OU proxima_execucao <= hojeISO
+- Ao atualizar proxima_execucao, usar data de Brasilia e setar dia_mes correto
+```
+
+**Fix categoria aluguel:** Corrigir no banco a categoria do registro de "outros" para "moradia".
 
 ---
 
-## Secao Tecnica - Mudancas por Arquivo
+## Bug #2: Pagina Recorrentes sem data da proxima cobranca
+
+**Causa raiz:** O componente `Recorrentes.tsx` nao exibe os campos `proxima_execucao` nem `ultima_execucao`, apesar de existirem no banco.
+
+**Fix (src/pages/Recorrentes.tsx):**
+Adicionar na area de informacoes de cada item:
+
+- "Proxima cobranca: DD/MM/AAAA" (campo `proxima_execucao`)
+- "Ultima cobranca: DD/MM/AAAA" (campo `ultima_execucao`)
+
+---
+
+## Bug #3: Parcelamentos lancam todas as parcelas de uma vez
+
+**Problema:** Quando o usuario diz "perfume 120 em 3x", o sistema cria 3 registros na tabela `parcelas` imediatamente (parcela 1 pendente, parcela 2 e 3 futuras). Isso polui a visualizacao de transacoes e confunde o usuario.
+
+**Solucao proposta:** Manter a criacao das parcelas na tabela `parcelas` (para controle de faturas), mas NAO criar transacoes futuras em `transacoes`. Apenas a parcela do mes atual gera transacao. As proximas parcelas serao processadas pelo CRON mensal (similar a recorrentes).
+
+**Fix (intents/installment.ts):**
+
+- Manter a logica atual de criar registros em `parcelas` (necessario para vincular a faturas)
+- Verificar que apenas 1 transacao e criada em `transacoes` (a transacao mae com valor da parcela, nao o total)
+- Adicionar um novo handler no CRON `processar-recorrentes` que tambem processa parcelas com status "futura" cujo `mes_referencia` corresponde ao mes atual
+
+**Fix (processar-recorrentes/index.ts):**
+
+- Apos processar gastos recorrentes, buscar parcelas com `status = 'futura'` e `mes_referencia` do mes atual
+- Criar transacao para cada parcela e atualizar status para "pendente"
+- Notificar usuario via WhatsApp
+
+E TBM SOBRE AS PARCELAS TENHO O PROBLEMA QUE REGISTREI UM GASTO PARCELADO DEPOIS DA CRIAÇÃO DA TABELA PARCELAS, AS PARCELAS ESTÃO INDO PARA A TABELA E DEBITANDO NO CARTÃO, POREM NÃO ESTA INDO PARA A ABA PARCELAMENTOS E APARECENDO NO SITE O QUE FOI PARCELADO, PRECISA SER ARRUMADO. E TBBM GARANTIR QUE ESTA OBEDECENDO O PADRÃO DOS CARTÕES. COMPREI ALGO PARCELADO, O LIMITE É USADO O VALOR COMPLETO NO LIMITE, AO PAGAMENTO DE CADA PARCELA NA FATURA DO CARTÃO, O VALOR DA PARCELA ABRE NO LIMITE. 
+
+---
+
+## Bug #4: Cartao de credito auto-selecionado sem confirmar com usuario
+
+**Problema:** O sistema de memoria (`patterns.ts`) aprende que "cafe" sempre vai no "Sicredi Credito" e aplica automaticamente. O campo `requiresConfirmation` existe no retorno de `applyUserPatterns` mas NAO e verificado no `index.ts` (linha 4498). O cartao e aplicado silenciosamente.
+
+**Fix (index.ts, linhas ~4498-4503):**
+Quando `patternResult.requiresConfirmation === true` E o padrao incluiu `card_id`:
+
+1. Aplicar os slots normalmente
+2. Mas ANTES de executar, enviar botoes de confirmacao:
+  - "[Sim, Sicredi Credito]" → continua normalmente
+  - "[Nao, outro cartao]" → abre lista/botoes de selecao de cartao
+3. Salvar action com status `awaiting_confirmation` e slot pendente `card_confirm`
 
 ```text
-supabase/functions/finax-worker/intents/credit-flow.ts
-  Linhas 128-182 (CASO 5): Simplificar para lista direta
-    - Remover logica de top2 + Outros
-    - Retornar useListMessage: true com listSections completa
-    - cardButtons = undefined (nao necessario)
+Fluxo corrigido:
+"cafe 1,50 credito"
+→ Padrao encontrado: Sicredi Credito (conf: 0.8)
+→ "Cafe R$ 1,50 no Sicredi Credito, certo?"
+   [Sim, registrar] [Nao, outro cartao]
+→ Se "Sim" → registra + confirma padrao (confidence +0.15)
+→ Se "Nao" → mostra lista de cartoes
+```
+
+Apos a primeira confirmacao (`last_confirmed_by_user = true`), as proximas vezes o padrao sera aplicado direto sem perguntar.
+
+---
+
+## Secao Tecnica - Arquivos e Mudancas
+
+```text
+supabase/functions/processar-recorrentes/index.ts
+  - Adicionar guard de dedup: verificar ultima_execucao do mes atual
+  - Usar timezone de Brasilia para diaHoje
+  - Adicionar processamento de parcelas futuras do mes atual
+  - Corrigir calculo de proxima_execucao
+
+src/pages/Recorrentes.tsx
+  - Exibir proxima_execucao e ultima_execucao em cada card
+  - Formatar datas no padrao DD/MM/AAAA
 
 supabase/functions/finax-worker/index.ts
-  L4793: sendMessage → handleExpenseResult (Bug #2 - duplicata)
-  L549:  Remover p_tipo_periodo da chamada RPC (Bug #3)
-  L5781: Remover p_tipo_periodo da chamada RPC (Bug #3)
-  L5996: Remover p_tipo_periodo da chamada RPC (Bug #3)
-  L~6360: Inserir help context check ANTES do chat handler (Bug #5)
- 
-DEPLOY: finax-worker
+  - Linhas ~4498-4503: Verificar requiresConfirmation
+  - Se true + card_id inferido → enviar botoes confirmacao
+  - Handler para button "pattern_confirm_yes" e "pattern_confirm_no"
+
+supabase/functions/finax-worker/intents/installment.ts
+  - Verificar que transacao mae usa valor_parcela (nao valor_total)
+  - Garantir que parcelas futuras NAO criem transacoes em transacoes
+
+SQL: UPDATE gastos_recorrentes SET categoria = 'moradia' 
+     WHERE id = 'd4221c80-424d-4373-aae1-99229e98f76b';
+
+DEPLOY: processar-recorrentes, finax-worker
 ```
 
 ## Ordem de Execucao
 
 ```text
-1. credit-flow.ts - Lista para 4+ cartoes          (Bug #1)
-2. index.ts L4793 - handleExpenseResult             (Bug #2)
-3. index.ts RPCs  - Remover p_tipo_periodo          (Bug #3)
-5. index.ts help  - Mover check antes do chat       (Bug #5)
-6. Deploy finax-worker
+1. SQL - Corrigir categoria do aluguel para 'moradia'
+2. processar-recorrentes - Guard dedup + timezone + parcelas
+3. Recorrentes.tsx - Exibir datas de proxima/ultima cobranca
+4. index.ts - Confirmacao de padrao de cartao com botoes
+5. Deploy processar-recorrentes + finax-worker
+6. Testar fluxos
 ```
 
 ## Resultado Esperado
 
 ```text
-"acai 15 credito" (5 cartoes) → Lista interativa WhatsApp    OK
-"balinha 1 pix" (2x) → Botoes [Sim registrar] [Nao era erro] OK
-"relatorio semanal" → Dados reais da semana                   OK
-"ajuda" → menu → "registro de gastos" → exemplos praticos     OK
+Aluguel dia 15 → processa 1x, notifica com categoria "moradia"     OK
+Recorrentes UI → mostra "Proxima: 15/03/2026"                      OK
+"perfume 120 3x" → 1 transacao agora, proximas via CRON mensal     OK
+"cafe 1,50 credito" → "No Sicredi Credito?" [Sim] [Nao, outro]    OK
 ```
