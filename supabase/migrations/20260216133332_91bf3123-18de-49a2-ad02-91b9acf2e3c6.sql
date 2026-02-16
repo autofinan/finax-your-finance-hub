@@ -1,0 +1,1 @@
+UPDATE gastos_recorrentes SET categoria = 'moradia', proxima_execucao = '2026-03-15' WHERE id = 'd4221c80-424d-4373-aae1-99229e98f76b';
