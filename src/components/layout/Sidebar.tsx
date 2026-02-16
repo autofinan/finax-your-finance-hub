@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import finaxLogo from '@/assets/finax-logo-transparent.png';
 import {
   LayoutDashboard,
   ArrowUpDown,
@@ -52,9 +53,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="relative p-6 border-b border-white/10">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-blue-500 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/30">
-            <span className="font-black text-xl text-white">F</span>
-          </div>
+          <img src={finaxLogo} alt="Finax" className="w-12 h-12 rounded-2xl object-contain" />
           <div>
             <h2 className="text-xl font-black text-white">Finax</h2>
             <p className="text-xs text-slate-500 font-medium">Finance Hub</p>
