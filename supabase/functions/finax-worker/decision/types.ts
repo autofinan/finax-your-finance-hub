@@ -127,6 +127,7 @@ export interface ActiveAction {
   pending_selection_id?: string | null;
   origin_message_id?: string | null;
   last_message_id?: string | null;
+  meta?: Record<string, any> | null;
   created_at: string;
   updated_at: string;
   expires_at: string;

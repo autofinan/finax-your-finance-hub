@@ -166,6 +166,11 @@ function normalizeText(text: string): string {
 function detectQueryScope(normalized: string): string {
   // ✅ FIX WA-4: Detectar "relatório semanal" ANTES do fallback
   if ((normalized.includes("relatorio") || normalized.includes("report")) && normalized.includes("semanal")) return "weekly_report";
+  // ✅ Detectar "detalhar fatura" / "fatura de março" / "o que tem na fatura"
+  if (normalized.includes("fatura") && (normalized.includes("detalh") || normalized.includes("tem na") || normalized.includes("abrir") || normalized.includes("ver"))) return "invoice_detail";
+  if (normalized.includes("detalh") && normalized.includes("fatura")) return "invoice_detail";
+  // ✅ Detectar "previsão fatura" / "fatura mes que vem" / "fatura futura"
+  if (normalized.includes("fatura") && (normalized.includes("futur") || normalized.includes("proximo") || normalized.includes("proxima") || normalized.includes("mes que vem") || normalized.includes("previsao"))) return "invoice_future";
   if (normalized.includes("cartao") || normalized.includes("cartoes") || normalized.includes("limite")) return "cards";
   if (normalized.includes("pendente") || normalized.includes("pendentes")) return "pending";
   if (normalized.includes("categoria") || normalized.includes("categorias")) return "category";
@@ -174,6 +179,8 @@ function detectQueryScope(normalized: string): string {
   if (normalized.includes("parcelamento") || normalized.includes("parcela") || normalized.includes("parcelado")) return "installments";
   if (normalized.includes("meta") || normalized.includes("metas") || normalized.includes("poupanca")) return "goals";
   if (normalized.includes("gastei") || normalized.includes("gasto")) return "expenses";
+  // ✅ Fatura genérica (sem "detalhar") → detalhar por padrão
+  if (normalized.includes("fatura")) return "invoice_detail";
   return "summary";
 }
 
@@ -2034,7 +2041,7 @@ async function registerExpense(userId: string, slots: ExtractedSlots, actionId?:
 async function handleExpenseResult(
   result: { success: boolean; message: string; isDuplicate?: boolean },
   phoneNumber: string,
-  messageSource: string
+  messageSource: MessageSource
 ): Promise<void> {
   if (result.isDuplicate) {
     await sendButtons(phoneNumber, result.message, [
@@ -3429,7 +3436,7 @@ async function processarJob(job: any): Promise<void> {
       if (payload.buttonReplyId.startsWith("pay_")) {
       const paymentMethod = PAYMENT_ALIASES[payload.buttonReplyId];
         if (paymentMethod && activeAction && activeAction.intent === "expense") {
-          const updatedSlots = { ...activeAction.slots, payment_method: paymentMethod };
+          const updatedSlots: Record<string, any> = { ...activeAction.slots, payment_method: paymentMethod };
           
           // ✅ BUG 3 FIX: Se crédito, resolver cartão ANTES de registrar
           if (paymentMethod === "credito") {
@@ -3912,6 +3919,76 @@ async function processarJob(job: any): Promise<void> {
       if (payload.buttonReplyId === "duplicate_confirm_no") {
         if (activeAction) await closeAction(activeAction.id);
         await sendMessage(payload.phoneNumber, "Ok, não vou registrar! 👍", payload.messageSource);
+        return;
+      }
+      
+      // ====================================================================
+      // 📦 INSTALLMENT PAYMENT METHOD HANDLERS (boleto vs cartão)
+      // ====================================================================
+      if (payload.buttonReplyId === "installment_credito") {
+        if (activeAction?.intent === "installment") {
+          const updatedSlots = { ...activeAction.slots, payment_method: "credito" };
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: "card" });
+          
+          // Mostrar seleção de cartão
+          const { listUserCards } = await import("./intents/credit-flow.ts");
+          const cards = await listUserCards(userId);
+          
+          if (cards.length === 0) {
+            await sendMessage(payload.phoneNumber, "Você não tem cartões cadastrados 💳\n\nAdicione um: *Adicionar cartão Nubank limite 5000*", payload.messageSource);
+          } else if (cards.length <= 3) {
+            const cardButtons = cards.map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) }));
+            await sendButtons(payload.phoneNumber, "💳 Qual cartão?", cardButtons, payload.messageSource);
+          } else {
+            const sections = [{ title: "Seus cartões", rows: cards.map(c => ({ id: `card_${c.id}`, title: (c.nome || "Cartão").slice(0, 24), description: `Disponível: R$ ${(c.limite_disponivel ?? 0).toFixed(2)}` })) }];
+            await sendListMessage(payload.phoneNumber, "💳 Qual cartão?", "Selecionar cartão", sections, payload.messageSource);
+          }
+        }
+        return;
+      }
+      
+      if (payload.buttonReplyId === "installment_boleto") {
+        if (activeAction?.intent === "installment") {
+          const slotsWithBoleto: Record<string, any> = { ...activeAction.slots, payment_method: "boleto" };
+          
+          // Executar fluxo boleto diretamente
+          const valorTotal = Number(slotsWithBoleto.amount || 0);
+          const numParcelas = Number(slotsWithBoleto.installments || 1);
+          const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
+          const { getBrasiliaISO } = await import("./utils/date-helpers.ts");
+          const { dateISO, timeString } = getBrasiliaISO();
+          
+          let category = slotsWithBoleto.category || "outros";
+          if (slotsWithBoleto.description && !slotsWithBoleto.category) {
+            const { categorizeDescription } = await import("./ai/categorizer.ts");
+            const catResult = await categorizeDescription(slotsWithBoleto.description);
+            category = catResult.category;
+          }
+          
+          await supabase.from("transacoes").insert({
+            usuario_id: userId, valor: valorParcela, tipo: "saida", categoria: category,
+            descricao: `${slotsWithBoleto.description || "Parcelado boleto"} (1/${numParcelas})`,
+            data: dateISO, data_transacao: dateISO, hora_transacao: timeString,
+            origem: "whatsapp", forma_pagamento: "boleto", status: "confirmada",
+            parcela: `1/${numParcelas}`, is_parcelado: true, total_parcelas: numParcelas
+          });
+          
+          await supabase.from("parcelamentos").insert({
+            usuario_id: userId, descricao: slotsWithBoleto.description || "Parcelamento boleto",
+            valor_total: valorTotal, num_parcelas: numParcelas, parcela_atual: 1,
+            valor_parcela: valorParcela, ativa: true,
+          });
+          
+          await closeAction(activeAction.id);
+          
+          await sendMessage(payload.phoneNumber, 
+            `✅ *Parcelamento no boleto registrado!*\n\n` +
+            `📦 *${slotsWithBoleto.description || "Compra"}*\n` +
+            `💰 R$ ${valorTotal.toFixed(2)} em *${numParcelas}x* de R$ ${valorParcela.toFixed(2)}\n` +
+            `📄 Pagamento: Boleto`,
+            payload.messageSource
+          );
+        }
         return;
       }
       
@@ -4534,6 +4611,9 @@ async function processarJob(job: any): Promise<void> {
     // este tipo de mensagem. Se sim, aplicar aos slots ou sugerir.
     // ========================================================================
     let elitePatternApplied = false;
+    let patternRequiresConfirmation = false;
+    let patternId: string | undefined;
+    let patternCardName: string | undefined;
     
     if (payload.messageType === "text" && conteudoProcessado && 
         ["expense", "income", "recurring"].includes(decision.actionType)) {
@@ -4558,9 +4638,7 @@ async function processarJob(job: any): Promise<void> {
         }
         
         // 2. Aplicar padrões de memória (Memory Layer)
-        let patternRequiresConfirmation = false;
-        let patternId: string | undefined;
-        let patternCardName: string | undefined;
+        // (variables declared above try block)
         
         if (decision.actionType === "expense" && decision.slots.description) {
           const { applyUserPatterns } = await import("./memory/patterns.ts");
@@ -5320,7 +5398,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     }
     
     // ========================================================================
-    // 📦 INSTALLMENT - Parcelamento no Crédito (NOVO!)
+    // 📦 INSTALLMENT - Parcelamento (Cartão de Crédito ou Boleto)
     // ========================================================================
     if (decision.actionType === "installment") {
       const slots = decision.slots;
@@ -5328,6 +5406,95 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       
       const { registerInstallment, getMissingInstallmentSlots, hasAllRequiredInstallmentSlots } = 
         await import("./intents/installment.ts");
+      
+      // ========================================================================
+      // STEP 0: Se não tem payment_method, perguntar boleto ou cartão
+      // ========================================================================
+      if (!slots.payment_method && !slots.card && !slots.card_id) {
+        // Não especificou como pagou → perguntar com botões
+        if (activeAction?.intent === "installment") {
+          await updateAction(activeAction.id, { slots, pending_slot: "installment_payment" });
+        } else {
+          await createAction(userId, "installment", "installment", slots, "installment_payment", payload.messageId);
+        }
+        
+        const valorDisplay = slots.amount ? `💰 R$ ${Number(slots.amount).toFixed(2)} em *${slots.installments || "?"}x*\n\n` : "";
+        await sendButtons(payload.phoneNumber, 
+          `${valorDisplay}📦 *${slots.description || "Parcelamento"}*\n\nÉ no cartão de crédito ou boleto?`,
+          [
+            { id: "installment_credito", title: "💳 Cartão de Crédito" },
+            { id: "installment_boleto", title: "📄 Boleto" }
+          ],
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ========================================================================
+      // BOLETO PATH: Salvar como gastos recorrentes simples (sem cartão)
+      // ========================================================================
+      if (slots.payment_method === "boleto") {
+        console.log(`📦 [INSTALLMENT] Fluxo BOLETO`);
+        
+        const valorTotal = Number(slots.amount || 0);
+        const numParcelas = Number(slots.installments || 1);
+        const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
+        const { dateISO, timeString } = (await import("../finax-worker/utils/date-helpers.ts")).getBrasiliaISO();
+        
+        // Categorizar
+        let category = slots.category || "outros";
+        if (slots.description && !slots.category) {
+          const { categorizeDescription } = await import("./ai/categorizer.ts");
+          const catResult = await categorizeDescription(slots.description);
+          category = catResult.category;
+        }
+        
+        // Criar transação da primeira parcela
+        await supabase.from("transacoes").insert({
+          usuario_id: userId,
+          valor: valorParcela,
+          tipo: "saida",
+          categoria: category,
+          descricao: `${slots.description || "Parcelado boleto"} (1/${numParcelas})`,
+          data: dateISO,
+          data_transacao: dateISO,
+          hora_transacao: timeString,
+          origem: "whatsapp",
+          forma_pagamento: "boleto",
+          status: "confirmada",
+          parcela: `1/${numParcelas}`,
+          is_parcelado: true,
+          total_parcelas: numParcelas
+        });
+        
+        // Criar registro no parcelamentos
+        await supabase.from("parcelamentos").insert({
+          usuario_id: userId,
+          descricao: slots.description || "Parcelamento boleto",
+          valor_total: valorTotal,
+          num_parcelas: numParcelas,
+          parcela_atual: 1,
+          valor_parcela: valorParcela,
+          ativa: true,
+        });
+        
+        // Fechar action
+        if (activeAction) await closeAction(activeAction.id);
+        
+        await sendMessage(payload.phoneNumber, 
+          `✅ *Parcelamento no boleto registrado!*\n\n` +
+          `📦 *${slots.description || "Compra"}*\n` +
+          `💰 R$ ${valorTotal.toFixed(2)} em *${numParcelas}x* de R$ ${valorParcela.toFixed(2)}\n` +
+          `📄 Pagamento: Boleto\n\n` +
+          `_1ª parcela registrada como gasto deste mês!_`,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ========================================================================
+      // CARTÃO PATH: Fluxo original com seleção de cartão
+      // ========================================================================
       
       // ✅ TODOS OS SLOTS → PEDIR CONFIRMAÇÃO
       if (hasAllRequiredInstallmentSlots(slots as any)) {
@@ -5345,14 +5512,12 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         );
         
         if (gateResult.canExecute) {
-          // Já confirmado anteriormente → executar
           const result = await registerInstallment(userId, slots as any, gateResult.actionId);
           await supabase.from("actions")
             .update({ status: "done" })
             .eq("user_id", userId)
             .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
           
-          // ✅ Marcar decisão como executada
           if (decision.decisionId) {
             await markAsExecuted(decision.decisionId, true);
           }
@@ -5361,7 +5526,6 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           return;
         }
         
-        // Precisa confirmar → enviar mensagem de confirmação COM BOTÕES
         const valorParcela = (slots.amount || 0) / (slots.installments || 1);
         const confirmMsg = `*Confirmar parcelamento:*\n\n` +
           `📦 ${slots.description || "Compra"}\n` +
@@ -5414,7 +5578,6 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             payload.messageSource
           );
         } else {
-          // 4+ cartões: lista interativa
           const sections = [{
             title: "Seus cartões",
             rows: cards.map(c => {
@@ -6114,6 +6277,78 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           }
           
           await sendMessage(payload.phoneNumber, metaMsg, payload.messageSource);
+          return;
+        }
+        
+        // ✅ DETALHAMENTO DE FATURA
+        case "invoice_detail": {
+          console.log(`📊 [QUERY] Roteando para: INVOICE DETAIL`);
+          const { getInvoiceDetail } = await import("./intents/query.ts");
+          
+          // Extrair mês do texto (ex: "fatura de março", "fatura janeiro")
+          const mesesMap: Record<string, number> = {
+            janeiro: 1, fevereiro: 2, marco: 3, abril: 4, maio: 5, junho: 6,
+            julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12
+          };
+          let invoiceMes: number | undefined;
+          let invoiceAno: number | undefined;
+          for (const [mesNome, mesNum] of Object.entries(mesesMap)) {
+            if (normalized.includes(mesNome)) {
+              invoiceMes = mesNum;
+              break;
+            }
+          }
+          // Detectar "passado/passada" → mês anterior
+          if (normalized.includes("passad")) {
+            const brasilNow = new Date();
+            const bOffset = -3 * 60;
+            const bTime = new Date(brasilNow.getTime() + (bOffset - brasilNow.getTimezoneOffset()) * 60000);
+            invoiceMes = bTime.getMonth(); // 0-indexed = previous month
+            if (invoiceMes === 0) { invoiceMes = 12; invoiceAno = bTime.getFullYear() - 1; }
+          }
+          
+          // Detectar nome do cartão (ex: "fatura do nubank")
+          let invoiceCard: string | undefined;
+          const cardWords = ["nubank", "inter", "bradesco", "itau", "sicredi", "santander", "c6", "next", "pan", "original", "neon"];
+          for (const cw of cardWords) {
+            if (normalized.includes(cw)) { invoiceCard = cw; break; }
+          }
+          // Also try from user's actual card names
+          const { data: userCardsForInvoice } = await supabase
+            .from("cartoes_credito")
+            .select("nome")
+            .eq("usuario_id", userId);
+          for (const uc of (userCardsForInvoice || [])) {
+            if (uc.nome && normalized.includes(normalizeText(uc.nome))) {
+              invoiceCard = uc.nome;
+              break;
+            }
+          }
+          
+          const detailResult = await getInvoiceDetail(userId, invoiceCard, invoiceMes, invoiceAno);
+          await sendMessage(payload.phoneNumber, detailResult, payload.messageSource);
+          return;
+        }
+        
+        // ✅ PREVISÃO DE FATURA FUTURA
+        case "invoice_future": {
+          console.log(`📊 [QUERY] Roteando para: INVOICE FUTURE`);
+          const { getFutureInvoicePreview } = await import("./intents/query.ts");
+          
+          let futureCard: string | undefined;
+          const { data: userCardsForFuture } = await supabase
+            .from("cartoes_credito")
+            .select("nome")
+            .eq("usuario_id", userId);
+          for (const uc of (userCardsForFuture || [])) {
+            if (uc.nome && normalized.includes(normalizeText(uc.nome))) {
+              futureCard = uc.nome;
+              break;
+            }
+          }
+          
+          const futureResult = await getFutureInvoicePreview(userId, futureCard);
+          await sendMessage(payload.phoneNumber, futureResult, payload.messageSource);
           return;
         }
         
