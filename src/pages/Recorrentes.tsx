@@ -282,7 +282,7 @@ const Recorrentes = () => {
                             {categoriaInfo.label}
                           </span>
                         </div>
-                        <div className="flex items-center gap-3 text-sm text-slate-500">
+                        <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
                           <span className="flex items-center gap-1">
                             <Calendar className="w-4 h-4" />
                             {gasto.tipo_recorrencia === 'mensal' && `Dia ${gasto.dia_mes}`}
@@ -290,6 +290,16 @@ const Recorrentes = () => {
                             {gasto.tipo_recorrencia === 'parcelado' && 
                               `${gasto.parcela_atual}/${gasto.num_parcelas} parcelas`}
                           </span>
+                          {gasto.proxima_execucao && (
+                            <span className="text-indigo-400 font-medium">
+                              Próxima: {new Date(gasto.proxima_execucao + 'T12:00:00').toLocaleDateString('pt-BR')}
+                            </span>
+                          )}
+                          {gasto.ultima_execucao && (
+                            <span className="text-slate-600">
+                              Última: {new Date(gasto.ultima_execucao + 'T12:00:00').toLocaleDateString('pt-BR')}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-6">

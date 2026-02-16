@@ -3915,6 +3915,73 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
+      // ====================================================================
+      // 🧠 PATTERN CONFIRMATION HANDLERS (cartão aprendido)
+      // ====================================================================
+      if (payload.buttonReplyId === "pattern_confirm_yes") {
+        console.log(`✅ [PATTERN] Usuário confirmou padrão de cartão`);
+        if (activeAction) {
+          // Confirmar padrão na memória
+          const patternId = (activeAction.meta as any)?.patternId;
+          if (patternId) {
+            const { confirmPattern } = await import("./memory/patterns.ts");
+            await confirmPattern(patternId);
+          }
+          // Executar a transação com os slots já preenchidos
+          const result = await registerExpense(userId, activeAction.slots as any, activeAction.id);
+          await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
+        } else {
+          await sendMessage(payload.phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", payload.messageSource);
+        }
+        return;
+      }
+      
+      if (payload.buttonReplyId === "pattern_confirm_no") {
+        console.log(`❌ [PATTERN] Usuário rejeitou padrão de cartão`);
+        if (activeAction) {
+          // Rejeitar padrão
+          const patternId = (activeAction.meta as any)?.patternId;
+          if (patternId) {
+            const { rejectPattern } = await import("./memory/patterns.ts");
+            await rejectPattern(patternId);
+          }
+          // Remover card_id dos slots e mostrar lista de cartões
+          const slotsWithoutCard = { ...activeAction.slots } as any;
+          delete slotsWithoutCard.card_id;
+          delete slotsWithoutCard.card;
+          
+          // Atualizar action com slots sem cartão
+          await supabase.from("actions")
+            .update({ slots: slotsWithoutCard })
+            .eq("id", activeAction.id);
+          
+          // Mostrar lista de cartões
+          const { listUserCards } = await import("./intents/credit-flow.ts");
+          const allCards = await listUserCards(userId);
+          
+          if (allCards.length <= 3) {
+            const cardButtons = allCards.map(c => ({
+              id: `card_${c.id}`,
+              title: (c.nome || "Cartão").slice(0, 20)
+            }));
+            await sendButtons(payload.phoneNumber, "💳 Em qual cartão foi?", cardButtons, payload.messageSource);
+          } else {
+            const sections = [{
+              title: "Seus cartões",
+              rows: allCards.map(c => ({
+                id: `card_${c.id}`,
+                title: (c.nome || "Cartão").slice(0, 24),
+                description: `Disponível: R$ ${(c.limite_disponivel ?? c.limite_total ?? 0).toFixed(2)}`
+              }))
+            }];
+            await sendListMessage(payload.phoneNumber, "💳 Em qual cartão foi?", "Selecionar cartão", sections, payload.messageSource);
+          }
+        } else {
+          await sendMessage(payload.phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", payload.messageSource);
+        }
+        return;
+      }
+      
       // (view_all_* and view_by_category_* handlers moved before EXPIRED_BUTTON guard)
       
       // ========================================================================
@@ -4491,6 +4558,10 @@ async function processarJob(job: any): Promise<void> {
         }
         
         // 2. Aplicar padrões de memória (Memory Layer)
+        let patternRequiresConfirmation = false;
+        let patternId: string | undefined;
+        let patternCardName: string | undefined;
+        
         if (decision.actionType === "expense" && decision.slots.description) {
           const { applyUserPatterns } = await import("./memory/patterns.ts");
           const patternResult = await applyUserPatterns(userId, decision.slots as any, conteudoProcessado);
@@ -4498,7 +4569,21 @@ async function processarJob(job: any): Promise<void> {
           if (patternResult.patternApplied) {
             decision.slots = patternResult.slots as ExtractedSlots;
             elitePatternApplied = true;
+            patternId = patternResult.patternId;
             console.log(`🧠 [ELITE] Padrão de memória aplicado para: ${decision.slots.description}`);
+            
+            // Verificar se precisa confirmação de cartão
+            if (patternResult.requiresConfirmation && decision.slots.card_id) {
+              patternRequiresConfirmation = true;
+              // Buscar nome do cartão
+              const { data: cardData } = await supabase
+                .from("cartoes_credito")
+                .select("nome")
+                .eq("id", decision.slots.card_id)
+                .single();
+              patternCardName = cardData?.nome || "cartão";
+              console.log(`🧠 [ELITE] Padrão requer confirmação de cartão: ${patternCardName}`);
+            }
           }
         }
       } catch (eliteErr) {
@@ -4752,6 +4837,35 @@ async function processarJob(job: any): Promise<void> {
       // ✅ TODOS OS SLOTS → EXECUTAR DIRETO (texto claro não precisa confirmação)
       if (hasAllRequiredSlots("expense", slots)) {
         console.log(`💸 [EXPENSE] Slots completos - executando direto (sem confirmação para texto)`);
+        
+        // ========================================================================
+        // 🧠 CONFIRMAÇÃO DE PADRÃO DE CARTÃO (antes de executar)
+        // ========================================================================
+        if (patternRequiresConfirmation && slots.card_id && patternCardName) {
+          console.log(`🧠 [PATTERN] Pedindo confirmação: ${slots.description} → ${patternCardName}`);
+          
+          // Salvar action com slots completos + patternId no meta
+          await createAction(userId, "expense", "expense", slots, "card_confirm", payload.messageId);
+          // Atualizar meta da action com patternId
+          await supabase.from("actions")
+            .update({ meta: { patternId } })
+            .eq("user_id", userId)
+            .eq("status", "collecting");
+          
+          const valor = slots.amount ? `R$ ${Number(slots.amount).toFixed(2)}` : "";
+          const desc = slots.description || "Gasto";
+          
+          await sendButtons(
+            payload.phoneNumber,
+            `🧠 ${desc} ${valor} no *${patternCardName}*, certo?`,
+            [
+              { id: "pattern_confirm_yes", title: "✅ Sim, registrar" },
+              { id: "pattern_confirm_no", title: "❌ Não, outro cartão" }
+            ],
+            payload.messageSource
+          );
+          return;
+        }
         
         // ========================================================================
         // 💳 VINCULAR CRÉDITO AO CARTÃO/FATURA (FSM MÓDULO 2)

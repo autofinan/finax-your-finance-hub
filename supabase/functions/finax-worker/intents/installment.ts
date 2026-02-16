@@ -153,14 +153,15 @@ export async function registerInstallment(
   // ✅ CORREÇÃO: getBrasiliaISO() sem argumento — usa new Date() internamente
   const { dateISO, timeString } = getBrasiliaISO();
   
+  // ✅ Transação mãe usa valor_parcela (não valor_total) - é a primeira parcela
   const { data: parentTx, error: txError } = await supabase
     .from("transacoes")
     .insert({
       usuario_id: userId,
-      valor: valorTotal,
+      valor: valorParcela,
       tipo: "saida",
       categoria: category,
-      descricao: `${slots.description || "Parcelado"} (${numParcelas}x)`,
+      descricao: `${slots.description || "Parcelado"} (1/${numParcelas})`,
       data: dateISO,
       data_transacao: dateISO,
       hora_transacao: timeString,
@@ -274,7 +275,27 @@ export async function registerInstallment(
   console.log(`💳 [INSTALLMENT] Limite atualizado: R$ ${selectedCard.limite_disponivel} → R$ ${novoLimite}`);
   
   // ========================================================================
-  // 5. FECHAR ACTION E LOG
+  // 5. CRIAR REGISTRO EM PARCELAMENTOS (para aparecer no site)
+  // ========================================================================
+  
+  await supabase.from("parcelamentos").insert({
+    usuario_id: userId,
+    descricao: slots.description || "Compra parcelada",
+    valor_total: valorTotal,
+    num_parcelas: numParcelas,
+    parcela_atual: 1,
+    valor_parcela: valorParcela,
+    ativa: true,
+  }).then(({ error: parcelamentoError }) => {
+    if (parcelamentoError) {
+      console.error("⚠️ [INSTALLMENT] Erro ao criar registro em parcelamentos:", parcelamentoError);
+    } else {
+      console.log("✅ [INSTALLMENT] Registro em parcelamentos criado");
+    }
+  });
+  
+  // ========================================================================
+  // 6. FECHAR ACTION E LOG
   // ========================================================================
   
   if (actionId) {
