@@ -346,12 +346,16 @@ async function getOrCreateFutureInvoice(
   diaFechamento?: number | null,
   monthOffset: number = 0
 ): Promise<{ id: string; mes: number; ano: number }> {
-  const hoje = new Date();
-  let mes = hoje.getMonth() + 1;
-  let ano = hoje.getFullYear();
+  // Usar horário de Brasília (UTC-3)
+  const now = new Date();
+  const brasiliaOffset = -3 * 60;
+  const brasiliaTime = new Date(now.getTime() + (brasiliaOffset - now.getTimezoneOffset()) * 60000);
+  const diaAtual = brasiliaTime.getDate();
+  let mes = brasiliaTime.getMonth() + 1;
+  let ano = brasiliaTime.getFullYear();
   
   // Se já passou do dia de fechamento, a compra vai para a próxima fatura
-  if (diaFechamento && hoje.getDate() >= diaFechamento) {
+  if (diaFechamento && diaAtual >= diaFechamento) {
     mes += 1;
   }
   

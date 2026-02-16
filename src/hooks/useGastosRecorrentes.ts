@@ -146,20 +146,45 @@ export function useGastosRecorrentes(usuarioIdProp?: string) {
 
   const deleteGasto = async (id: string) => {
     try {
-      const { error } = await supabase.from('gastos_recorrentes').delete().eq('id', id);
+      const { error, count } = await supabase
+        .from('gastos_recorrentes')
+        .delete({ count: 'exact' })
+        .eq('id', id);
 
       if (error) throw error;
+
+      // RLS may silently block delete (0 rows affected)
+      if (count === 0) {
+        console.warn('⚠️ Delete retornou 0 rows - tentando refresh de sessão...');
+        // Try refreshing the Supabase Auth session
+        const { error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError) {
+          console.error('❌ Refresh de sessão falhou:', refreshError);
+          throw new Error('Sessão expirada. Faça login novamente.');
+        }
+
+        // Retry delete after refresh
+        const { error: retryError, count: retryCount } = await supabase
+          .from('gastos_recorrentes')
+          .delete({ count: 'exact' })
+          .eq('id', id);
+
+        if (retryError) throw retryError;
+        if (retryCount === 0) {
+          throw new Error('Não foi possível remover. Tente fazer login novamente.');
+        }
+      }
 
       setGastos((prev) => prev.filter((g) => g.id !== id));
       toast({
         title: 'Sucesso',
         description: 'Gasto recorrente removido com sucesso!',
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erro ao deletar gasto recorrente:', error);
       toast({
         title: 'Erro',
-        description: 'Não foi possível remover o gasto recorrente.',
+        description: error?.message || 'Não foi possível remover o gasto recorrente.',
         variant: 'destructive',
       });
       throw error;

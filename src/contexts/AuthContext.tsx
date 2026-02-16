@@ -286,9 +286,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [countdown]);
 
   // ========================================================================
-  // 🚀 CARREGAR SESSÃO AO INICIAR
+  // 🚀 CARREGAR SESSÃO AO INICIAR + AUTO-REFRESH
   // ========================================================================
   useEffect(() => {
+    // Listen for Supabase Auth state changes (auto-refresh tokens)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        console.log(`🔄 [AUTH] onAuthStateChange: ${event}`);
+        if (event === 'TOKEN_REFRESHED' && session) {
+          console.log('✅ [AUTH] Token refreshed automatically');
+        }
+        if (event === 'SIGNED_OUT') {
+          console.log('⚠️ [AUTH] Supabase session signed out');
+        }
+      }
+    );
+
     const loadSession = async () => {
       const token = localStorage.getItem(TOKEN_KEY);
       const savedUser = localStorage.getItem(USER_KEY);
@@ -315,6 +328,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     loadSession();
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, [refreshUser]);
 
   // ========================================================================

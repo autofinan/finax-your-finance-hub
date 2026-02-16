@@ -118,10 +118,14 @@ serve(async (req) => {
 
   try {
     console.log(`📅 [CICLO-FATURA] Iniciando processamento...`);
-    const hoje = new Date();
+    // Usar horário de Brasília (UTC-3)
+    const now = new Date();
+    const brasiliaOffset = -3 * 60;
+    const hoje = new Date(now.getTime() + (brasiliaOffset - now.getTimezoneOffset()) * 60000);
     const diaHoje = hoje.getDate();
     const mesAtual = hoje.getMonth() + 1;
     const anoAtual = hoje.getFullYear();
+    console.log(`📅 [CICLO-FATURA] Data Brasília: ${diaHoje}/${mesAtual}/${anoAtual}`);
 
     const results = {
       faturasProcessadas: 0,

@@ -251,11 +251,15 @@ export async function getOrCreateInvoice(
   cardId: string,
   diaFechamento?: number | null
 ): Promise<InvoiceInfo> {
-  const hoje = new Date();
-  let mes = hoje.getMonth() + 1;
-  let ano = hoje.getFullYear();
+  // Usar horário de Brasília (UTC-3)
+  const now = new Date();
+  const brasiliaOffset = -3 * 60; // minutes
+  const brasiliaTime = new Date(now.getTime() + (brasiliaOffset - now.getTimezoneOffset()) * 60000);
+  const diaAtual = brasiliaTime.getDate();
+  let mes = brasiliaTime.getMonth() + 1;
+  let ano = brasiliaTime.getFullYear();
   
-  if (diaFechamento && hoje.getDate() >= diaFechamento) {
+  if (diaFechamento && diaAtual >= diaFechamento) {
     mes += 1;
     if (mes > 12) {
       mes = 1;
@@ -359,6 +363,15 @@ export async function restoreCardLimitOnPayment(
   
   if (!card) return;
   
+  // Buscar fatura para verificar pagamento parcial vs total
+  const { data: fatura } = await supabase
+    .from("faturas_cartao")
+    .select("valor_total, valor_pago")
+    .eq("id", invoiceId)
+    .single();
+  
+  if (!fatura) return;
+  
   const novoLimite = Math.min(
     card.limite_total!,
     (card.limite_disponivel || 0) + valorPago
@@ -369,16 +382,23 @@ export async function restoreCardLimitOnPayment(
     .update({ limite_disponivel: novoLimite })
     .eq("id", cardId);
   
+  // Calcular total pago (acumulado + novo pagamento)
+  const totalPago = (fatura.valor_pago || 0) + valorPago;
+  const valorTotal = fatura.valor_total || 0;
+  
+  // Pagamento total ou parcial?
+  const isPagamentoTotal = totalPago >= valorTotal;
+  
   await supabase
     .from("faturas_cartao")
     .update({ 
-      valor_pago: valorPago,
-      status: "paga",
+      valor_pago: totalPago,
+      status: isPagamentoTotal ? "paga" : "fechada",
       updated_at: new Date().toISOString()
     })
     .eq("id", invoiceId);
   
-  console.log(`💳 [CREDIT] Limite restaurado: R$ ${card.limite_disponivel} → R$ ${novoLimite}`);
+  console.log(`💳 [CREDIT] Limite restaurado: R$ ${card.limite_disponivel} → R$ ${novoLimite} | Pagamento ${isPagamentoTotal ? 'TOTAL' : 'PARCIAL'} (${totalPago}/${valorTotal})`);
 }
 
 // ============================================================================
