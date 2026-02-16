@@ -27,6 +27,7 @@ import {
 import { Plus, Trash2, CreditCard, Calendar, DollarSign, TrendingUp, AlertTriangle, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
+import { FaturaDetail } from '@/components/cartoes/FaturaDetail';
 
 const Cartoes = () => {
   // Usar usuarioId do WhatsApp (não auth.uid)
@@ -332,6 +333,13 @@ const Cartoes = () => {
                               {formatCurrency(faturaAberta.valor_total)}
                             </span>
                           </div>
+                          <FaturaDetail 
+                            faturaId={faturaAberta.id!}
+                            cartaoId={cartao.id}
+                            mes={faturaAberta.mes}
+                            ano={faturaAberta.ano}
+                            valorTotal={faturaAberta.valor_total}
+                          />
                         </div>
                       )}
                     </div>

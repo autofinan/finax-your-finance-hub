@@ -335,3 +335,225 @@ export async function listPendingExpenses(userId: string): Promise<string> {
   const list = data.pending.map((p, i) => `${i + 1}. ${p.content}`).join("\n");
   return `📬 *Gastos Pendentes*\n\n${list}\n\n_Quer que eu registre algum desses? Responde com o número._`;
 }
+
+// ============================================================================
+// 💳 DETALHAMENTO DE FATURA
+// ============================================================================
+
+export interface InvoiceDetailData {
+  cardName: string;
+  mes: number;
+  ano: number;
+  valorTotal: number;
+  valorPago: number;
+  status: string;
+  transactions: { descricao: string; valor: number; categoria: string; data: string; parcela: string | null }[];
+  parcelas: { descricao: string; valor: number; numeroParcela: number; totalParcelas: number }[];
+}
+
+export async function getInvoiceDetail(userId: string, cardName?: string, mes?: number, ano?: number): Promise<string> {
+  // Determine target month/year using Brasilia time
+  const now = new Date();
+  const brasiliaOffset = -3 * 60;
+  const brasiliaTime = new Date(now.getTime() + (brasiliaOffset - now.getTimezoneOffset()) * 60000);
+  
+  const targetMes = mes || (brasiliaTime.getMonth() + 1);
+  const targetAno = ano || brasiliaTime.getFullYear();
+  
+  // Find card if specified
+  let cardFilter: string | null = null;
+  if (cardName) {
+    const { data: cards } = await supabase
+      .from("cartoes_credito")
+      .select("id, nome")
+      .eq("usuario_id", userId);
+    
+    const normalized = cardName.toLowerCase().trim();
+    const match = (cards || []).find(c => 
+      (c.nome || "").toLowerCase().includes(normalized)
+    );
+    if (match) cardFilter = match.id;
+  }
+  
+  // Get invoice(s)
+  let query = supabase
+    .from("faturas_cartao")
+    .select("id, cartao_id, mes, ano, valor_total, valor_pago, status")
+    .eq("usuario_id", userId)
+    .eq("mes", targetMes)
+    .eq("ano", targetAno);
+  
+  if (cardFilter) query = query.eq("cartao_id", cardFilter);
+  
+  const { data: faturas } = await query;
+  
+  if (!faturas || faturas.length === 0) {
+    const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+    return `📄 Não encontrei fatura de *${meses[targetMes - 1]}/${targetAno}*${cardName ? ` no ${cardName}` : ""}.\n\nTente: "detalhar fatura março" ou "fatura do nubank"`;
+  }
+  
+  let response = "";
+  
+  for (const fatura of faturas) {
+    // Get card name
+    const { data: card } = await supabase
+      .from("cartoes_credito")
+      .select("nome")
+      .eq("id", fatura.cartao_id)
+      .single();
+    
+    const cartaoNome = card?.nome || "Cartão";
+    const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    
+    response += `💳 *Fatura ${cartaoNome} - ${meses[fatura.mes! - 1]}/${fatura.ano}*\n`;
+    response += `📊 Status: *${fatura.status}*\n\n`;
+    
+    // Get transactions for this invoice
+    const { data: txs } = await supabase
+      .from("transacoes")
+      .select("descricao, valor, categoria, data, parcela")
+      .eq("fatura_id", fatura.id)
+      .eq("tipo", "saida")
+      .order("data", { ascending: false });
+    
+    // Get parcelas for this invoice
+    const { data: parcelas } = await supabase
+      .from("parcelas")
+      .select("descricao, valor, numero_parcela, total_parcelas")
+      .eq("fatura_id", fatura.id)
+      .order("numero_parcela", { ascending: true });
+    
+    const items: string[] = [];
+    const categoryEmojis: Record<string, string> = {
+      alimentacao: "🍔", mercado: "🛒", transporte: "🚗", saude: "🏥",
+      lazer: "🎮", moradia: "🏠", compras: "🛍️", servicos: "✂️", outros: "📦"
+    };
+    
+    // Transactions
+    for (const tx of (txs || [])) {
+      const emoji = categoryEmojis[tx.categoria || "outros"] || "📦";
+      const parcelaTag = tx.parcela ? ` (${tx.parcela})` : "";
+      items.push(`${emoji} ${tx.descricao || tx.categoria}${parcelaTag} — R$ ${Number(tx.valor).toFixed(2)}`);
+    }
+    
+    // Parcelas without matching transaction
+    for (const p of (parcelas || [])) {
+      const hasTx = (txs || []).some(t => t.descricao === p.descricao && t.parcela === `${p.numero_parcela}/${p.total_parcelas}`);
+      if (!hasTx) {
+        items.push(`📦 ${p.descricao} (${p.numero_parcela}/${p.total_parcelas}) — R$ ${Number(p.valor).toFixed(2)}`);
+      }
+    }
+    
+    if (items.length === 0) {
+      response += "_Nenhuma compra registrada_\n\n";
+    } else {
+      response += items.join("\n") + "\n\n";
+    }
+    
+    const pago = Number(fatura.valor_pago || 0);
+    const total = Number(fatura.valor_total || 0);
+    response += `💰 *Total: R$ ${total.toFixed(2)}*\n`;
+    if (pago > 0) {
+      response += `✅ Pago: R$ ${pago.toFixed(2)}\n`;
+      if (pago < total) {
+        response += `⚠️ Restante: R$ ${(total - pago).toFixed(2)}\n`;
+      }
+    }
+    response += "\n";
+  }
+  
+  return response.trim();
+}
+
+// ============================================================================
+// 💳 PREVISÃO DE FATURA FUTURA (com recorrentes + parcelas)
+// ============================================================================
+
+export async function getFutureInvoicePreview(userId: string, cardName?: string, mes?: number, ano?: number): Promise<string> {
+  const now = new Date();
+  const brasiliaOffset = -3 * 60;
+  const brasiliaTime = new Date(now.getTime() + (brasiliaOffset - now.getTimezoneOffset()) * 60000);
+  
+  const targetMes = mes || (brasiliaTime.getMonth() + 2); // next month by default
+  let targetAno = ano || brasiliaTime.getFullYear();
+  let adjustedMes = targetMes;
+  if (adjustedMes > 12) { adjustedMes -= 12; targetAno += 1; }
+  
+  // Find card
+  let cardId: string | null = null;
+  let resolvedCardName = cardName || "Todos cartões";
+  
+  if (cardName) {
+    const { data: cards } = await supabase
+      .from("cartoes_credito")
+      .select("id, nome")
+      .eq("usuario_id", userId);
+    const match = (cards || []).find(c => (c.nome || "").toLowerCase().includes(cardName.toLowerCase()));
+    if (match) { cardId = match.id; resolvedCardName = match.nome || cardName; }
+  }
+  
+  // Existing invoice data
+  let invoiceQuery = supabase
+    .from("faturas_cartao")
+    .select("id, valor_total, cartao_id")
+    .eq("usuario_id", userId)
+    .eq("mes", adjustedMes)
+    .eq("ano", targetAno);
+  if (cardId) invoiceQuery = invoiceQuery.eq("cartao_id", cardId);
+  const { data: existingInvoices } = await invoiceQuery;
+  
+  let totalExisting = 0;
+  for (const inv of (existingInvoices || [])) {
+    totalExisting += Number(inv.valor_total || 0);
+  }
+  
+  // Future parcelas for that month
+  let parcelaQuery = supabase
+    .from("parcelas")
+    .select("descricao, valor, numero_parcela, total_parcelas")
+    .eq("usuario_id", userId)
+    .eq("status", "futura")
+    .gte("mes_referencia", `${targetAno}-${String(adjustedMes).padStart(2, "0")}-01`)
+    .lt("mes_referencia", `${targetAno}-${String(adjustedMes + 1 > 12 ? 1 : adjustedMes + 1).padStart(2, "0")}-01`);
+  if (cardId) parcelaQuery = parcelaQuery.eq("cartao_id", cardId);
+  const { data: futureParcelas } = await parcelaQuery;
+  
+  // Active recurrentes on credit
+  let recQuery = supabase
+    .from("gastos_recorrentes")
+    .select("descricao, valor_parcela, categoria")
+    .eq("usuario_id", userId)
+    .eq("ativo", true)
+    .eq("tipo_recorrencia", "mensal");
+  const { data: recorrentes } = await recQuery;
+  
+  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  let response = `🔮 *Previsão Fatura ${resolvedCardName} - ${meses[adjustedMes - 1]}/${targetAno}*\n\n`;
+  
+  if (totalExisting > 0) {
+    response += `📊 Já registrado: R$ ${totalExisting.toFixed(2)}\n`;
+  }
+  
+  let totalParcelas = 0;
+  if (futureParcelas && futureParcelas.length > 0) {
+    response += `\n📦 *Parcelas:*\n`;
+    for (const p of futureParcelas) {
+      response += `  • ${p.descricao} (${p.numero_parcela}/${p.total_parcelas}) — R$ ${Number(p.valor).toFixed(2)}\n`;
+      totalParcelas += Number(p.valor);
+    }
+  }
+  
+  let totalRecorrentes = 0;
+  if (recorrentes && recorrentes.length > 0) {
+    response += `\n🔄 *Recorrentes:*\n`;
+    for (const r of recorrentes) {
+      response += `  • ${r.descricao || r.categoria} — R$ ${Number(r.valor_parcela).toFixed(2)}\n`;
+      totalRecorrentes += Number(r.valor_parcela);
+    }
+  }
+  
+  const grandTotal = totalExisting + totalParcelas + totalRecorrentes;
+  response += `\n💰 *Previsão total: R$ ${grandTotal.toFixed(2)}*`;
+  
+  return response;
+}
