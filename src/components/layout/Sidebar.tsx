@@ -56,7 +56,7 @@ export function Sidebar() {
           <img src={finaxLogo} alt="Finax" className="w-12 h-12 rounded-2xl object-contain" />
           <div>
             <h2 className="text-xl font-black text-white">Finax</h2>
-            <p className="text-xs text-slate-500 font-medium">Finance Hub</p>
+            <p className="text-xs text-slate-500 font-medium">Converse. Organize. Evolua.</p>
           </div>
         </div>
       </div>
