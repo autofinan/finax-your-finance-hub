@@ -8,7 +8,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Check, Package, ShoppingBag, Loader2 } from 'lucide-react';
+import { Check, Package, ShoppingBag, RefreshCw, Loader2 } from 'lucide-react';
 
 interface FaturaItem {
   id: string;
@@ -24,9 +24,11 @@ interface FaturaDetailModalProps {
   open: boolean;
   onClose: () => void;
   faturaId: string;
+  cartaoId?: string;
   cartaoNome: string;
   mes: number | null;
   ano: number | null;
+  diaFechamento?: number | null;
   valorTotal: number | null;
   valorPago: number | null;
   status: string | null;
@@ -42,66 +44,134 @@ const categoryEmojis: Record<string, string> = {
 const mesesNomes = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
 export function FaturaDetailModal({
-  open, onClose, faturaId, cartaoNome, mes, ano,
-  valorTotal, valorPago, status, onPagar
+  open, onClose, faturaId, cartaoId, cartaoNome, mes, ano,
+  diaFechamento, valorTotal, valorPago, status, onPagar
 }: FaturaDetailModalProps) {
   const [items, setItems] = useState<FaturaItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [paying, setPaying] = useState(false);
 
   useEffect(() => {
-    if (open && faturaId) {
+    if (open && (faturaId || cartaoId)) {
       fetchDetails();
     }
-  }, [open, faturaId]);
+  }, [open, faturaId, cartaoId]);
 
   const fetchDetails = async () => {
     setLoading(true);
     try {
-      // Fetch transactions linked to this invoice
-      const { data: txData } = await supabase
-        .from('transacoes')
-        .select('id, descricao, valor, categoria, data, parcela, is_parcelado')
-        .eq('fatura_id', faturaId)
-        .eq('tipo', 'saida')
-        .order('data', { ascending: false });
-
-      // Fetch parcelas linked to this invoice
-      const { data: parcelasData } = await supabase
-        .from('parcelas')
-        .select('id, descricao, valor, numero_parcela, total_parcelas, mes_referencia')
-        .eq('fatura_id', faturaId)
-        .order('numero_parcela', { ascending: true });
-
       const result: FaturaItem[] = [];
 
-      // Add transactions - separate pontuais from parcelados
-      for (const t of (txData || [])) {
-        result.push({
-          id: t.id,
-          descricao: t.descricao || t.categoria || 'Gasto',
-          valor: Number(t.valor),
-          categoria: t.categoria || 'outros',
-          parcela: t.parcela,
-          data: t.data || '',
-          tipo: t.is_parcelado ? 'parcela' : 'pontual',
-        });
+      // Strategy: query by cartao_id + date range (billing cycle)
+      // If dia_fechamento = 5 and fatura mes=3/ano=2026:
+      //   covers Feb 6 to Mar 5
+      if (cartaoId && mes && ano) {
+        const dia = diaFechamento || 5;
+        
+        // Start date: previous month, day after fechamento
+        const prevMonth = mes === 1 ? 12 : mes - 1;
+        const prevYear = mes === 1 ? ano - 1 : ano;
+        const startDay = dia + 1;
+        const startDate = `${prevYear}-${String(prevMonth).padStart(2, '0')}-${String(Math.min(startDay, 28)).padStart(2, '0')}`;
+        
+        // End date: current month, dia_fechamento
+        const endDate = `${ano}-${String(mes).padStart(2, '0')}-${String(Math.min(dia, 28)).padStart(2, '0')}`;
+
+        // Fetch ALL transactions for this card in this billing cycle
+        const { data: txData } = await supabase
+          .from('transacoes')
+          .select('id, descricao, valor, categoria, data, parcela, is_parcelado, id_recorrente')
+          .eq('cartao_id', cartaoId)
+          .eq('tipo', 'saida')
+          .gte('data', startDate)
+          .lte('data', endDate + 'T23:59:59')
+          .order('data', { ascending: false });
+
+        for (const t of (txData || [])) {
+          const tipo: FaturaItem['tipo'] = t.id_recorrente ? 'recorrente' : t.is_parcelado ? 'parcela' : 'pontual';
+          result.push({
+            id: t.id,
+            descricao: t.descricao || t.categoria || 'Gasto',
+            valor: Number(t.valor),
+            categoria: t.categoria || 'outros',
+            parcela: t.parcela,
+            data: t.data || '',
+            tipo,
+          });
+        }
       }
 
-      // Add parcelas that don't have a matching transaction
-      for (const p of (parcelasData || [])) {
-        const parcelaTag = `${p.numero_parcela}/${p.total_parcelas}`;
-        const hasTx = result.some(r => r.parcela === parcelaTag && r.descricao === (p.descricao || 'Parcela'));
-        if (!hasTx) {
-          result.push({
-            id: p.id,
-            descricao: p.descricao || 'Parcela',
-            valor: Number(p.valor),
-            categoria: 'compras',
-            parcela: parcelaTag,
-            data: p.mes_referencia || '',
-            tipo: 'parcela',
-          });
+      // Also fetch by fatura_id (for transactions that were directly linked)
+      if (faturaId) {
+        const { data: txByFatura } = await supabase
+          .from('transacoes')
+          .select('id, descricao, valor, categoria, data, parcela, is_parcelado, id_recorrente')
+          .eq('fatura_id', faturaId)
+          .eq('tipo', 'saida')
+          .order('data', { ascending: false });
+
+        for (const t of (txByFatura || [])) {
+          if (!result.find(r => r.id === t.id)) {
+            const tipo: FaturaItem['tipo'] = t.id_recorrente ? 'recorrente' : t.is_parcelado ? 'parcela' : 'pontual';
+            result.push({
+              id: t.id,
+              descricao: t.descricao || t.categoria || 'Gasto',
+              valor: Number(t.valor),
+              categoria: t.categoria || 'outros',
+              parcela: t.parcela,
+              data: t.data || '',
+              tipo,
+            });
+          }
+        }
+      }
+
+      // Fetch parcelas linked to this fatura
+      if (faturaId) {
+        const { data: parcelasData } = await supabase
+          .from('parcelas')
+          .select('id, descricao, valor, numero_parcela, total_parcelas, mes_referencia')
+          .eq('fatura_id', faturaId)
+          .order('numero_parcela', { ascending: true });
+
+        for (const p of (parcelasData || [])) {
+          const parcelaTag = `${p.numero_parcela}/${p.total_parcelas}`;
+          if (!result.find(r => r.parcela === parcelaTag && r.descricao === (p.descricao || 'Parcela'))) {
+            result.push({
+              id: p.id,
+              descricao: p.descricao || 'Parcela',
+              valor: Number(p.valor),
+              categoria: 'compras',
+              parcela: parcelaTag,
+              data: p.mes_referencia || '',
+              tipo: 'parcela',
+            });
+          }
+        }
+      }
+
+      // Also fetch parcelas by cartao_id + mes_referencia
+      if (cartaoId && mes && ano) {
+        const mesRef = `${ano}-${String(mes).padStart(2, '0')}-01`;
+        const { data: parcelasCartao } = await supabase
+          .from('parcelas')
+          .select('id, descricao, valor, numero_parcela, total_parcelas, mes_referencia')
+          .eq('cartao_id', cartaoId)
+          .eq('mes_referencia', mesRef)
+          .order('numero_parcela', { ascending: true });
+
+        for (const p of (parcelasCartao || [])) {
+          if (!result.find(r => r.id === p.id)) {
+            result.push({
+              id: p.id,
+              descricao: p.descricao || 'Parcela',
+              valor: Number(p.valor),
+              categoria: 'compras',
+              parcela: `${p.numero_parcela}/${p.total_parcelas}`,
+              data: p.mes_referencia || '',
+              tipo: 'parcela',
+            });
+          }
         }
       }
 
@@ -113,9 +183,10 @@ export function FaturaDetailModal({
 
   const pontuais = items.filter(i => i.tipo === 'pontual');
   const parcelas = items.filter(i => i.tipo === 'parcela');
-  // Recorrentes would be identified if we had the flag, for now group by pattern
+  const recorrentes = items.filter(i => i.tipo === 'recorrente');
   const totalPontuais = pontuais.reduce((s, i) => s + i.valor, 0);
   const totalParcelas = parcelas.reduce((s, i) => s + i.valor, 0);
+  const totalRecorrentes = recorrentes.reduce((s, i) => s + i.valor, 0);
 
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
@@ -172,24 +243,32 @@ export function FaturaDetailModal({
           </div>
         ) : (
           <div className="space-y-5">
-            {/* Parcelas */}
             {parcelas.length > 0 && (
               <Section
                 icon={<Package className="w-4 h-4" />}
-                title="Parcelamentos"
+                title="📦 Parcelamentos"
                 total={totalParcelas}
                 items={parcelas}
                 formatCurrency={formatCurrency}
               />
             )}
 
-            {/* Pontuais */}
             {pontuais.length > 0 && (
               <Section
                 icon={<ShoppingBag className="w-4 h-4" />}
-                title="Gastos Pontuais"
+                title="💸 Gastos Pontuais"
                 total={totalPontuais}
                 items={pontuais}
+                formatCurrency={formatCurrency}
+              />
+            )}
+
+            {recorrentes.length > 0 && (
+              <Section
+                icon={<RefreshCw className="w-4 h-4" />}
+                title="🔄 Recorrentes"
+                total={totalRecorrentes}
+                items={recorrentes}
                 formatCurrency={formatCurrency}
               />
             )}

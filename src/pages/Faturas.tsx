@@ -19,20 +19,23 @@ const Faturas = () => {
   const { cartoes } = useCartoes(usuarioId || undefined);
 
   const [detailModal, setDetailModal] = useState<{
-    open: boolean; faturaId: string; cartaoNome: string;
-    mes: number | null; ano: number | null; valorTotal: number | null;
-    valorPago: number | null; status: string | null;
-  }>({ open: false, faturaId: '', cartaoNome: '', mes: null, ano: null, valorTotal: null, valorPago: null, status: null });
+    open: boolean; faturaId: string; cartaoId: string; cartaoNome: string;
+    mes: number | null; ano: number | null; diaFechamento: number | null;
+    valorTotal: number | null; valorPago: number | null; status: string | null;
+  }>({ open: false, faturaId: '', cartaoId: '', cartaoNome: '', mes: null, ano: null, diaFechamento: null, valorTotal: null, valorPago: null, status: null });
 
   const formatCurrency = (value: number | null) => {
     if (value === null) return 'R$ 0,00';
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
   };
 
+  const getCartao = (cartaoId: string | null) => {
+    if (!cartaoId) return null;
+    return cartoes.find((c) => c.id === cartaoId) || null;
+  };
+
   const getCartaoNome = (cartaoId: string | null) => {
-    if (!cartaoId) return 'Sem cartão';
-    const cartao = cartoes.find((c) => c.id === cartaoId);
-    return cartao?.nome || 'Cartão';
+    return getCartao(cartaoId)?.nome || 'Cartão';
   };
 
   const getMesNome = (mes: number | null) => {
@@ -42,10 +45,13 @@ const Faturas = () => {
   };
 
   const openDetail = (f: any) => {
+    const cartao = getCartao(f.cartao_id);
     setDetailModal({
       open: true, faturaId: f.id,
-      cartaoNome: getCartaoNome(f.cartao_id),
+      cartaoId: f.cartao_id || '',
+      cartaoNome: cartao?.nome || 'Cartão',
       mes: f.mes, ano: f.ano,
+      diaFechamento: cartao?.dia_fechamento ?? null,
       valorTotal: f.valor_total, valorPago: f.valor_pago ?? 0,
       status: f.status,
     });
@@ -243,9 +249,11 @@ const Faturas = () => {
         open={detailModal.open}
         onClose={() => setDetailModal(prev => ({ ...prev, open: false }))}
         faturaId={detailModal.faturaId}
+        cartaoId={detailModal.cartaoId}
         cartaoNome={detailModal.cartaoNome}
         mes={detailModal.mes}
         ano={detailModal.ano}
+        diaFechamento={detailModal.diaFechamento}
         valorTotal={detailModal.valorTotal}
         valorPago={detailModal.valorPago}
         status={detailModal.status}
