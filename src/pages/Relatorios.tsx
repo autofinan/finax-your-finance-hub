@@ -94,6 +94,15 @@ const Relatorios = () => {
     });
   }, [transacoes, meses]);
 
+  // Evolução patrimonial: saldo acumulado mês a mês
+  const evolucaoPatrimonial = useMemo(() => {
+    let acumulado = 0;
+    return dadosMensais.map((m) => {
+      acumulado += m.saldo;
+      return { name: m.name, fullName: m.fullName, acumulado };
+    });
+  }, [dadosMensais]);
+
   const dadosCategorias = useMemo(() => {
     const mesAtual = new Date();
     const inicio = startOfMonth(mesAtual);
@@ -524,6 +533,56 @@ const Relatorios = () => {
                       fillOpacity={1}
                       fill="url(#saldoGradient)"
                       name="Saldo"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
+            </motion.div>
+
+            {/* Evolução Patrimonial */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.35 }}
+              className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all"
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 rounded-lg bg-emerald-500/10">
+                  <TrendingUp className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg text-white">Evolução Patrimonial</h3>
+                  <p className="text-xs text-slate-500">Saldo acumulado ao longo dos meses</p>
+                </div>
+              </div>
+              {loading ? (
+                <div className="h-[300px] flex items-center justify-center">
+                  <div className="animate-pulse text-slate-500">Carregando...</div>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <AreaChart data={evolucaoPatrimonial}>
+                    <defs>
+                      <linearGradient id="patrimonioGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="name" stroke="#64748b" fontSize={12} />
+                    <YAxis stroke="#64748b" fontSize={12} tickFormatter={(v) => formatCurrency(v)} width={80} />
+                    <Tooltip
+                      formatter={(value: number) => [formatCurrency(value), 'Patrimônio acumulado']}
+                      contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: '12px', color: '#fff' }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="acumulado"
+                      stroke="#22c55e"
+                      strokeWidth={3}
+                      fillOpacity={1}
+                      fill="url(#patrimonioGradient)"
+                      name="Patrimônio"
                     />
                   </AreaChart>
                 </ResponsiveContainer>
