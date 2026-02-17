@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { TransactionList } from '@/components/transacoes/TransactionList';
 import { TransactionForm } from '@/components/transacoes/TransactionForm';
+import { CSVImportModal } from '@/components/transacoes/CSVImportModal';
 import { useTransacoes } from '@/hooks/useTransacoes';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { Input } from '@/components/ui/input';
@@ -12,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Plus, Search, Filter, TrendingUp, TrendingDown, Wallet, ArrowUpDown, CalendarDays } from 'lucide-react';
+import { Plus, Search, Filter, TrendingUp, TrendingDown, Wallet, ArrowUpDown, CalendarDays, Upload } from 'lucide-react';
 import { CATEGORIAS } from '@/types/finance';
 import { motion } from 'framer-motion';
 
@@ -21,6 +22,7 @@ const Transacoes = () => {
   const { usuarioId } = useUsuarioId();
   const { transacoes, loading, addTransacao, deleteTransacao } = useTransacoes(usuarioId || undefined);
   const [formOpen, setFormOpen] = useState(false);
+  const [csvOpen, setCsvOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [filterCategoria, setFilterCategoria] = useState<string>('all');
   const [filterTipo, setFilterTipo] = useState<string>('all');
@@ -102,13 +104,22 @@ const Transacoes = () => {
                 Transações <span className="text-indigo-400">📊</span>
               </h1>
             </div>
-            <button
-              onClick={() => setFormOpen(true)}
-              className="flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-blue-500 px-6 py-3 rounded-xl font-bold text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all hover:scale-[1.02]"
-            >
-              <Plus className="w-5 h-5" />
-              Nova Transação
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setCsvOpen(true)}
+                className="flex items-center gap-2 bg-slate-800 border border-slate-700 px-4 py-3 rounded-xl font-bold text-slate-300 hover:bg-slate-700 transition-all"
+              >
+                <Upload className="w-5 h-5" />
+                Importar CSV
+              </button>
+              <button
+                onClick={() => setFormOpen(true)}
+                className="flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-blue-500 px-6 py-3 rounded-xl font-bold text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all hover:scale-[1.02]"
+              >
+                <Plus className="w-5 h-5" />
+                Nova Transação
+              </button>
+            </div>
           </motion.div>
 
           {/* Quick Stats */}
@@ -317,6 +328,15 @@ const Transacoes = () => {
         onOpenChange={setFormOpen}
         onSubmit={handleAddTransaction}
       />
+
+      {usuarioId && (
+        <CSVImportModal
+          open={csvOpen}
+          onOpenChange={setCsvOpen}
+          usuarioId={usuarioId}
+          onSuccess={() => window.location.reload()}
+        />
+      )}
     </AppLayout>
   );
 };
