@@ -7,7 +7,7 @@ import { BudgetCard } from '@/components/dashboard/BudgetCard';
 import { InsightDoDia } from '@/components/dashboard/InsightDoDia';
 import { QuickActions } from '@/components/dashboard/QuickActions';
 import { useTransacoes } from '@/hooks/useTransacoes';
-import { useGastosRecorrentes } from '@/hooks/useGastosRecorrentes';
+import { useDashboard } from '@/hooks/useDashboard';
 import { usePlanoStatus } from '@/hooks/usePlanoStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
@@ -15,6 +15,7 @@ import { Wallet, TrendingUp, TrendingDown, RefreshCcw, Plus, Sparkles, Calendar 
 import { useState, useMemo } from 'react';
 import { TransactionForm } from '@/components/transacoes/TransactionForm';
 import { motion } from 'framer-motion';
+import { formatCurrency } from '@/lib/utils';
 import { 
   AreaChart, 
   Area, 
@@ -25,49 +26,20 @@ import {
 } from 'recharts';
 
 const Dashboard = () => {
-  const { user, isTrialExpirado, isTrial, loading: authLoading } = useAuth();
-  // Usar useUsuarioId para vincular dados do WhatsApp corretamente
-  const { usuarioId, loading: loadingUsuarioId } = useUsuarioId();
+  const { user, isTrialExpirado, isTrial } = useAuth();
+  const { usuarioId } = useUsuarioId();
   const { transacoes, loading, addTransacao } = useTransacoes(usuarioId || undefined);
-  const { gastos } = useGastosRecorrentes(usuarioId || undefined);
+  const { dashboard } = useDashboard(usuarioId || undefined);
   const { planoStatus } = usePlanoStatus();
   const [formOpen, setFormOpen] = useState(false);
 
-  const stats = useMemo(() => {
-    const mesAtual = new Date().getMonth();
-    const anoAtual = new Date().getFullYear();
-
-    const transacoesMes = transacoes.filter((t) => {
-      const data = new Date(t.data);
-      return data.getMonth() === mesAtual && data.getFullYear() === anoAtual;
-    });
-
-    const totalEntradas = transacoesMes
-      .filter((t) => t.tipo === 'entrada')
-      .reduce((acc, t) => acc + Number(t.valor), 0);
-
-    const totalSaidas = transacoesMes
-      .filter((t) => t.tipo === 'saida')
-      .reduce((acc, t) => acc + Number(t.valor), 0);
-
-    const gastosAtivos = gastos
-      .filter((g) => g.ativo)
-      .reduce((acc, g) => acc + Number(g.valor_parcela), 0);
-
-    return {
-      totalEntradas,
-      totalSaidas,
-      saldo: totalEntradas - totalSaidas,
-      gastosRecorrentes: gastosAtivos,
-    };
-  }, [transacoes, gastos]);
-
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    }).format(value);
-  };
+  // Use view data for stats (server-side calculation)
+  const stats = useMemo(() => ({
+    totalEntradas: Number(dashboard?.total_entradas_mes || 0),
+    totalSaidas: Number(dashboard?.total_gastos_mes || 0),
+    saldo: Number(dashboard?.saldo_mes || 0),
+    gastosRecorrentes: Number(dashboard?.total_fixos_mes || 0),
+  }), [dashboard]);
 
   const handleAddTransaction = async (data: {
     tipo: 'entrada' | 'saida';
@@ -105,15 +77,6 @@ const Dashboard = () => {
   return (
     <AppLayout>
       <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 p-6 lg:p-8">
-        {/* Background Effects */}
-        <div className="fixed inset-0 pointer-events-none overflow-hidden">
-          <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full" />
-          <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full" />
-        </div>
-
-        {/* Grid Pattern */}
-        <div className="fixed inset-0 bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
-
         <div className="relative z-10 max-w-[1800px] mx-auto space-y-8">
           {/* Header */}
           <motion.div

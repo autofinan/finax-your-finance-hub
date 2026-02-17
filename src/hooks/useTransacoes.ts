@@ -4,9 +4,13 @@ import { Transacao } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
 
+const PAGE_SIZE = 100;
+
 export function useTransacoes(usuarioIdProp?: string) {
   const [transacoes, setTransacoes] = useState<Transacao[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(0);
   const { toast } = useToast();
   
   // Usar hook para buscar usuario_id via auth_id
@@ -15,16 +19,20 @@ export function useTransacoes(usuarioIdProp?: string) {
   // Priorizar prop, depois o resolvido via auth
   const usuarioId = usuarioIdProp || resolvedUsuarioId;
 
-  const fetchTransacoes = async () => {
+  const fetchTransacoes = async (pageNum = 0, append = false) => {
     if (loadingUsuarioId) return; // Aguardar resolver usuario_id
     
     try {
-      setLoading(true);
+      if (!append) setLoading(true);
+      const from = pageNum * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+      
       let query = supabase
         .from('transacoes')
         .select('*')
         .order('data', { ascending: false })
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
       if (usuarioId) {
         query = query.eq('usuario_id', usuarioId);
@@ -33,7 +41,15 @@ export function useTransacoes(usuarioIdProp?: string) {
       const { data, error } = await query;
 
       if (error) throw error;
-      setTransacoes((data as Transacao[]) || []);
+      
+      const newData = (data as Transacao[]) || [];
+      setHasMore(newData.length === PAGE_SIZE);
+      
+      if (append) {
+        setTransacoes((prev) => [...prev, ...newData]);
+      } else {
+        setTransacoes(newData);
+      }
     } catch (error) {
       console.error('Erro ao buscar transações:', error);
       toast({
@@ -44,6 +60,13 @@ export function useTransacoes(usuarioIdProp?: string) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadMore = () => {
+    if (!hasMore || loading) return;
+    const nextPage = page + 1;
+    setPage(nextPage);
+    fetchTransacoes(nextPage, true);
   };
 
   const addTransacao = async (transacao: {
@@ -144,8 +167,10 @@ export function useTransacoes(usuarioIdProp?: string) {
   return {
     transacoes,
     loading,
+    hasMore,
+    loadMore,
     addTransacao,
     deleteTransacao,
-    refetch: fetchTransacoes,
+    refetch: () => { setPage(0); fetchTransacoes(0, false); },
   };
 }
