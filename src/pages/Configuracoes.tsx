@@ -5,11 +5,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useState, useEffect } from 'react';
-import { User, Bell, Shield, Download, Trash2, LogOut, Smartphone, CreditCard, Settings } from 'lucide-react';
+import { User, Bell, Shield, Download, Trash2, LogOut, Smartphone, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 const Configuracoes = () => {
   const { toast } = useToast();
@@ -19,6 +23,8 @@ const Configuracoes = () => {
   const [nome, setNome] = useState('');
   const [telefone, setTelefone] = useState('');
   const [notificacoes, setNotificacoes] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -49,11 +55,95 @@ const Configuracoes = () => {
     }
   };
 
-  const handleExport = () => {
-    toast({
-      title: 'Exportação iniciada',
-      description: 'Seus dados serão baixados em breve.',
-    });
+  const handleExport = async () => {
+    if (!user?.id) return;
+    setExporting(true);
+    try {
+      // Fetch all user data in parallel
+      const [transacoes, parcelamentos, cartoes, contasPagar, gastosRecorrentes] = await Promise.all([
+        supabase.from('transacoes').select('*').eq('usuario_id', user.id).order('data', { ascending: false }),
+        supabase.from('parcelamentos').select('*').eq('usuario_id', user.id),
+        supabase.from('cartoes_credito').select('*').eq('usuario_id', user.id),
+        supabase.from('contas_pagar').select('*').eq('usuario_id', user.id),
+        supabase.from('gastos_recorrentes').select('*').eq('usuario_id', user.id),
+      ]);
+
+      const exportData = {
+        exportado_em: new Date().toISOString(),
+        usuario: { nome: user.nome, telefone: user.phone, plano: user.plano },
+        transacoes: transacoes.data || [],
+        parcelamentos: parcelamentos.data || [],
+        cartoes: cartoes.data || [],
+        contas_pagar: contasPagar.data || [],
+        gastos_recorrentes: gastosRecorrentes.data || [],
+      };
+
+      // Download as JSON
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `finax-dados-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: 'Dados exportados!',
+        description: 'O arquivo JSON foi baixado com sucesso.',
+      });
+    } catch (error) {
+      console.error('Erro ao exportar:', error);
+      toast({
+        title: 'Erro',
+        description: 'Não foi possível exportar os dados.',
+        variant: 'destructive',
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleDeleteAllData = async () => {
+    if (!user?.id) return;
+    setDeleting(true);
+    try {
+      // Delete user data from all tables (order matters for FK constraints)
+      const tables = [
+        'parcelas',
+        'parcelamentos', 
+        'contas_pagar',
+        'gastos_recorrentes',
+        'transacoes',
+        'faturas',
+        'faturas_cartao',
+        'cartoes_credito',
+        'orcamentos',
+      ] as const;
+
+      for (const table of tables) {
+        const { error } = await supabase
+          .from(table)
+          .delete()
+          .eq('usuario_id', user.id);
+        if (error) console.error(`Erro ao deletar ${table}:`, error);
+      }
+
+      toast({
+        title: 'Dados excluídos',
+        description: 'Todos os seus dados financeiros foram removidos.',
+      });
+    } catch (error) {
+      console.error('Erro ao excluir dados:', error);
+      toast({
+        title: 'Erro',
+        description: 'Não foi possível excluir todos os dados.',
+        variant: 'destructive',
+      });
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleLogout = () => {
@@ -82,10 +172,7 @@ const Configuracoes = () => {
 
         <div className="relative z-10 max-w-2xl mx-auto space-y-6">
           {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
+          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
             <p className="text-slate-500 font-medium mb-1">Personalize</p>
             <h1 className="text-4xl font-bold text-white">
               Configurações <span className="text-indigo-400">⚙️</span>
@@ -93,12 +180,8 @@ const Configuracoes = () => {
           </motion.div>
 
           {/* Profile Card */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+            className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all">
             <div className="flex items-center gap-4 mb-6">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center">
                 <User className="w-8 h-8 text-white" />
@@ -115,39 +198,24 @@ const Configuracoes = () => {
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label className="text-slate-300">Nome</Label>
-                <Input
-                  placeholder="Seu nome"
-                  value={nome}
-                  onChange={(e) => setNome(e.target.value)}
-                  className="bg-slate-800/50 border-slate-700 text-white"
-                />
+                <Input placeholder="Seu nome" value={nome} onChange={(e) => setNome(e.target.value)}
+                  className="bg-slate-800/50 border-slate-700 text-white" />
               </div>
               <div className="space-y-2">
                 <Label className="text-slate-300">Telefone (WhatsApp)</Label>
                 <div className="relative">
                   <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-                  <Input
-                    placeholder="+55 11 99999-9999"
-                    value={telefone}
-                    onChange={(e) => setTelefone(e.target.value)}
-                    disabled
-                    className="pl-12 bg-slate-800/50 border-slate-700 text-slate-400 cursor-not-allowed"
-                  />
+                  <Input placeholder="+55 11 99999-9999" value={telefone} onChange={(e) => setTelefone(e.target.value)}
+                    disabled className="pl-12 bg-slate-800/50 border-slate-700 text-slate-400 cursor-not-allowed" />
                 </div>
-                <p className="text-xs text-slate-500">
-                  Vinculado à sua conta Finax via WhatsApp
-                </p>
+                <p className="text-xs text-slate-500">Vinculado à sua conta Finax via WhatsApp</p>
               </div>
             </div>
           </motion.div>
 
           {/* Notifications */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+            className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all">
             <div className="flex items-center gap-3 mb-6">
               <div className="p-2.5 rounded-xl bg-indigo-500/10">
                 <Bell className="w-5 h-5 text-indigo-400" />
@@ -157,29 +225,19 @@ const Configuracoes = () => {
                 <p className="text-sm text-slate-500">Preferências de alertas</p>
               </div>
             </div>
-
             <div className="flex items-center justify-between p-4 bg-slate-800/30 rounded-xl">
               <div>
                 <p className="font-medium text-white">Notificações por WhatsApp</p>
-                <p className="text-sm text-slate-500">
-                  Receba lembretes e alertas de gastos
-                </p>
+                <p className="text-sm text-slate-500">Receba lembretes e alertas de gastos</p>
               </div>
-              <Switch 
-                checked={notificacoes} 
-                onCheckedChange={setNotificacoes}
-                className="data-[state=checked]:bg-indigo-500"
-              />
+              <Switch checked={notificacoes} onCheckedChange={setNotificacoes}
+                className="data-[state=checked]:bg-indigo-500" />
             </div>
           </motion.div>
 
           {/* Data & Privacy */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
+            className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-indigo-500/30 transition-all">
             <div className="flex items-center gap-3 mb-6">
               <div className="p-2.5 rounded-xl bg-indigo-500/10">
                 <Shield className="w-5 h-5 text-indigo-400" />
@@ -191,44 +249,51 @@ const Configuracoes = () => {
             </div>
 
             <div className="space-y-3">
-              <Button 
-                variant="outline" 
+              <Button variant="outline" 
                 className="w-full justify-start gap-3 bg-slate-800/30 border-slate-700 text-white hover:bg-slate-800/50" 
-                onClick={handleExport}
-              >
-                <Download className="w-5 h-5 text-indigo-400" />
-                Exportar meus dados
+                onClick={handleExport} disabled={exporting}>
+                {exporting ? <Loader2 className="w-5 h-5 animate-spin text-indigo-400" /> : <Download className="w-5 h-5 text-indigo-400" />}
+                {exporting ? 'Exportando...' : 'Exportar meus dados'}
               </Button>
-              <Button 
-                variant="outline" 
-                className="w-full justify-start gap-3 bg-slate-800/30 border-slate-700 text-red-400 hover:bg-red-500/10 hover:text-red-400"
-              >
-                <Trash2 className="w-5 h-5" />
-                Excluir todos os dados
-              </Button>
+
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline"
+                    className="w-full justify-start gap-3 bg-slate-800/30 border-slate-700 text-red-400 hover:bg-red-500/10 hover:text-red-400"
+                    disabled={deleting}>
+                    {deleting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Trash2 className="w-5 h-5" />}
+                    {deleting ? 'Excluindo...' : 'Excluir todos os dados'}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent className="bg-slate-900 border-slate-700">
+                  <AlertDialogHeader>
+                    <AlertDialogTitle className="text-white">⚠️ Excluir todos os dados?</AlertDialogTitle>
+                    <AlertDialogDescription className="text-slate-400">
+                      Essa ação é <strong className="text-red-400">irreversível</strong>. Todas as suas transações, 
+                      cartões, parcelamentos, metas e contas a pagar serão permanentemente removidos. 
+                      Recomendamos exportar seus dados antes.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel className="bg-slate-800 border-slate-700 text-white">Cancelar</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleDeleteAllData} className="bg-red-500 hover:bg-red-600 text-white">
+                      Sim, excluir tudo
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
           </motion.div>
 
           {/* Actions */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4 }}
-            className="flex flex-col sm:flex-row gap-4"
-          >
-            <Button 
-              onClick={handleSave}
-              className="flex-1 bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90"
-            >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
+            className="flex flex-col sm:flex-row gap-4">
+            <Button onClick={handleSave} className="flex-1 bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90">
               Salvar Configurações
             </Button>
-            <Button 
-              variant="outline"
-              onClick={handleLogout}
-              className="flex-1 border-red-500/30 text-red-400 hover:bg-red-500/10"
-            >
-              <LogOut className="w-4 h-4 mr-2" />
-              Sair
+            <Button variant="outline" onClick={handleLogout}
+              className="flex-1 border-red-500/30 text-red-400 hover:bg-red-500/10">
+              <LogOut className="w-4 h-4 mr-2" /> Sair
             </Button>
           </motion.div>
         </div>

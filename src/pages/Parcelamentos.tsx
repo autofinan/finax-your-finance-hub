@@ -2,6 +2,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { useParcelamentos } from '@/hooks/useParcelamentos';
 import { useCartoes } from '@/hooks/useCartoes';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -21,8 +23,9 @@ import { motion } from 'framer-motion';
 
 const Parcelamentos = () => {
   const { usuarioId } = useUsuarioId();
-  const { parcelamentos, parcelasAbertas, loading, addParcelamento, deleteParcelamento } = useParcelamentos(usuarioId || undefined);
+  const { parcelasAbertas, loading, addParcelamento, deleteParcelamento } = useParcelamentos(usuarioId || undefined);
   const { cartoes } = useCartoes(usuarioId || undefined);
+  const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
   const [descricao, setDescricao] = useState('');
   const [valorTotal, setValorTotal] = useState('');
@@ -40,14 +43,16 @@ const Parcelamentos = () => {
     e.preventDefault();
     if (!valorTotal || !numParcelas) return;
     if (metodo === 'cartao' && !cartaoId) return;
+    if (!usuarioId) return;
 
     const total = parseFloat(valorTotal);
     const parcelas = parseInt(numParcelas);
-    const valorParcela = total / parcelas;
+    const valorParcela = Math.round((total / parcelas) * 100) / 100;
 
     setFormLoading(true);
     try {
-      await addParcelamento({
+      // 1. Create the parcelamento record
+      const parcelamentoData = await addParcelamento({
         descricao,
         valor_total: total,
         num_parcelas: parcelas,
@@ -56,10 +61,79 @@ const Parcelamentos = () => {
         ativa: true,
         usuario_id: null,
       });
-      // TODO: If cartao, also create parcelas linked to card invoices
-      // TODO: If boleto, create contas_pagar entries
+
+      if (metodo === 'cartao' && parcelamentoData) {
+        // 2a. Create individual parcelas linked to the card
+        const hoje = new Date();
+        const parcelasToInsert = [];
+        for (let i = 0; i < parcelas; i++) {
+          const mesRef = new Date(hoje.getFullYear(), hoje.getMonth() + i + 1, 1);
+          parcelasToInsert.push({
+            parcelamento_id: parcelamentoData.id,
+            cartao_id: cartaoId,
+            usuario_id: usuarioId,
+            numero_parcela: i + 1,
+            total_parcelas: parcelas,
+            valor: valorParcela,
+            descricao: descricao || 'Parcelamento',
+            mes_referencia: mesRef.toISOString().split('T')[0],
+            status: 'pendente',
+          });
+        }
+
+        const { error: parcelasError } = await supabase
+          .from('parcelas')
+          .insert(parcelasToInsert);
+
+        if (parcelasError) {
+          console.error('Erro ao criar parcelas:', parcelasError);
+          toast({ title: 'Aviso', description: 'Parcelamento criado, mas houve erro ao vincular parcelas ao cartão.', variant: 'destructive' });
+        }
+
+        // 2b. Deduct credit limit from the card
+        const cartaoSelecionado = cartoes.find(c => c.id === cartaoId);
+        if (cartaoSelecionado) {
+          const novoLimite = (cartaoSelecionado.limite_disponivel || 0) - total;
+          const { error: limiteError } = await supabase
+            .from('cartoes_credito')
+            .update({ limite_disponivel: novoLimite })
+            .eq('id', cartaoId);
+
+          if (limiteError) {
+            console.error('Erro ao deduzir limite:', limiteError);
+          }
+        }
+
+        toast({ title: '✅ Parcelamento no Cartão', description: `${parcelas}x de ${formatCurrency(valorParcela)} vinculadas ao cartão. Limite atualizado.` });
+      } else if (metodo === 'boleto' && parcelamentoData) {
+        // 2c. Create gastos_recorrentes entry for boleto
+        const { error: recorrenteError } = await supabase
+          .from('gastos_recorrentes')
+          .insert({
+            usuario_id: usuarioId,
+            descricao: descricao || 'Parcelamento Boleto',
+            categoria: 'Outros',
+            valor_parcela: valorParcela,
+            valor_total: total,
+            num_parcelas: parcelas,
+            parcela_atual: 1,
+            tipo_recorrencia: 'mensal',
+            ativo: true,
+            origem: 'parcelamento',
+          });
+
+        if (recorrenteError) {
+          console.error('Erro ao criar gasto recorrente:', recorrenteError);
+          toast({ title: 'Aviso', description: 'Parcelamento criado, mas houve erro ao registrar como gasto recorrente.', variant: 'destructive' });
+        } else {
+          toast({ title: '✅ Parcelamento por Boleto', description: `${parcelas}x de ${formatCurrency(valorParcela)} registrado como gasto recorrente.` });
+        }
+      }
+
       resetForm();
       setFormOpen(false);
+    } catch (err) {
+      console.error('Erro ao criar parcelamento:', err);
     } finally {
       setFormLoading(false);
     }
