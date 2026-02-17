@@ -8,21 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Plus, Trash2, CreditCard, Calendar, DollarSign, TrendingUp, AlertTriangle, Pencil, Receipt } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -42,17 +32,18 @@ const Cartoes = () => {
   const [diaVencimento, setDiaVencimento] = useState('');
   const [formLoading, setFormLoading] = useState(false);
   
-  // Fatura detail modal state
   const [detailModal, setDetailModal] = useState<{
     open: boolean;
     faturaId: string;
+    cartaoId: string;
     cartaoNome: string;
     mes: number | null;
     ano: number | null;
+    diaFechamento: number | null;
     valorTotal: number | null;
     valorPago: number | null;
     status: string | null;
-  }>({ open: false, faturaId: '', cartaoNome: '', mes: null, ano: null, valorTotal: null, valorPago: null, status: null });
+  }>({ open: false, faturaId: '', cartaoId: '', cartaoNome: '', mes: null, ano: null, diaFechamento: null, valorTotal: null, valorPago: null, status: null });
 
   useEffect(() => {
     if (editingCard) {
@@ -129,9 +120,11 @@ const Cartoes = () => {
     setDetailModal({
       open: true,
       faturaId: fatura.id!,
+      cartaoId: cartao.id,
       cartaoNome: cartao.nome || 'Cartão',
       mes: fatura.mes,
       ano: fatura.ano,
+      diaFechamento: cartao.dia_fechamento ?? null,
       valorTotal: fatura.valor_total,
       valorPago: fatura.valor_pago ?? 0,
       status: fatura.status,
@@ -327,9 +320,11 @@ const Cartoes = () => {
         open={detailModal.open}
         onClose={() => setDetailModal(prev => ({ ...prev, open: false }))}
         faturaId={detailModal.faturaId}
+        cartaoId={detailModal.cartaoId}
         cartaoNome={detailModal.cartaoNome}
         mes={detailModal.mes}
         ano={detailModal.ano}
+        diaFechamento={detailModal.diaFechamento}
         valorTotal={detailModal.valorTotal}
         valorPago={detailModal.valorPago}
         status={detailModal.status}
