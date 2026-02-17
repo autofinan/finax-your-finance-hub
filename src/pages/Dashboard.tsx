@@ -11,10 +11,10 @@ import { useGastosRecorrentes } from '@/hooks/useGastosRecorrentes';
 import { usePlanoStatus } from '@/hooks/usePlanoStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
-import { Wallet, TrendingUp, TrendingDown, RefreshCcw, Plus, Sparkles, Target, Calendar, PieChart, Bot, X, Send } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, RefreshCcw, Plus, Sparkles, Calendar } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import { TransactionForm } from '@/components/transacoes/TransactionForm';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { 
   AreaChart, 
   Area, 
@@ -32,8 +32,6 @@ const Dashboard = () => {
   const { gastos } = useGastosRecorrentes(usuarioId || undefined);
   const { planoStatus } = usePlanoStatus();
   const [formOpen, setFormOpen] = useState(false);
-  const [finBotOpen, setFinBotOpen] = useState(false);
-  const [finInput, setFinInput] = useState('');
 
   const stats = useMemo(() => {
     const mesAtual = new Date().getMonth();
@@ -275,87 +273,6 @@ const Dashboard = () => {
           </div>
         </div>
       </div>
-
-      {/* FIN BOT FLUTUANTE */}
-      <AnimatePresence>
-        {finBotOpen ? (
-          <motion.div
-            initial={{ opacity: 0, x: 400 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 400 }}
-            className="fixed right-6 bottom-6 w-96 h-[600px] bg-slate-950 border border-indigo-500/30 rounded-2xl shadow-2xl shadow-indigo-500/20 z-50 flex flex-col overflow-hidden"
-          >
-            {/* Header */}
-            <div className="p-4 border-b border-white/10 bg-gradient-to-r from-indigo-950 to-blue-950">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="relative">
-                    <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-blue-500 rounded-xl flex items-center justify-center">
-                      <Bot className="w-6 h-6 text-white" />
-                    </div>
-                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-slate-950 rounded-full" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-white">Fin AI</h3>
-                    <p className="text-xs text-emerald-400 font-bold">Online</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setFinBotOpen(false)}
-                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                >
-                  <X className="w-5 h-5 text-slate-400" />
-                </button>
-              </div>
-            </div>
-
-            {/* Chat Area */}
-            <div className="flex-1 p-4 overflow-y-auto">
-              <div className="space-y-4">
-                <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center flex-shrink-0">
-                    <Bot className="w-4 h-4 text-indigo-400" />
-                  </div>
-                  <div className="flex-1 p-3 bg-white/5 rounded-xl">
-                    <p className="text-sm text-slate-300">
-                      Olá! Sou o Fin, seu assistente financeiro. Como posso ajudar você hoje?
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Input */}
-            <div className="p-4 border-t border-white/10">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={finInput}
-                  onChange={(e) => setFinInput(e.target.value)}
-                  placeholder="Pergunte ao Fin..."
-                  className="flex-1 bg-slate-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                />
-                <button className="p-3 bg-gradient-to-r from-indigo-500 to-blue-500 rounded-xl text-white hover:shadow-lg hover:shadow-indigo-500/30 transition-all">
-                  <Send className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        ) : (
-          <motion.button
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            onClick={() => setFinBotOpen(true)}
-            className="fixed right-6 bottom-6 w-16 h-16 bg-gradient-to-br from-indigo-500 to-blue-500 rounded-2xl shadow-2xl shadow-indigo-500/40 flex items-center justify-center z-50 hover:scale-110 transition-transform group"
-          >
-            <Bot className="w-8 h-8 text-white" />
-            <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
-              <span className="text-[10px] font-bold text-white">3</span>
-            </div>
-            <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-indigo-400 to-blue-400 opacity-0 group-hover:opacity-20 transition-opacity" />
-          </motion.button>
-        )}
-      </AnimatePresence>
 
       <TransactionForm
         open={formOpen}
