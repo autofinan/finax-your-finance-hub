@@ -63,11 +63,54 @@ const Parcelamentos = () => {
       });
 
       if (metodo === 'cartao' && parcelamentoData) {
-        // 2a. Create individual parcelas linked to the card
+        // 2a. Create individual parcelas linked to the card AND faturas
         const hoje = new Date();
         const parcelasToInsert = [];
         for (let i = 0; i < parcelas; i++) {
           const mesRef = new Date(hoje.getFullYear(), hoje.getMonth() + i + 1, 1);
+          const mesFatura = mesRef.getMonth() + 1; // 1-12
+          const anoFatura = mesRef.getFullYear();
+          
+          // Find or create the fatura for this month/card
+          let faturaId: string | null = null;
+          const { data: faturaExistente } = await supabase
+            .from('faturas_cartao')
+            .select('id')
+            .eq('cartao_id', cartaoId)
+            .eq('mes', mesFatura)
+            .eq('ano', anoFatura)
+            .maybeSingle();
+          
+          if (faturaExistente) {
+            faturaId = faturaExistente.id;
+            // Update fatura total - fetch current value first
+            const { data: faturaAtual } = await supabase
+              .from('faturas_cartao')
+              .select('valor_total')
+              .eq('id', faturaExistente.id)
+              .single();
+            if (faturaAtual) {
+              await supabase
+                .from('faturas_cartao')
+                .update({ valor_total: (Number(faturaAtual.valor_total) || 0) + valorParcela })
+                .eq('id', faturaExistente.id);
+            }
+          } else {
+            const { data: novaFatura } = await supabase
+              .from('faturas_cartao')
+              .insert({
+                cartao_id: cartaoId,
+                usuario_id: usuarioId,
+                mes: mesFatura,
+                ano: anoFatura,
+                valor_total: valorParcela,
+                status: 'aberta',
+              })
+              .select('id')
+              .single();
+            if (novaFatura) faturaId = novaFatura.id;
+          }
+          
           parcelasToInsert.push({
             parcelamento_id: parcelamentoData.id,
             cartao_id: cartaoId,
@@ -78,6 +121,7 @@ const Parcelamentos = () => {
             descricao: descricao || 'Parcelamento',
             mes_referencia: mesRef.toISOString().split('T')[0],
             status: 'pendente',
+            fatura_id: faturaId,
           });
         }
 
@@ -106,27 +150,31 @@ const Parcelamentos = () => {
 
         toast({ title: '✅ Parcelamento no Cartão', description: `${parcelas}x de ${formatCurrency(valorParcela)} vinculadas ao cartão. Limite atualizado.` });
       } else if (metodo === 'boleto' && parcelamentoData) {
-        // 2c. Create gastos_recorrentes entry for boleto
-        const { error: recorrenteError } = await supabase
-          .from('gastos_recorrentes')
-          .insert({
+        // 2c. Create N contas_pagar entries for boleto (one per month)
+        const hoje = new Date();
+        const contasToInsert = [];
+        for (let i = 0; i < parcelas; i++) {
+          const diaVencimento = hoje.getDate(); // usar dia atual como vencimento
+          contasToInsert.push({
             usuario_id: usuarioId,
-            descricao: descricao || 'Parcelamento Boleto',
-            categoria: 'Outros',
-            valor_parcela: valorParcela,
-            valor_total: total,
-            num_parcelas: parcelas,
-            parcela_atual: 1,
-            tipo_recorrencia: 'mensal',
-            ativo: true,
-            origem: 'parcelamento',
+            nome: `${descricao || 'Parcelamento Boleto'} (${i + 1}/${parcelas})`,
+            tipo: 'variavel' as const,
+            dia_vencimento: diaVencimento,
+            valor_estimado: valorParcela,
+            lembrar_dias_antes: 3,
+            ativa: true,
           });
+        }
 
-        if (recorrenteError) {
-          console.error('Erro ao criar gasto recorrente:', recorrenteError);
-          toast({ title: 'Aviso', description: 'Parcelamento criado, mas houve erro ao registrar como gasto recorrente.', variant: 'destructive' });
+        const { error: contasError } = await supabase
+          .from('contas_pagar')
+          .insert(contasToInsert);
+
+        if (contasError) {
+          console.error('Erro ao criar contas a pagar:', contasError);
+          toast({ title: 'Aviso', description: 'Parcelamento criado, mas houve erro ao registrar as contas a pagar.', variant: 'destructive' });
         } else {
-          toast({ title: '✅ Parcelamento por Boleto', description: `${parcelas}x de ${formatCurrency(valorParcela)} registrado como gasto recorrente.` });
+          toast({ title: '✅ Parcelamento por Boleto', description: `${parcelas} contas a pagar criadas de ${formatCurrency(valorParcela)} cada.` });
         }
       }
 
@@ -156,12 +204,6 @@ const Parcelamentos = () => {
   return (
     <AppLayout>
       <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 p-6 lg:p-8">
-        <div className="fixed inset-0 pointer-events-none overflow-hidden">
-          <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full" />
-          <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full" />
-        </div>
-        <div className="fixed inset-0 bg-[linear-gradient(rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
-
         <div className="relative z-10 max-w-[1800px] mx-auto space-y-6">
           {/* Header */}
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
