@@ -153,7 +153,7 @@ export function Sidebar() {
 
         {/* Version */}
         <p className="text-center text-xs text-slate-600 font-medium">
-          Finax v2.0 • 2024
+          Finax v3.0 • 2026
         </p>
       </div>
     </aside>
