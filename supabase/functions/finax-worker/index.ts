@@ -19,6 +19,7 @@ import {
   normalizeAISlots, 
   callAIForDecision, 
   decisionEngine,
+  assertDomainIsolation,
   type ExtractedSlots,
   type SemanticResult,
   type ActiveAction
