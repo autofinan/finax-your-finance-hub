@@ -53,8 +53,7 @@ import { getActiveAction, createAction, updateAction, closeAction, cancelAction,
 import { ensurePerfilCliente } from "./utils/profile.ts";
 import { setBudget, checkBudgetAfterExpense } from "./intents/budget.ts";
 import { checkAndSendPendingReport, gerarTextoRelatorioInline } from "./intents/reports-handler.ts";
-import { registerExpense, handleExpenseResult } from "./intents/expense-inline.ts";
-
+import { registerExpenseInline, handleExpenseResult, getMonthlySummaryInline } from "./intents/expense-inline.ts";
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
 // ============================================================================
