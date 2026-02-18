@@ -37,6 +37,7 @@ import {
 import { learnMerchantPattern } from "./memory/patterns.ts";
 import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
 import { normalizeText, detectQueryScope, detectTimeRange, isNumericOnly, parseNumericValue, logDecision, extractSlotValue } from "./utils/helpers.ts";
+import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
@@ -1476,137 +1477,6 @@ async function cancelAction(userId: string): Promise<boolean> {
 }
 
 // Função removida - substituída por assertDomainIsolation()
-
-// ============================================================================
-// 📱 MESSAGING
-// ============================================================================
-
-async function sendWhatsAppMeta(to: string, text: string): Promise<boolean> {
-  try {
-    const cleanNumber = to.replace(/\D/g, "");
-    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ messaging_product: "whatsapp", to: cleanNumber, type: "text", text: { body: text } }),
-    });
-    return response.ok;
-  } catch (error) {
-    console.error("[Meta] Erro:", error);
-    return false;
-  }
-}
-
-async function sendWhatsAppVonage(to: string, text: string): Promise<boolean> {
-  try {
-    const cleanNumber = to.replace(/\D/g, "");
-    const response = await fetch("https://messages-sandbox.nexmo.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Basic ${btoa(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`)}` },
-      body: JSON.stringify({ from: VONAGE_WHATSAPP_NUMBER, to: cleanNumber, message_type: "text", text: text, channel: "whatsapp" }),
-    });
-    return response.ok;
-  } catch (error) {
-    console.error("[Vonage] Erro:", error);
-    return false;
-  }
-}
-
-async function sendMessage(to: string, text: string, source: MessageSource): Promise<boolean> {
-  if (source === "vonage") return sendWhatsAppVonage(to, text);
-  return sendWhatsAppMeta(to, text);
-}
-
-async function sendButtons(to: string, bodyText: string, buttons: Array<{ id: string; title: string }>, source: MessageSource): Promise<boolean> {
-  if (source !== "meta") {
-    const fallbackText = bodyText + "\n\n" + buttons.map((b, i) => `${i + 1}. ${b.title}`).join("\n");
-    return sendMessage(to, fallbackText, source);
-  }
-
-  try {
-    const cleanNumber = to.replace(/\D/g, "");
-    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: cleanNumber,
-        type: "interactive",
-        interactive: {
-          type: "button",
-          body: { text: bodyText },
-          action: { buttons: buttons.slice(0, 3).map(b => ({ type: "reply", reply: { id: b.id, title: b.title.slice(0, 20) } })) }
-        }
-      }),
-    });
-    return response.ok;
-  } catch (error) {
-    console.error("[Meta Buttons] Erro:", error);
-    return sendMessage(to, bodyText, source);
-  }
-}
-
-// ============================================================================
-// 📋 WHATSAPP LIST MESSAGE (para 4+ opções)
-// ============================================================================
-
-async function sendListMessage(
-  to: string, 
-  bodyText: string, 
-  buttonText: string,
-  sections: Array<{ title: string; rows: Array<{ id: string; title: string; description?: string }> }>,
-  source: MessageSource
-): Promise<boolean> {
-  if (source !== "meta") {
-    // Fallback para texto simples
-    const fallbackRows = sections.flatMap(s => s.rows);
-    const fallbackText = bodyText + "\n\n" + fallbackRows.map((r, i) => `${i + 1}. ${r.title}${r.description ? ` - ${r.description}` : ""}`).join("\n");
-    return sendMessage(to, fallbackText, source);
-  }
-
-  try {
-    const cleanNumber = to.replace(/\D/g, "");
-    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: cleanNumber,
-        type: "interactive",
-        interactive: {
-          type: "list",
-          body: { text: bodyText },
-          action: {
-            button: buttonText.slice(0, 20),
-            sections: sections.map(s => ({
-              title: s.title.slice(0, 24),
-              rows: s.rows.map(r => ({
-                id: r.id.slice(0, 200),
-                title: r.title.slice(0, 24),
-                description: r.description?.slice(0, 72) || undefined
-              }))
-            }))
-          }
-        }
-      }),
-    });
-    
-    if (!response.ok) {
-      console.error(`📋 [LIST] Erro:`, await response.text());
-      // Fallback para texto
-      const fallbackRows = sections.flatMap(s => s.rows);
-      const fallbackText = bodyText + "\n\n" + fallbackRows.map((r, i) => `${i + 1}. ${r.title}${r.description ? ` - ${r.description}` : ""}`).join("\n");
-      return sendMessage(to, fallbackText, source);
-    }
-    
-    console.log(`📋 [LIST] Lista enviada para ${cleanNumber}`);
-    return true;
-  } catch (error) {
-    console.error("[Meta List] Erro:", error);
-    const fallbackRows = sections.flatMap(s => s.rows);
-    const fallbackText = bodyText + "\n\n" + fallbackRows.map((r, i) => `${i + 1}. ${r.title}`).join("\n");
-    return sendMessage(to, fallbackText, source);
-  }
-}
 
 // ============================================================================
 // 🎤 MÍDIA (AUDIO/IMAGEM)
