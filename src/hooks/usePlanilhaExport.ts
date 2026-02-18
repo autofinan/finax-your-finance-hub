@@ -179,9 +179,9 @@ export function usePlanilhaExport() {
       
       if (typeof valor === 'number') {
         const valCell = sheet.getCell(row, 2);
-        if (label.includes('Receitas')) {
+        if (String(label).includes('Receitas')) {
           applyStyle(valCell, CELL_STYLES.currencyPositive);
-        } else if (label.includes('Despesas')) {
+        } else if (String(label).includes('Despesas')) {
           applyStyle(valCell, CELL_STYLES.currencyNegative);
         } else {
           applyStyle(valCell, valor >= 0 ? CELL_STYLES.currencyPositive : CELL_STYLES.currencyNegative);
