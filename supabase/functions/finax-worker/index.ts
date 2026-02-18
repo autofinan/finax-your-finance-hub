@@ -36,6 +36,7 @@ import {
 } from "./ui/slot-prompts.ts";
 import { learnMerchantPattern } from "./memory/patterns.ts";
 import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
+import { normalizeText, detectQueryScope, detectTimeRange, isNumericOnly, parseNumericValue, logDecision, extractSlotValue } from "./utils/helpers.ts";
 
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
@@ -149,74 +150,6 @@ interface ActiveAction {
 // SLOT_REQUIREMENTS, SLOT_PROMPTS, PAYMENT_ALIASES, SOURCE_ALIASES,
 // hasAllRequiredSlots, getMissingSlots → importados no topo do arquivo
 // ============================================================================
-
-// ============================================================================
-// 🔧 UTILITIES
-// ============================================================================
-
-function normalizeText(text: string): string {
-  return (text || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w\s]/g, "")
-    .trim();
-}
-
-// v3.2: Detecta query_scope a partir do texto normalizado
-function detectQueryScope(normalized: string): string {
-  // ✅ FIX WA-4: Detectar "relatório semanal" ANTES do fallback
-  if ((normalized.includes("relatorio") || normalized.includes("report")) && normalized.includes("semanal")) return "weekly_report";
-  // ✅ Detectar "detalhar fatura" / "fatura de março" / "o que tem na fatura"
-  if (normalized.includes("fatura") && (normalized.includes("detalh") || normalized.includes("tem na") || normalized.includes("abrir") || normalized.includes("ver"))) return "invoice_detail";
-  if (normalized.includes("detalh") && normalized.includes("fatura")) return "invoice_detail";
-  // ✅ Detectar "previsão fatura" / "fatura mes que vem" / "fatura futura"
-  if (normalized.includes("fatura") && (normalized.includes("futur") || normalized.includes("proximo") || normalized.includes("proxima") || normalized.includes("mes que vem") || normalized.includes("previsao"))) return "invoice_future";
-  if (normalized.includes("cartao") || normalized.includes("cartoes") || normalized.includes("limite")) return "cards";
-  if (normalized.includes("pendente") || normalized.includes("pendentes")) return "pending";
-  if (normalized.includes("categoria") || normalized.includes("categorias")) return "category";
-  if (normalized.includes("recebi") || normalized.includes("entrada") || normalized.includes("entrou")) return "income";
-  if (normalized.includes("recorrente") || normalized.includes("assinatura")) return "recurring";
-  if (normalized.includes("parcelamento") || normalized.includes("parcela") || normalized.includes("parcelado")) return "installments";
-  if (normalized.includes("meta") || normalized.includes("metas") || normalized.includes("poupanca")) return "goals";
-  if (normalized.includes("gastei") || normalized.includes("gasto")) return "expenses";
-  // ✅ Fatura genérica (sem "detalhar") → detalhar por padrão
-  if (normalized.includes("fatura")) return "invoice_detail";
-  return "summary";
-}
-
-// v3.2: Detecta time_range a partir do texto normalizado
-function detectTimeRange(normalized: string): string {
-  if (normalized.includes("hoje")) return "today";
-  if (normalized.includes("semana") || normalized.includes("semanal")) return "week";
-  if (normalized.includes("mes") || normalized.includes("mensal")) return "month";
-  return "month";
-}
-
-function isNumericOnly(text: string): boolean {
-  // REGEX ESTRITA: A string ORIGINAL deve conter APENAS números/vírgula/ponto
-  // "50" → true | "50,00" → true | "50.00" → true
-  // "Gastei 50" → false | "50 reais" → false
-  const trimmed = text.trim();
-  if (!/^[\d\.,]+$/.test(trimmed)) return false;
-  
-  const normalized = trimmed.replace(",", ".");
-  const value = parseFloat(normalized);
-  return !isNaN(value) && value > 0;
-}
-
-function parseNumericValue(text: string): number | null {
-  return parseBrazilianAmount(text);
-}
-
-function logDecision(data: { messageId: string; decision: string; details?: any }) {
-  logger.info({
-    component: "decision",
-    messageId: data.messageId,
-    intent: data.decision,
-    ...data.details
-  }, "Decision logged");
-}
 
 // ============================================================================
 // 📷 ANÁLISE DE IMAGEM COM GEMINI VISION
@@ -1406,39 +1339,6 @@ async function decisionEngine(
     },
     shouldBlockLegacyFlow: aiResult.confidence >= 0.5
   };
-}
-
-function extractSlotValue(message: string, slotType: string): any {
-  const normalized = normalizeText(message);
-  
-  switch (slotType) {
-    case "amount":
-    case "value":
-      const numMatch = message.match(/(\d+[.,]?\d*)/);
-      if (numMatch) return parseBrazilianAmount(numMatch[1]);
-      return null;
-      
-    case "payment_method":
-      if (normalized.includes("pix")) return "pix";
-      if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
-      if (normalized.includes("credito") || normalized.includes("crédito")) return "credito";
-      if (normalized.includes("dinheiro")) return "dinheiro";
-      return null;
-      
-    case "source":
-      if (normalized.includes("pix")) return "pix";
-      if (normalized.includes("dinheiro")) return "dinheiro";
-      if (normalized.includes("transfer")) return "transferencia";
-      return null;
-      
-    case "type_choice":
-      if (normalized.includes("gasto") || normalized.includes("gastei") || normalized.includes("paguei")) return "expense";
-      if (normalized.includes("entrada") || normalized.includes("recebi") || normalized.includes("ganhei")) return "income";
-      return null;
-      
-    default:
-      return message.trim() || null;
-  }
 }
 
 // ============================================================================
