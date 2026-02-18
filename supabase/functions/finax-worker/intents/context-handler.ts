@@ -84,9 +84,19 @@ export async function createUserContext(userId: string, slots: ExtractedSlots): 
       endDate.setDate(endDate.getDate() + 1);
     }
   } else if (slots.start_date && slots.end_date) {
-    startDate = new Date(slots.start_date);
-    endDate = new Date(slots.end_date);
-  }
+  const parseDateStr = (str: string): Date => {
+    const parts = str.split(/[\/\-]/);
+    if (parts.length >= 2) {
+      const day = parseInt(parts[0]);
+      const month = parseInt(parts[1]) - 1;
+      const year = parts[2] ? parseInt(parts[2]) : 2026;
+      return new Date(year, month, day);
+    }
+    return new Date(str);
+  };
+  startDate = parseDateStr(slots.start_date);
+  endDate = parseDateStr(slots.end_date);
+}
   
   console.log(`📍 [CONTEXT] Criando: ${label} de ${startDate.toISOString()} até ${endDate.toISOString()}`);
   
