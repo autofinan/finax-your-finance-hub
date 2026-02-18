@@ -2562,6 +2562,20 @@ async function processarJob(job: any): Promise<void> {
       // CASO 4: HANDLED MAS SEM SLOT PREENCHIDO (erro de entrada)
       // ========================================================================
       if (contextResult.handled && contextResult.message) {
+        // Se o slot pendente tem botões (ex: payment_method), reenviar com botões
+        if (activeAction.pending_slot) {
+          const { getSlotPrompt } = await import("./fsm/context-handler.ts");
+          const prompt = getSlotPrompt(activeAction.pending_slot);
+          if (prompt.buttons) {
+            await sendButtons(
+              payload.phoneNumber, 
+              contextResult.message + "\n\n" + prompt.text, 
+              prompt.buttons, 
+              payload.messageSource
+            );
+            return;
+          }
+        }
         await sendMessage(payload.phoneNumber, contextResult.message, payload.messageSource);
         return;
       }
