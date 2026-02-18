@@ -46,7 +46,11 @@ import {
 } from "./ui/slot-prompts.ts";
 import { learnMerchantPattern } from "./memory/patterns.ts";
 import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
-import { normalizeText, detectQueryScope, detectTimeRange, isNumericOnly, parseNumericValue, logDecision, extractSlotValue } from "./utils/helpers.ts";
+import { 
+  normalizeText, detectQueryScope, detectTimeRange, 
+  isNumericOnly, parseNumericValue, logDecision, extractSlotValue,
+  getLastTransaction, updateTransactionPaymentMethod, getMonthlySummary
+} from "./utils/helpers.ts";
 import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 import { analyzeImageWithGemini, downloadWhatsAppMedia, transcreverAudio, type OCRResult } from "./utils/media.ts";
 import { getActiveAction, createAction, updateAction, closeAction, cancelAction } from "./fsm/action-manager.ts";
@@ -59,6 +63,8 @@ import { categorizeDescription } from "./ai/categorizer.ts";
 import { registerRecurring, tryRegisterRecurring, findRecurringByName, listActiveRecurrings, cancelRecurring } from "./intents/recurring-handler.ts";
 import { listCardsForUser, updateCardLimit, queryCardLimits, queryCardExpenses, queryContextExpenses } from "./intents/card-queries.ts";
 import { getActiveContext, createUserContext, closeUserContext, linkTransactionToContext } from "./intents/context-handler.ts";
+import { generateChatResponse } from "./intents/chat-handler.ts";
+
 
 // DecisionOutput type used by processarJob
 interface DecisionOutput {
@@ -238,89 +244,6 @@ async function updateTransactionPaymentMethod(txId: string, newMethod: string): 
     success: true,
     message: `✅ *Corrigido!*\n\n💸 R$ ${tx.valor?.toFixed(2)} agora é *${paymentEmoji} ${newMethod}*`
   };
-}
-
-// ============================================================================
-// 💬 CHAT HANDLER - Consultor Financeiro Conversacional
-// ============================================================================
-
-async function generateChatResponse(
-  userMessage: string,
-  financialSummary: string,
-  activeContext: string | null,
-  userName: string
-): Promise<string> {
-  const contextInfo = activeContext 
-    ? `O usuário está no meio de: ${activeContext}` 
-    : "";
-  
-  const systemPrompt = `Você é o Finax, consultor financeiro pessoal do ${userName}.
-
-## TOM DE VOZ (OBRIGATÓRIO)
-- Seja: objetivo, claro, respeitoso, profissional.
-- Use português brasileiro natural, mas SEM exageros emocionais.
-- Seja direto e útil, sem ser frio ou robótico.
-
-## O QUE NUNCA FAZER
-- NÃO use gírias como "Putz", "Cara", "Mano", "Nossa"
-- NÃO seja excessivamente emotivo ou dramático
-- NÃO use frases como "a gente precisa dar um jeito"
-- NÃO assuma que a situação é ruim sem dados claros
-- NÃO personifique demais ("eu também fico preocupado")
-- NÃO use mais de 2-3 emojis por resposta
-
-## O QUE SEMPRE FAZER
-- Cite dados CONCRETOS quando disponíveis
-- Seja direto nas recomendações
-- Use linguagem profissional mas acessível
-- Limite resposta a 2-3 parágrafos curtos
-- Se não tiver dados suficientes, sugira que registre mais gastos
-- Se a mensagem for ambígua, pergunte em vez de adivinhar
-
-CONTEXTO FINANCEIRO DO USUÁRIO:
-${financialSummary}
-${contextInfo}
-
-VOCÊ PODE:
-- Analisar a situação financeira com base nos dados
-- Dar dicas práticas de economia
-- Sugerir estratégias de orçamento
-- Responder perguntas sobre finanças pessoais
-- Identificar padrões de gastos`;
-
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage }
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      console.error(`💬 [CHAT] API Error: ${response.status}`);
-      return "Puxa, tive um problema aqui 😅 Mas me conta: o que você quer saber sobre suas finanças?";
-    }
-
-    const data = await response.json();
-    const chatResponse = data.choices?.[0]?.message?.content;
-    
-    if (!chatResponse) {
-      return "Vou analisar isso pra você! 📊 Me conta mais detalhes?";
-    }
-    
-    return chatResponse;
-  } catch (err) {
-    console.error(`💬 [CHAT] Exception:`, err);
-    return "Ops, algo deu errado por aqui 😕 Mas pode me perguntar de novo!";
-  }
 }
 
 // ============================================================================
@@ -2766,58 +2689,7 @@ async function processarJob(job: any): Promise<void> {
       return;
     }
     
-    // ========================================================================
-    // 💳 CARD EVENT - Contrato: required = ["card", "value"]
-    // ========================================================================
-    // REGRA ABSOLUTA: card_event NUNCA entra em fluxo de expense/income
-    // ========================================================================
-    if (decision.actionType === "card_event") {
-      const slots = decision.slots;
-      
-      // ✅ EXECUÇÃO DIRETA: hasAllRequiredSlots = true
-      if (hasAllRequiredSlots("card_event", slots)) {
-        const result = await updateCardLimit(userId, slots.card!, slots.value!);
-        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-        return;
-      }
-      
-      // ❌ FALTA SLOT OBRIGATÓRIO
-      const missing = getMissingSlots("card_event", slots);
-      
-      // Se falta cartão, listar opções com botões
-      if (missing.includes("card")) {
-        const cards = await listCardsForUser(userId);
-        if (cards.length === 0) {
-          await sendMessage(payload.phoneNumber, "Você não tem cartões cadastrados 💳", payload.messageSource);
-          return;
-        }
-        if (cards.length <= 3) {
-          const cardButtons = cards.map(c => ({
-            id: `card_${c.id}`,
-            title: (c.nome || "Cartão").slice(0, 20)
-          }));
-          await sendButtons(payload.phoneNumber, "Qual cartão atualizar?", cardButtons, payload.messageSource);
-        } else {
-          const sections = [{
-            title: "Seus cartões",
-            rows: cards.map(c => ({
-              id: `card_${c.id}`,
-              title: (c.nome || "Cartão").slice(0, 24)
-            }))
-          }];
-          await sendListMessage(payload.phoneNumber, "Qual cartão atualizar?", "Selecionar", sections, payload.messageSource);
-        }
-        return;
-      }
-      
-      // Se falta valor
-      if (missing.includes("value")) {
-        await sendMessage(payload.phoneNumber, `Qual o novo limite do *${slots.card}*?`, payload.messageSource);
-        return;
-      }
-      
-      return;
-    }
+    c
     
     // ========================================================================
     // 💳 ADD_CARD - Registrar NOVO cartão de crédito
