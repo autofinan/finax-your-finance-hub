@@ -49,11 +49,43 @@ import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
 import { normalizeText, detectQueryScope, detectTimeRange, isNumericOnly, parseNumericValue, logDecision, extractSlotValue } from "./utils/helpers.ts";
 import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 import { analyzeImageWithGemini, downloadWhatsAppMedia, transcreverAudio, type OCRResult } from "./utils/media.ts";
-import { getActiveAction, createAction, updateAction, closeAction, cancelAction, type ActiveAction } from "./fsm/action-manager.ts";
+import { getActiveAction, createAction, updateAction, closeAction, cancelAction } from "./fsm/action-manager.ts";
 import { ensurePerfilCliente } from "./utils/profile.ts";
 import { setBudget, checkBudgetAfterExpense } from "./intents/budget.ts";
 import { checkAndSendPendingReport, gerarTextoRelatorioInline } from "./intents/reports-handler.ts";
 import { registerExpenseInline, handleExpenseResult, getMonthlySummaryInline } from "./intents/expense-inline.ts";
+import { registerIncome } from "./intents/income.ts";
+import { categorizeDescription } from "./ai/categorizer.ts";
+
+// DecisionOutput type used by processarJob
+interface DecisionOutput {
+  actionType: string;
+  confidence: number;
+  reasoning: string;
+  slots: ExtractedSlots;
+  missingSlots: string[];
+  shouldExecute: boolean;
+  shouldAsk: boolean;
+  question: string | null;
+  buttons: Array<{ id: string; title: string }> | null;
+  decisionId?: string;
+}
+
+// ============================================================================
+// 🔗 ALIASES para compatibilidade com nomes antigos usados no processarJob
+// ============================================================================
+const registerExpense = registerExpenseInline;
+const getMonthlySummary = getMonthlySummaryInline;
+
+// Wrapper para handleExpenseResult que injeta sendMessage/sendButtons
+async function handleExpenseResultCompat(
+  result: { success: boolean; message: string; isDuplicate?: boolean },
+  phoneNumber: string,
+  messageSource: "meta" | "vonage"
+): Promise<void> {
+  return handleExpenseResult(result, phoneNumber, messageSource, sendMessage, sendButtons);
+}
+
 // ============================================================================
 // 🏭 FINAX WORKER v6.0 - IA-FIRST ARCHITECTURE
 // ============================================================================
@@ -863,7 +895,7 @@ async function processarJob(job: any): Promise<void> {
       }
       
       // Verificar e enviar relatórios pendentes
-      await checkAndSendPendingReport(userId, payload.phoneNumber, payload.messageSource);
+      await checkAndSendPendingReport(userId, payload.phoneNumber, payload.messageSource, sendMessage);
     }
     
     // ========================================================================
@@ -913,7 +945,7 @@ async function processarJob(job: any): Promise<void> {
           // Se tem forma de pagamento, pode executar direto
           if (slots.payment_method) {
             const result = await registerExpense(userId, slots, undefined);
-            await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
+            await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
           } else {
             // Falta forma de pagamento → perguntar
             await createAction(userId, "expense", "expense", slots, "payment_method", payload.messageId);
@@ -1183,7 +1215,7 @@ async function processarJob(job: any): Promise<void> {
         
         // ✅ Se for duplicata detectada, enviar botões em vez de mensagem simples
         if ((result as any).isDuplicate) {
-          await handleExpenseResult(result as any, payload.phoneNumber, payload.messageSource);
+          await handleExpenseResultCompat(result as any, payload.phoneNumber, payload.messageSource);
         } else {
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         }
@@ -1564,7 +1596,7 @@ async function processarJob(job: any): Promise<void> {
               }, "payment_method", payload.messageId);
               
               // Enviar resultado do gasto atual + perguntar próximo
-              await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
+              await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
               await sendButtons(
                 payload.phoneNumber,
                 `💸 R$ ${nextExpense.amount.toFixed(2)} - ${nextExpense.description}\n\nComo você pagou?`,
@@ -1579,7 +1611,7 @@ async function processarJob(job: any): Promise<void> {
               .update({ status: "done" })
               .eq("user_id", userId)
               .in("status", ["collecting", "awaiting_input"]);
-            await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
+            await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
             console.log(`✅ [BUTTON] Expense registrado, todas actions fechadas`);
             return; // FIM - sem mais processamento
           }
@@ -2067,7 +2099,7 @@ async function processarJob(job: any): Promise<void> {
           }
           // Executar a transação com os slots já preenchidos
           const result = await registerExpense(userId, activeAction.slots as any, activeAction.id);
-          await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
+          await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
         } else {
           await sendMessage(payload.phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", payload.messageSource);
         }
@@ -2202,7 +2234,7 @@ async function processarJob(job: any): Promise<void> {
         
         if (activeAction.intent === "expense") {
           const result = await registerExpense(userId, updatedSlots, activeAction.id);
-          await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
+          await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
           return;
         } else if (activeAction.intent === "recurring") {
           const result = await registerRecurring(userId, updatedSlots, activeAction.id);
@@ -2400,7 +2432,7 @@ async function processarJob(job: any): Promise<void> {
           .in("status", ["collecting", "awaiting_input", "awaiting_confirmation"]);
         
         if ((result as any).isDuplicate) {
-          await handleExpenseResult(result as any, payload.phoneNumber, payload.messageSource);
+          await handleExpenseResultCompat(result as any, payload.phoneNumber, payload.messageSource);
         } else {
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
         }
@@ -3058,7 +3090,7 @@ async function processarJob(job: any): Promise<void> {
           await markAsExecuted(decision.decisionId, result.success ?? true);
         }
         
-        await handleExpenseResult(result, payload.phoneNumber, payload.messageSource);
+        await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
         
         // ✅ APÓS registrar expense que foi reclassificado de pay_bill → oferecer criar fatura
         if (slots.suggest_bill_after && slots.description) {
