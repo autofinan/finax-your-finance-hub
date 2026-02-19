@@ -48,6 +48,7 @@ import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
 import { 
   normalizeText, detectQueryScope, detectTimeRange, 
   isNumericOnly, parseNumericValue, logDecision, extractSlotValue,
+  getLastTransaction, updateTransactionPaymentMethod, getMonthlySummary
 } from "./utils/helpers.ts";
 import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 import { analyzeImageWithGemini, downloadWhatsAppMedia, transcreverAudio, type OCRResult } from "./utils/media.ts";
@@ -178,71 +179,6 @@ interface ActiveAction {
 // SLOT_REQUIREMENTS, SLOT_PROMPTS, PAYMENT_ALIASES, SOURCE_ALIASES,
 // hasAllRequiredSlots, getMissingSlots → importados no topo do arquivo
 // ============================================================================
-
-// ============================================================================
-// 🎯 CONTEXT MANAGER
-// ============================================================================
-
-async function listTransactionsForCancel(userId: string): Promise<any[]> {
-  const { data } = await supabase
-    .from("transacoes")
-    .select("id, valor, descricao, categoria, data, status")
-    .eq("usuario_id", userId)
-    .in("status", ["confirmada", "prevista"])
-    .order("created_at", { ascending: false })
-    .limit(5);
-  return data || [];
-}
-
-async function cancelTransaction(userId: string, txId: string): Promise<{ success: boolean; message: string }> {
-  const { data: tx } = await supabase.from("transacoes").select("*").eq("id", txId).eq("usuario_id", userId).single();
-  if (!tx) return { success: false, message: "Transação não encontrada 🤔" };
-  if (tx.status === "cancelada") return { success: false, message: "Já foi cancelada 👍" };
-  
-  await supabase.from("transacoes").update({ status: "cancelada" }).eq("id", txId);
-  return { success: true, message: `✅ *Transação cancelada!*\n\n🗑️ R$ ${tx.valor?.toFixed(2)} - ${tx.descricao || tx.categoria}` };
-}
-
-// ============================================================================
-// ✏️ EDIT/CORREÇÃO RÁPIDA - Buscar última transação e permitir correção
-// ============================================================================
-
-async function getLastTransaction(userId: string, withinMinutes: number = 2): Promise<any | null> {
-  const cutoff = new Date(Date.now() - withinMinutes * 60 * 1000).toISOString();
-  
-  const { data } = await supabase
-    .from("transacoes")
-    .select("*")
-    .eq("usuario_id", userId)
-    .eq("status", "confirmada")
-    .gte("created_at", cutoff)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
-  
-  return data || null;
-}
-
-async function updateTransactionPaymentMethod(txId: string, newMethod: string): Promise<{ success: boolean; message: string }> {
-  const { data: tx, error } = await supabase
-    .from("transacoes")
-    .update({ forma_pagamento: newMethod })
-    .eq("id", txId)
-    .select("valor, descricao, categoria")
-    .single();
-  
-  if (error || !tx) {
-    console.error("❌ [EDIT] Erro ao atualizar:", error);
-    return { success: false, message: "Não consegui corrigir 😕" };
-  }
-  
-  const paymentEmoji = newMethod === "pix" ? "📱" : newMethod === "debito" ? "💳" : newMethod === "credito" ? "💳" : "💵";
-  
-  return {
-    success: true,
-    message: `✅ *Corrigido!*\n\n💸 R$ ${tx.valor?.toFixed(2)} agora é *${paymentEmoji} ${newMethod}*`
-  };
-}
 
 // ============================================================================
 // 🔄 PROCESSAMENTO PRINCIPAL
