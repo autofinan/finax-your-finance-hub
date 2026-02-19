@@ -160,7 +160,7 @@ Exemplos:
 Ver dados, não modificar.
 Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões", "pendentes", "detalhe", "detalhar"
 Slots: query_scope, time_range, category
-- query_scope: summary | cards | expenses | income | pending | recurring | category
+- query_scope: summary | cards | expenses | income | pending | recurring | category | budgets
 - time_range: today | week | month | custom
 - category: alimentacao | transporte | moradia | lazer | saude | educacao | mercado | servicos | compras | outros
 Exemplos: 
@@ -175,6 +175,9 @@ Exemplos:
   - "Gastos com transporte" → query_scope: expenses, category: transporte, time_range: month
   - "Ver lazer" → query_scope: expenses, category: lazer, time_range: month
   - "Quanto gastei com alimentação?" → query_scope: expenses, category: alimentacao, time_range: month
+  - "Quais meus orçamentos?" → query_scope: budgets
+  - "Ver meus limites" → query_scope: budgets
+  - "Meus orçamentos" → query_scope: budgets
 
 ### query_alerts - Ver alertas
 Indicadores: "alertas", "avisos"

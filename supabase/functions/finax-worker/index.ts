@@ -1501,6 +1501,7 @@ async function processarJob(job: any): Promise<void> {
       }
       
       if (payload.buttonReplyId === "duplicate_confirm_no") {
+        // ✅ BUG #2 FIX: Funciona mesmo sem action ativa (expirada)
         if (activeAction) await closeAction(activeAction.id);
         await sendMessage(payload.phoneNumber, "Ok, não vou registrar! 👍", payload.messageSource);
         return;
@@ -3374,9 +3375,17 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         return;
       }
       
-      // Criar novo contexto
-      const result = await createUserContext(userId, slots);
-      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      // ✅ BUG #6 FIX: Try-catch para criação de contexto
+      try {
+        const result = await createUserContext(userId, slots);
+        if (decision.decisionId) {
+          await markAsExecuted(decision.decisionId, result.success, result.contextId);
+        }
+        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      } catch (ctxError) {
+        console.error(`❌ [CONTEXT] Exception ao criar contexto:`, ctxError);
+        await sendMessage(payload.phoneNumber, "Ops, erro ao criar contexto 😕\n\nTenta assim: \"vou viajar de 18/02 até 28/02\"", payload.messageSource);
+      }
       return;
     }
     
@@ -3738,6 +3747,37 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           ).join("\n");
           await sendMessage(payload.phoneNumber, `🔄 *Seus Recorrentes*\n\n${listaRec}`, payload.messageSource);
           return;
+        
+        // ✅ BUG #5 FIX: Handler para "quais meus orçamentos"
+        case "budgets":
+        case "budget":
+        case "orcamentos":
+        case "orcamento": {
+          console.log(`📊 [QUERY] Roteando para: BUDGETS`);
+          const { data: budgets } = await supabase
+            .from("orcamentos")
+            .select("*")
+            .eq("usuario_id", userId)
+            .eq("ativo", true)
+            .order("tipo", { ascending: true });
+          
+          if (!budgets || budgets.length === 0) {
+            await sendMessage(payload.phoneNumber, "💰 Você não tem orçamentos definidos.\n\n_Defina um: \"limite mensal 3000\" ou \"máximo 500 alimentação\"_", payload.messageSource);
+            return;
+          }
+          
+          const listaBudgets = budgets.map((b: any) => {
+            const tipo = b.tipo === "global" ? "💰 Total" : `📂 ${b.categoria || b.tipo}`;
+            const limite = Number(b.limite || 0);
+            const gasto = Number(b.gasto_atual || 0);
+            const percent = limite > 0 ? Math.round((gasto / limite) * 100) : 0;
+            const emoji = percent >= 100 ? "🔴" : percent >= 80 ? "🟡" : "🟢";
+            return `${emoji} *${tipo}*\n   Limite: R$ ${limite.toFixed(2)}\n   Gasto: R$ ${gasto.toFixed(2)} (${percent}%)`;
+          }).join("\n\n");
+          
+          await sendMessage(payload.phoneNumber, `💰 *Seus Orçamentos*\n\n${listaBudgets}`, payload.messageSource);
+          return;
+        }
         
         // ✅ BLOCO 4: Handler para "meus parcelamentos"
         case "installments":
