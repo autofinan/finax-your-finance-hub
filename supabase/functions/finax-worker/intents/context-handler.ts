@@ -47,56 +47,52 @@ export async function getActiveContext(userId: string): Promise<any | null> {
 export async function createUserContext(userId: string, slots: ExtractedSlots): Promise<{ success: boolean; message: string; contextId?: string }> {
   const label = slots.label || "Evento";
   const description = slots.description || null;
-  const CURRENT_YEAR = 2026;
+  const CURRENT_YEAR = new Date().getFullYear();
   
   let startDate = new Date();
   let endDate = new Date();
   endDate.setDate(endDate.getDate() + 7);
   
-  if (slots.date_range) {
-    const parseDate = (str: string): Date => {
-      const parts = str.split(/[\/\-]/);
-      if (parts.length >= 2) {
-        const day = parseInt(parts[0]);
-        const month = parseInt(parts[1]) - 1;
-        let year = parts[2] ? parseInt(parts[2]) : CURRENT_YEAR;
-        if (year < 100) year = 2000 + year;
-        
-        const date = new Date(year, month, day);
-        
-        const now = new Date();
-        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        if (date < thirtyDaysAgo) {
-          date.setFullYear(CURRENT_YEAR);
-          console.log(`📍 [CONTEXT] Data ajustada para ano ${CURRENT_YEAR}: ${date.toISOString()}`);
-        }
-        
-        return date;
-      }
-      return new Date();
-    };
+  // ✅ BUG #6 FIX: Parse robusto de datas BR e ISO
+  const parseSmartDate = (str: string): Date => {
+    if (!str) return new Date();
+    const trimmed = str.trim();
     
-    startDate = parseDate(slots.date_range.start);
-    endDate = parseDate(slots.date_range.end);
+    // Formato ISO: "2026-02-18" ou "2026-02-18T00:00:00Z"
+    const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (isoMatch) {
+      return new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, parseInt(isoMatch[3]), 0, 0, 0, 0);
+    }
+    
+    // Formato BR: "18/02", "18/02/2026", "18/02/26"
+    const brMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+    if (brMatch) {
+      const day = parseInt(brMatch[1]);
+      const month = parseInt(brMatch[2]) - 1;
+      let year = brMatch[3] ? parseInt(brMatch[3]) : CURRENT_YEAR;
+      if (year < 100) year = 2000 + year;
+      return new Date(year, month, day, 0, 0, 0, 0);
+    }
+    
+    // Fallback: tentar parse nativo
+    const parsed = new Date(trimmed);
+    return isNaN(parsed.getTime()) ? new Date() : parsed;
+  };
+  
+  if (slots.date_range) {
+    startDate = parseSmartDate(slots.date_range.start);
+    endDate = parseSmartDate(slots.date_range.end);
     
     if (endDate <= startDate) {
       endDate = new Date(startDate);
       endDate.setDate(endDate.getDate() + 1);
     }
   } else if (slots.start_date && slots.end_date) {
-  const parseDateStr = (str: string): Date => {
-    const parts = str.split(/[\/\-]/);
-    if (parts.length >= 2) {
-      const day = parseInt(parts[0]);
-      const month = parseInt(parts[1]) - 1;
-      const year = parts[2] ? parseInt(parts[2]) : 2026;
-      return new Date(year, month, day);
-    }
-    return new Date(str);
-  };
-  startDate = parseDateStr(slots.start_date);
-  endDate = parseDateStr(slots.end_date);
-}
+    startDate = parseSmartDate(slots.start_date);
+    endDate = parseSmartDate(slots.end_date);
+  }
+  
+  console.log(`📍 [CONTEXT] Datas parsed: ${startDate.toISOString()} → ${endDate.toISOString()}`);
   
   console.log(`📍 [CONTEXT] Criando: ${label} de ${startDate.toISOString()} até ${endDate.toISOString()}`);
   

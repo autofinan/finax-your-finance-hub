@@ -192,7 +192,7 @@ export async function applyUserPatterns(
     const newSlots = { ...slots };
     let patternApplied = false;
     
-    // Só aplicar se NÃO foi mencionado explicitamente
+    // ✅ BUG #1 FIX: Só aplicar se NÃO foi mencionado explicitamente pelo usuário
     if (!slots.payment_method && !hasExplicitPayment && pattern.inferred_payment_method) {
       newSlots.payment_method = pattern.inferred_payment_method;
       newSlots._inferred_payment_from_pattern = true;
@@ -205,6 +205,8 @@ export async function applyUserPatterns(
         confidence: pattern.confidence.toString()
       }).catch(() => {});
       console.log(`🧠 [MEMORY] Aplicando payment_method inferido: ${pattern.inferred_payment_method}`);
+    } else if (slots.payment_method || hasExplicitPayment) {
+      console.log(`🧠 [MEMORY] payment_method do usuário preservado: ${slots.payment_method} (padrão ignorado: ${pattern.inferred_payment_method})`);
     }
     
     if (!slots.category && !hasExplicitCategory && pattern.inferred_category) {
@@ -214,9 +216,14 @@ export async function applyUserPatterns(
       console.log(`🧠 [MEMORY] Aplicando categoria inferida: ${pattern.inferred_category}`);
     }
     
-    if (!slots.card_id && pattern.inferred_card_id) {
+    // ✅ BUG #1 FIX: Só injetar card_id se payment_method é credito (não pix/debito/dinheiro)
+    const effectivePayment = newSlots.payment_method || slots.payment_method;
+    if (!slots.card_id && pattern.inferred_card_id && 
+        (effectivePayment === "credito" || (!effectivePayment && !hasExplicitPayment))) {
       newSlots.card_id = pattern.inferred_card_id;
       patternApplied = true;
+    } else if (slots.card_id || (effectivePayment && effectivePayment !== "credito")) {
+      console.log(`🧠 [MEMORY] card_id do padrão ignorado (payment: ${effectivePayment})`);
     }
     
     // Determinar se precisa confirmação (primeira vez usando padrão)

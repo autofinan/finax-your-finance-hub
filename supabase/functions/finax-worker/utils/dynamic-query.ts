@@ -60,12 +60,36 @@ export async function executeDynamicQuery(params: QueryParams): Promise<QueryRes
     queryStartDate = start_date;
     queryEndDate = end_date;
   } else {
-    // ⚠️ IA não passou - calcular mês atual como fallback (BRASILIA)
+    // ✅ BUG #3 FIX: Calcular período baseado em time_range quando IA não passou datas
     const brasiliaNow = getBrasiliaDate();
-    const startOfMonth = new Date(brasiliaNow.getFullYear(), brasiliaNow.getMonth(), 1, 0, 0, 0, 0);
     
-    queryStartDate = startOfMonth.toISOString();
-    queryEndDate = brasiliaNow.toISOString();
+    if (time_range === "week" || time_range === "weekly" || time_range === "semana" || time_range === "semanal") {
+      // Últimos 7 dias
+      const startOfWeek = new Date(brasiliaNow);
+      startOfWeek.setDate(brasiliaNow.getDate() - 7);
+      startOfWeek.setHours(0, 0, 0, 0);
+      queryStartDate = startOfWeek.toISOString();
+      queryEndDate = brasiliaNow.toISOString();
+      console.log(`📊 [DYNAMIC_QUERY] Week fallback: ${queryStartDate} → ${queryEndDate}`);
+    } else if (time_range === "today" || time_range === "hoje") {
+      const startOfDay = new Date(brasiliaNow);
+      startOfDay.setHours(0, 0, 0, 0);
+      queryStartDate = startOfDay.toISOString();
+      queryEndDate = brasiliaNow.toISOString();
+    } else if (time_range === "yesterday" || time_range === "ontem") {
+      const yesterday = new Date(brasiliaNow);
+      yesterday.setDate(brasiliaNow.getDate() - 1);
+      yesterday.setHours(0, 0, 0, 0);
+      const endYesterday = new Date(yesterday);
+      endYesterday.setHours(23, 59, 59, 999);
+      queryStartDate = yesterday.toISOString();
+      queryEndDate = endYesterday.toISOString();
+    } else {
+      // Fallback: mês atual
+      const startOfMonth = new Date(brasiliaNow.getFullYear(), brasiliaNow.getMonth(), 1, 0, 0, 0, 0);
+      queryStartDate = startOfMonth.toISOString();
+      queryEndDate = brasiliaNow.toISOString();
+    }
   }
   
   // ============================================================================

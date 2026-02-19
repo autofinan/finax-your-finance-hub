@@ -82,6 +82,16 @@ export function useCartoes(usuarioIdProp?: string) {
 
   const updateCartao = async (id: string, updates: Partial<CartaoCredito>) => {
     try {
+      // ✅ BUG #7A FIX: Se está atualizando limite_total, recalcular limite_disponivel
+      if (updates.limite_total !== undefined) {
+        const cartaoAtual = cartoes.find(c => c.id === id);
+        if (cartaoAtual) {
+          const usado = (Number(cartaoAtual.limite_total) || 0) - (Number(cartaoAtual.limite_disponivel) || 0);
+          updates.limite_disponivel = Number(updates.limite_total) - usado;
+          console.log(`💳 [UPDATE] Limite: ${cartaoAtual.limite_total} → ${updates.limite_total}, Usado: ${usado}, Novo disponível: ${updates.limite_disponivel}`);
+        }
+      }
+
       const { data, error } = await supabase
         .from('cartoes_credito')
         .update(updates)
