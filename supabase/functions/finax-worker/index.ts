@@ -49,7 +49,6 @@ import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
 import { 
   normalizeText, detectQueryScope, detectTimeRange, 
   isNumericOnly, parseNumericValue, logDecision, extractSlotValue,
-  getLastTransaction, updateTransactionPaymentMethod, getMonthlySummary
 } from "./utils/helpers.ts";
 import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 import { analyzeImageWithGemini, downloadWhatsAppMedia, transcreverAudio, type OCRResult } from "./utils/media.ts";
@@ -77,7 +76,7 @@ interface DecisionOutput {
   shouldAsk: boolean;
   question: string | null;
   buttons: Array<{ id: string; title: string }> | null;
-  decisionId?: string;
+  decisionId?: string | null;
 }
 
 // ============================================================================
@@ -2273,7 +2272,7 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     // 🚫 GUARD CLAUSE DE DOMÍNIO + AUTO-DESCARTE
     // ========================================================================
-    const domainCheck = assertDomainIsolation(decision.actionType, activeAction);
+    const domainCheck = assertDomainIsolation(decision.actionType as ActionType, activeAction);
     if (domainCheck.shouldDiscard) {
       await cancelAction(userId);
     }
@@ -2688,8 +2687,6 @@ async function processarJob(job: any): Promise<void> {
       }
       return;
     }
-    
-    c
     
     // ========================================================================
     // 💳 ADD_CARD - Registrar NOVO cartão de crédito
@@ -4037,7 +4034,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       // Perguntas sobre gastos por cartão
       if ((normalized.includes("gastei") || normalized.includes("gasto")) && 
           (normalized.includes("cartao") || normalized.includes("credito") || normalized.includes("cada cartao"))) {
-        const result = await queryExpensesByCard(userId);
+        const result = await queryCardExpenses(userId);
         await sendMessage(payload.phoneNumber, result, payload.messageSource);
         return;
       }
