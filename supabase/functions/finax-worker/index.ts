@@ -21,8 +21,7 @@ import {
   decisionEngine,
   assertDomainIsolation,
   type ExtractedSlots,
-  type SemanticResult,
-  type ActiveAction
+  type SemanticResult
 } from "./decision/ai-engine.ts";
 import { detectMultipleExpenses, formatExpensesList, calculateTotal } from "./utils/multiple-expenses.ts";
 import { 
