@@ -48,7 +48,7 @@ import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
 import { 
   normalizeText, detectQueryScope, detectTimeRange, 
   isNumericOnly, parseNumericValue, logDecision, extractSlotValue,
-  getLastTransaction, updateTransactionPaymentMethod, getMonthlySummary
+  getMonthlySummary
 } from "./utils/helpers.ts";
 import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 import { analyzeImageWithGemini, downloadWhatsAppMedia, transcreverAudio, type OCRResult } from "./utils/media.ts";
@@ -63,7 +63,7 @@ import { registerRecurring, tryRegisterRecurring, findRecurringByName, listActiv
 import { listCardsForUser, updateCardLimit, queryCardLimits, queryCardExpenses, queryContextExpenses } from "./intents/card-queries.ts";
 import { getActiveContext, createUserContext, closeUserContext, linkTransactionToContext } from "./intents/context-handler.ts";
 import { generateChatResponse } from "./intents/chat-handler.ts";
-
+import { listTransactionsForCancel, cancelTransaction, getLastTransaction, updateTransactionPaymentMethod } from "./intents/cancel-handler.ts";
 
 // DecisionOutput type used by processarJob
 interface DecisionOutput {
