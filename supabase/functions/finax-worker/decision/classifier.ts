@@ -75,12 +75,41 @@ const CANCEL_TERMS = [
 ];
 
 // ============================================================================
+// 🚫 TERMOS QUE NUNCA SÃO GASTOS (proteger contra duplicata falsa)
+// ============================================================================
+
+const NON_EXPENSE_PREFIXES = [
+  "me mande", "me envia", "manda", "envia", "quero ver", "quero saber",
+  "relatorio", "relatório", "me mande o relatorio", "me manda o relatorio",
+  "qual", "quais", "quanto", "como", "quando", "porque", "por que",
+  "resumo", "saldo", "historico", "histórico", "extrato",
+  "vou viajar", "viagem", "contexto", "evento", "vou estar",
+  "bom dia", "boa tarde", "boa noite", "oi", "ola", "olá", "tudo bem",
+  "ajuda", "help", "tutorial"
+];
+
+// ============================================================================
 // ⚡ FUNÇÃO PRINCIPAL: EXTRAÇÃO ESTRUTURAL (NÃO CLASSIFICAÇÃO!)
 // ============================================================================
 
 export function fastTrackExtract(message: string): FastTrackResult {
   const original = message.trim();
   const normalized = normalizeText(message);
+  
+  // ========================================================================
+  // PROTEÇÃO: Verificar se começa com termos que NUNCA são gastos
+  // ========================================================================
+  for (const prefix of NON_EXPENSE_PREFIXES) {
+    if (normalized.startsWith(prefix) || normalized.includes(prefix)) {
+      return {
+        hasStructure: false,
+        slots: {},
+        needsAI: true,
+        confidence: 0.0,
+        reason: `Termo não-gasto detectado: "${prefix}" → delegando para IA`
+      };
+    }
+  }
   
   // ========================================================================
   // CASO 1: CANCELAMENTO (não precisa de IA)

@@ -47,8 +47,7 @@ import { learnMerchantPattern } from "./memory/patterns.ts";
 import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
 import { 
   normalizeText, detectQueryScope, detectTimeRange, 
-  isNumericOnly, parseNumericValue, logDecision, extractSlotValue,
-  getMonthlySummary
+  isNumericOnly, parseNumericValue, logDecision, extractSlotValue
 } from "./utils/helpers.ts";
 import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 import { analyzeImageWithGemini, downloadWhatsAppMedia, transcreverAudio, type OCRResult } from "./utils/media.ts";
@@ -3315,7 +3314,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       try {
         const result = await createUserContext(userId, slots);
         if (decision.decisionId) {
-          await markAsExecuted(decision.decisionId, result.success, result.contextId);
+          await markAsExecuted(decision.decisionId, result.success);
         }
         await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
       } catch (ctxError) {

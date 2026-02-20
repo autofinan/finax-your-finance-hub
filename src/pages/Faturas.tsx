@@ -7,7 +7,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Receipt, Check, CreditCard, Calendar, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Receipt, Check, CreditCard, Calendar, AlertTriangle, CheckCircle, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import { useState } from 'react';
@@ -15,7 +15,7 @@ import { FaturaDetailModal } from '@/components/cartoes/FaturaDetailModal';
 
 const Faturas = () => {
   const { usuarioId } = useUsuarioId();
-  const { faturas, faturasEmAberto, loading, pagarFatura } = useFaturas(usuarioId || undefined);
+  const { faturas, faturasEmAberto, faturasFuturas, loading, pagarFatura } = useFaturas(usuarioId || undefined);
   const { cartoes } = useCartoes(usuarioId || undefined);
 
   const [detailModal, setDetailModal] = useState<{
@@ -58,6 +58,7 @@ const Faturas = () => {
   };
 
   const totalEmAberto = faturasEmAberto.reduce((acc, f) => acc + Number(f.valor_total || 0), 0);
+  const totalFuturo = faturasFuturas.reduce((acc, f) => acc + Number(f.valor_total || 0), 0);
   const faturasPagas = faturas.filter(f => f.status === 'paga');
   const totalPago = faturasPagas.reduce((acc, f) => acc + Number(f.valor_total || 0), 0);
 
@@ -76,13 +77,22 @@ const Faturas = () => {
 
           {/* Stats */}
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-            className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div className="bg-slate-900/40 backdrop-blur-xl border border-red-500/20 rounded-2xl p-4 hover:border-red-500/40 transition-all">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-xl bg-red-500/10"><AlertTriangle className="w-5 h-5 text-red-400" /></div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Em Aberto</p>
                   <p className="text-xl font-bold text-red-400">{formatCurrency(totalEmAberto)}</p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-slate-900/40 backdrop-blur-xl border border-amber-500/20 rounded-2xl p-4 hover:border-amber-500/40 transition-all">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-500/10"><Clock className="w-5 h-5 text-amber-400" /></div>
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-wide">Próximas Faturas</p>
+                  <p className="text-xl font-bold text-amber-400">{formatCurrency(totalFuturo)}</p>
                 </div>
               </div>
             </div>
@@ -106,11 +116,12 @@ const Faturas = () => {
             </div>
           </motion.div>
 
-          {/* Faturas em Aberto */}
+          {/* Faturas em Aberto (ciclo atual) */}
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="space-y-4">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-red-500/10"><AlertTriangle className="w-5 h-5 text-red-400" /></div>
               <h2 className="text-xl font-bold text-white">Faturas em Aberto</h2>
+              <span className="text-xs text-slate-500">Ciclo atual</span>
             </div>
 
             {loading ? (
@@ -128,7 +139,7 @@ const Faturas = () => {
               <div className="bg-slate-900/40 backdrop-blur-xl border border-emerald-500/20 rounded-2xl p-10 text-center">
                 <CheckCircle className="w-14 h-14 mx-auto text-emerald-400 mb-4" />
                 <h3 className="text-xl font-bold text-white mb-2">Tudo em dia! 🎉</h3>
-                <p className="text-slate-500">Nenhuma fatura em aberto no momento.</p>
+                <p className="text-slate-500">Nenhuma fatura em aberto no ciclo atual.</p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -148,7 +159,7 @@ const Faturas = () => {
                       <div className="flex items-center gap-4">
                         <div className="text-right">
                           <p className="font-bold text-2xl text-red-400">{formatCurrency(fatura.valor_total)}</p>
-                          <p className="text-xs text-slate-500 capitalize">{fatura.status}</p>
+                          <p className="text-xs text-red-400/70 font-medium">Aberta</p>
                         </div>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
@@ -180,6 +191,39 @@ const Faturas = () => {
             )}
           </motion.div>
 
+          {/* Faturas Futuras */}
+          {faturasFuturas.length > 0 && (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-amber-500/10"><Clock className="w-5 h-5 text-amber-400" /></div>
+                <h2 className="text-xl font-bold text-white">Próximas Faturas</h2>
+                <span className="text-xs text-slate-500 bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded-full">Parcelas futuras</span>
+              </div>
+              <div className="space-y-3">
+                {faturasFuturas.map((fatura, index) => (
+                  <motion.div key={fatura.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.25 + index * 0.05 }}
+                    className="bg-slate-900/40 backdrop-blur-xl border-l-4 border-l-amber-500/50 border border-white/5 rounded-2xl p-5 hover:border-amber-500/30 transition-all cursor-pointer opacity-80"
+                    onClick={() => openDetail(fatura)}>
+                    <div className="flex items-center gap-4">
+                      <div className="p-4 rounded-xl bg-amber-500/10"><Clock className="w-6 h-6 text-amber-400" /></div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-lg text-white">{getCartaoNome(fatura.cartao_id)}</p>
+                        <div className="flex items-center gap-2 text-sm text-slate-500">
+                          <Calendar className="w-4 h-4" /> {getMesNome(fatura.mes)} {fatura.ano}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-xl text-amber-400">{formatCurrency(fatura.valor_total)}</p>
+                        <span className="text-xs text-amber-400/70 font-medium">Futura</span>
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+
           {/* Histórico */}
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="space-y-4">
             <div className="flex items-center gap-3">
@@ -205,33 +249,50 @@ const Faturas = () => {
               </div>
             ) : (
               <div className="space-y-3">
-                {faturas.map((fatura, index) => (
-                  <motion.div key={fatura.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.3 + index * 0.03 }}
-                    onClick={() => openDetail(fatura)}
-                    className={cn(
-                      "bg-slate-900/40 backdrop-blur-xl border rounded-2xl p-5 transition-all cursor-pointer hover:border-indigo-500/30",
-                      fatura.status === 'paga' ? "border-emerald-500/20 opacity-70" : "border-white/5"
-                    )}>
-                    <div className="flex items-center gap-4">
-                      <div className={cn("p-4 rounded-xl", fatura.status === 'paga' ? "bg-emerald-500/10" : "bg-slate-800")}>
-                        {fatura.status === 'paga' ? <Check className="w-6 h-6 text-emerald-400" /> : <CreditCard className="w-6 h-6 text-slate-500" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-lg text-white">{getCartaoNome(fatura.cartao_id)}</p>
-                        <div className="flex items-center gap-2 text-sm text-slate-500">
-                          <Calendar className="w-4 h-4" /> {getMesNome(fatura.mes)} {fatura.ano}
+                {faturas.map((fatura, index) => {
+                  const isFutura = fatura.status === 'futura';
+                  const isPaga = fatura.status === 'paga';
+                  return (
+                    <motion.div key={fatura.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.3 + index * 0.03 }}
+                      onClick={() => openDetail(fatura)}
+                      className={cn(
+                        "bg-slate-900/40 backdrop-blur-xl border rounded-2xl p-5 transition-all cursor-pointer hover:border-indigo-500/30",
+                        isPaga ? "border-emerald-500/20 opacity-70" : 
+                        isFutura ? "border-amber-500/20 opacity-80" : "border-white/5"
+                      )}>
+                      <div className="flex items-center gap-4">
+                        <div className={cn("p-4 rounded-xl", 
+                          isPaga ? "bg-emerald-500/10" : 
+                          isFutura ? "bg-amber-500/10" : "bg-slate-800")}>
+                          {isPaga ? <Check className="w-6 h-6 text-emerald-400" /> : 
+                           isFutura ? <Clock className="w-6 h-6 text-amber-400" /> :
+                           <CreditCard className="w-6 h-6 text-slate-500" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-lg text-white">{getCartaoNome(fatura.cartao_id)}</p>
+                          <div className="flex items-center gap-2 text-sm text-slate-500">
+                            <Calendar className="w-4 h-4" /> {getMesNome(fatura.mes)} {fatura.ano}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className={cn("font-bold text-xl", 
+                            isPaga ? "text-emerald-400" : 
+                            isFutura ? "text-amber-400" : "text-white")}>
+                            {formatCurrency(fatura.valor_total)}
+                          </p>
+                          <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full",
+                            isPaga ? "bg-emerald-500/10 text-emerald-400" :
+                            isFutura ? "bg-amber-500/10 text-amber-400" :
+                            "bg-red-500/10 text-red-400"
+                          )}>
+                            {isFutura ? 'Futura' : isPaga ? 'Paga' : fatura.status}
+                          </span>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className={cn("font-bold text-xl", fatura.status === 'paga' ? "text-emerald-400" : "text-white")}>
-                          {formatCurrency(fatura.valor_total)}
-                        </p>
-                        <p className="text-xs text-slate-500 capitalize">{fatura.status}</p>
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
+                    </motion.div>
+                  );
+                })}
               </div>
             )}
           </motion.div>
