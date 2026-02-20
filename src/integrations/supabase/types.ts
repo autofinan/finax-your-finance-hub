@@ -1435,6 +1435,7 @@ export type Database = {
       gastos_recorrentes: {
         Row: {
           ativo: boolean | null
+          cartao_id: string | null
           categoria: string
           categoria_detalhada: string | null
           created_at: string | null
@@ -1455,6 +1456,7 @@ export type Database = {
         }
         Insert: {
           ativo?: boolean | null
+          cartao_id?: string | null
           categoria: string
           categoria_detalhada?: string | null
           created_at?: string | null
@@ -1475,6 +1477,7 @@ export type Database = {
         }
         Update: {
           ativo?: boolean | null
+          cartao_id?: string | null
           categoria?: string
           categoria_detalhada?: string | null
           created_at?: string | null
@@ -1494,6 +1497,13 @@ export type Database = {
           valor_total?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "gastos_recorrentes_cartao_id_fkey"
+            columns: ["cartao_id"]
+            isOneToOne: false
+            referencedRelation: "cartoes_credito"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "gastos_recorrentes_usuario_id_fkey"
             columns: ["usuario_id"]

@@ -445,13 +445,42 @@ export async function getInvoiceDetail(userId: string, cardName?: string, mes?: 
     response += `💳 *Fatura ${cartaoNome} - ${meses[fatura.mes! - 1]}/${fatura.ano}*\n`;
     response += `📊 Status: *${fatura.status}*\n\n`;
     
-    // Get transactions for this invoice
-    const { data: txs } = await supabase
+    // Get transactions for this invoice — first by fatura_id, fallback to cartao_id + mes_referencia
+    let { data: txs } = await supabase
       .from("transacoes")
       .select("descricao, valor, categoria, data, parcela, is_parcelado")
       .eq("fatura_id", fatura.id)
       .eq("tipo", "saida")
       .order("data", { ascending: false });
+    
+    // ✅ FALLBACK: se não encontrou por fatura_id, buscar por cartao_id + ciclo de datas
+    if (!txs || txs.length === 0) {
+      const { data: cardInfo } = await supabase
+        .from("cartoes_credito")
+        .select("dia_fechamento")
+        .eq("id", fatura.cartao_id)
+        .single();
+      
+      const dia = cardInfo?.dia_fechamento || 5;
+      const mes = fatura.mes!;
+      const ano = fatura.ano!;
+      
+      const prevMonth = mes === 1 ? 12 : mes - 1;
+      const prevYear = mes === 1 ? ano - 1 : ano;
+      const startDate = `${prevYear}-${String(prevMonth).padStart(2, '0')}-${String(Math.min(dia + 1, 28)).padStart(2, '0')}`;
+      const endDate = `${ano}-${String(mes).padStart(2, '0')}-${String(Math.min(dia, 28)).padStart(2, '0')}`;
+      
+      const { data: txsByRange } = await supabase
+        .from("transacoes")
+        .select("descricao, valor, categoria, data, parcela, is_parcelado")
+        .eq("cartao_id", fatura.cartao_id)
+        .eq("tipo", "saida")
+        .gte("data", startDate)
+        .lte("data", endDate + "T23:59:59")
+        .order("data", { ascending: false });
+      
+      txs = txsByRange || [];
+    }
     
     // Get parcelas for this invoice
     const { data: parcelas } = await supabase

@@ -4,6 +4,7 @@ import { useCartoes } from '@/hooks/useCartoes';
 import { useFaturas } from '@/hooks/useFaturas';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { CartaoCredito } from '@/types/finance';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,15 +15,34 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Plus, Trash2, CreditCard, Calendar, DollarSign, TrendingUp, AlertTriangle, Pencil, Receipt } from 'lucide-react';
+import { Plus, Trash2, CreditCard, Calendar, DollarSign, TrendingUp, AlertTriangle, Pencil, Receipt, RefreshCw, Package, ShoppingBag } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
 import { FaturaDetailModal } from '@/components/cartoes/FaturaDetailModal';
 
+interface GastoRecorrente {
+  id: string;
+  descricao: string | null;
+  valor_parcela: number;
+  categoria: string;
+  cartao_id: string | null;
+  ativo: boolean | null;
+}
+
+interface Parcela {
+  id: string;
+  descricao: string | null;
+  valor: number;
+  numero_parcela: number;
+  total_parcelas: number;
+  cartao_id: string | null;
+  status: string | null;
+}
+
 const Cartoes = () => {
   const { usuarioId } = useUsuarioId();
   const { cartoes, loading, addCartao, updateCartao, deleteCartao } = useCartoes(usuarioId || undefined);
-  const { faturasEmAberto, pagarFatura } = useFaturas(usuarioId || undefined);
+  const { faturas, faturasEmAberto, faturasFuturas, pagarFatura } = useFaturas(usuarioId || undefined);
   const [formOpen, setFormOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CartaoCredito | null>(null);
@@ -31,7 +51,9 @@ const Cartoes = () => {
   const [diaFechamento, setDiaFechamento] = useState('');
   const [diaVencimento, setDiaVencimento] = useState('');
   const [formLoading, setFormLoading] = useState(false);
-  
+  const [recorrentes, setRecorrentes] = useState<GastoRecorrente[]>([]);
+  const [parcelas, setParcelas] = useState<Parcela[]>([]);
+
   const [detailModal, setDetailModal] = useState<{
     open: boolean;
     faturaId: string;
@@ -44,6 +66,31 @@ const Cartoes = () => {
     valorPago: number | null;
     status: string | null;
   }>({ open: false, faturaId: '', cartaoId: '', cartaoNome: '', mes: null, ano: null, diaFechamento: null, valorTotal: null, valorPago: null, status: null });
+
+  // Buscar recorrentes e parcelas
+  useEffect(() => {
+    if (!usuarioId) return;
+    
+    const fetchExtras = async () => {
+      const [recResult, parResult] = await Promise.all([
+        supabase
+          .from('gastos_recorrentes')
+          .select('id, descricao, valor_parcela, categoria, cartao_id, ativo')
+          .eq('usuario_id', usuarioId)
+          .eq('ativo', true),
+        supabase
+          .from('parcelas')
+          .select('id, descricao, valor, numero_parcela, total_parcelas, cartao_id, status')
+          .eq('usuario_id', usuarioId)
+          .eq('status', 'pendente')
+      ]);
+      
+      if (recResult.data) setRecorrentes(recResult.data as GastoRecorrente[]);
+      if (parResult.data) setParcelas(parResult.data as Parcela[]);
+    };
+    
+    fetchExtras();
+  }, [usuarioId]);
 
   useEffect(() => {
     if (editingCard) {
@@ -110,12 +157,26 @@ const Cartoes = () => {
     }
   };
 
-  const getFaturaAberta = (cartaoId: string) => {
-    return faturasEmAberto.find((f) => f.cartao_id === cartaoId);
+  // Buscar a melhor fatura para o cartão (aberta > futura > histórica)
+  const getFaturaParaCartao = (cartaoId: string) => {
+    const aberta = faturasEmAberto.find(f => f.cartao_id === cartaoId);
+    if (aberta) return { ...aberta, tipo: 'aberta' as const };
+    const futura = faturasFuturas.find(f => f.cartao_id === cartaoId);
+    if (futura) return { ...futura, tipo: 'futura' as const };
+    // Buscar no histórico (ultima fatura não paga)
+    const historica = faturas.filter(f => f.cartao_id === cartaoId && f.status !== 'paga')[0];
+    if (historica) return { ...historica, tipo: 'historica' as const };
+    return null;
   };
 
+  const getRecorrentesDoCartao = (cartaoId: string) =>
+    recorrentes.filter(r => r.cartao_id === cartaoId);
+
+  const getParcelasDoCartao = (cartaoId: string) =>
+    parcelas.filter(p => p.cartao_id === cartaoId);
+
   const openFaturaDetail = (cartao: CartaoCredito) => {
-    const fatura = getFaturaAberta(cartao.id);
+    const fatura = getFaturaParaCartao(cartao.id);
     if (!fatura) return;
     setDetailModal({
       open: true,
@@ -126,13 +187,31 @@ const Cartoes = () => {
       ano: fatura.ano,
       diaFechamento: cartao.dia_fechamento ?? null,
       valorTotal: fatura.valor_total,
-      valorPago: fatura.valor_pago ?? 0,
+      valorPago: (fatura as any).valor_pago ?? 0,
       status: fatura.status,
     });
   };
 
+  // Calcular limites baseado em faturas reais
+  const calcularLimiteDisponivel = (cartao: CartaoCredito) => {
+    const limiteTotal = Number(cartao.limite_total || 0);
+    
+    // Soma das faturas abertas e futuras não pagas deste cartão
+    const faturaAbertas = faturasEmAberto.filter(f => f.cartao_id === cartao.id);
+    const fatFuturas = faturasFuturas.filter(f => f.cartao_id === cartao.id);
+    const totalFaturas = [...faturaAbertas, ...fatFuturas]
+      .reduce((acc, f) => acc + (Number(f.valor_total || 0) - Number((f as any).valor_pago || 0)), 0);
+    
+    // Se não há faturas, usar o limite_disponivel do banco
+    if (totalFaturas === 0) {
+      return Number(cartao.limite_disponivel || 0);
+    }
+    
+    return Math.max(0, limiteTotal - totalFaturas);
+  };
+
   const totalLimite = cartoes.reduce((acc, c) => acc + Number(c.limite_total || 0), 0);
-  const totalDisponivel = cartoes.reduce((acc, c) => acc + Number(c.limite_disponivel || 0), 0);
+  const totalDisponivel = cartoes.reduce((acc, c) => acc + calcularLimiteDisponivel(c), 0);
   const totalUsado = totalLimite - totalDisponivel;
 
   return (
@@ -168,7 +247,7 @@ const Cartoes = () => {
               <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-xl bg-emerald-500/10"><TrendingUp className="w-5 h-5 text-emerald-400" /></div>
                 <div>
-                  <p className="text-xs text-slate-500 uppercase tracking-wide">Disponível</p>
+                  <p className="text-xs text-slate-500 uppercase tracking-wide">Disponível Real</p>
                   <p className="text-xl font-bold text-emerald-400">{formatCurrency(totalDisponivel)}</p>
                 </div>
               </div>
@@ -205,10 +284,21 @@ const Cartoes = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {cartoes.map((cartao, index) => {
-                const faturaAberta = getFaturaAberta(cartao.id);
-                const percentUsado = cartao.limite_total
-                  ? ((Number(cartao.limite_total) - Number(cartao.limite_disponivel || 0)) / Number(cartao.limite_total)) * 100
-                  : 0;
+                const faturaAtual = getFaturaParaCartao(cartao.id);
+                const limiteDisponivel = calcularLimiteDisponivel(cartao);
+                const limiteTotal = Number(cartao.limite_total || 0);
+                const emUso = limiteTotal - limiteDisponivel;
+                const percentUsado = limiteTotal > 0 ? (emUso / limiteTotal) * 100 : 0;
+                
+                // Breakdown de uso
+                const recorrentesCartao = getRecorrentesDoCartao(cartao.id);
+                const parcelasCartao = getParcelasDoCartao(cartao.id);
+                const valorRecorrentes = recorrentesCartao.reduce((s, r) => s + Number(r.valor_parcela || 0), 0);
+                const valorParcelas = parcelasCartao.reduce((s, p) => s + Number(p.valor || 0), 0);
+                const valorFatura = faturaAtual ? Number(faturaAtual.valor_total || 0) : 0;
+                const valorPontuais = Math.max(0, valorFatura - valorParcelas);
+                
+                const temFatura = !!faturaAtual;
 
                 return (
                   <motion.div key={cartao.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -247,6 +337,7 @@ const Cartoes = () => {
                     <h3 className="font-bold text-xl text-white mb-4">{cartao.nome || 'Sem nome'}</h3>
 
                     <div className="space-y-4">
+                      {/* Barra de uso */}
                       <div>
                         <div className="flex justify-between text-sm mb-2">
                           <span className="text-slate-500">Limite usado</span>
@@ -265,16 +356,70 @@ const Cartoes = () => {
                         </div>
                       </div>
 
+                      {/* Disponível / Total */}
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <p className="text-xs text-slate-500 mb-1">Disponível</p>
-                          <p className="font-bold text-emerald-400">{formatCurrency(cartao.limite_disponivel)}</p>
+                          <p className="font-bold text-emerald-400">{formatCurrency(limiteDisponivel)}</p>
                         </div>
                         <div>
                           <p className="text-xs text-slate-500 mb-1">Limite</p>
                           <p className="font-bold text-white">{formatCurrency(cartao.limite_total)}</p>
                         </div>
                       </div>
+
+                      {/* Breakdown de uso */}
+                      {emUso > 0 && (
+                        <div className="bg-slate-800/50 rounded-xl p-3 space-y-1.5">
+                          <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">Composição do uso</p>
+                          {valorPontuais > 0 && (
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="flex items-center gap-1.5 text-slate-400">
+                                <ShoppingBag className="w-3 h-3" /> Pontuais
+                              </span>
+                              <span className="text-slate-300 font-medium">{formatCurrency(valorPontuais)}</span>
+                            </div>
+                          )}
+                          {valorParcelas > 0 && (
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="flex items-center gap-1.5 text-slate-400">
+                                <Package className="w-3 h-3" /> Parcelas
+                              </span>
+                              <span className="text-indigo-400 font-medium">{formatCurrency(valorParcelas)}</span>
+                            </div>
+                          )}
+                          {valorRecorrentes > 0 && (
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="flex items-center gap-1.5 text-slate-400">
+                                <RefreshCw className="w-3 h-3" /> Recorrentes
+                              </span>
+                              <span className="text-cyan-400 font-medium">{formatCurrency(valorRecorrentes)}</span>
+                            </div>
+                          )}
+                          <div className="border-t border-slate-700/50 pt-1.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-400 font-medium">Total em uso</span>
+                            <span className="text-amber-400 font-bold">{formatCurrency(emUso)}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Recorrentes vinculados */}
+                      {recorrentesCartao.length > 0 && (
+                        <div className="border-t border-slate-800 pt-3">
+                          <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">🔄 Recorrentes neste cartão</p>
+                          <div className="space-y-1">
+                            {recorrentesCartao.slice(0, 3).map(r => (
+                              <div key={r.id} className="flex justify-between text-xs">
+                                <span className="text-slate-400 truncate">{r.descricao || r.categoria}</span>
+                                <span className="text-cyan-400 font-medium ml-2">{formatCurrency(r.valor_parcela)}/mês</span>
+                              </div>
+                            ))}
+                            {recorrentesCartao.length > 3 && (
+                              <p className="text-xs text-slate-600">+{recorrentesCartao.length - 3} mais</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                       {cartao.dia_fechamento && (
                         <div className="flex items-center gap-2 text-sm text-slate-500 pt-2 border-t border-slate-800">
@@ -283,12 +428,26 @@ const Cartoes = () => {
                         </div>
                       )}
 
-                      {faturaAberta && (
-                        <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
+                      {/* Fatura atual */}
+                      {temFatura ? (
+                        <div className={cn("mt-2 p-4 rounded-xl border", 
+                          faturaAtual?.tipo === 'aberta' ? "bg-red-500/10 border-red-500/20" :
+                          faturaAtual?.tipo === 'futura' ? "bg-amber-500/10 border-amber-500/20" :
+                          "bg-slate-800/50 border-slate-700/50"
+                        )}>
                           <div className="flex justify-between items-center">
-                            <span className="text-sm text-red-300">Fatura Atual</span>
-                            <span className="font-bold text-xl text-red-400">
-                              {formatCurrency(faturaAberta.valor_total)}
+                            <span className={cn("text-sm",
+                              faturaAtual?.tipo === 'aberta' ? "text-red-300" :
+                              faturaAtual?.tipo === 'futura' ? "text-amber-300" : "text-slate-400"
+                            )}>
+                              {faturaAtual?.tipo === 'aberta' ? 'Fatura Atual' :
+                               faturaAtual?.tipo === 'futura' ? 'Próxima Fatura' : 'Última Fatura'}
+                            </span>
+                            <span className={cn("font-bold text-xl",
+                              faturaAtual?.tipo === 'aberta' ? "text-red-400" :
+                              faturaAtual?.tipo === 'futura' ? "text-amber-400" : "text-slate-300"
+                            )}>
+                              {formatCurrency(faturaAtual?.valor_total ?? null)}
                             </span>
                           </div>
                           <button
@@ -298,6 +457,10 @@ const Cartoes = () => {
                             <Receipt className="w-4 h-4" />
                             Detalhar fatura
                           </button>
+                        </div>
+                      ) : (
+                        <div className="mt-2 p-3 rounded-xl bg-slate-800/30 border border-slate-700/30 text-center">
+                          <p className="text-xs text-slate-600">Nenhuma fatura ainda</p>
                         </div>
                       )}
                     </div>
@@ -355,14 +518,10 @@ const Cartoes = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog Edição */}
-      <Dialog open={editOpen} onOpenChange={(open) => { setEditOpen(open); if (!open) resetForm(); }}>
+      {/* Dialog Editar Cartão */}
+      <Dialog open={editOpen} onOpenChange={(v) => { if (!v) { setEditOpen(false); resetForm(); } }}>
         <DialogContent className="sm:max-w-md bg-slate-900 border-slate-700 text-white">
-          <DialogHeader>
-            <DialogTitle className="text-xl flex items-center gap-2">
-              <Pencil className="w-5 h-5 text-indigo-400" /> Editar Cartão
-            </DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle className="text-xl">Editar Cartão</DialogTitle></DialogHeader>
           <form onSubmit={handleEditSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label className="text-slate-300">Nome do Cartão</Label>

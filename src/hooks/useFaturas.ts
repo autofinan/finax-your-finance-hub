@@ -7,6 +7,7 @@ import { useUsuarioId } from '@/hooks/useUsuarioId';
 export function useFaturas(usuarioIdProp?: string) {
   const [faturas, setFaturas] = useState<FaturaCartao[]>([]);
   const [faturasEmAberto, setFaturasEmAberto] = useState<FaturaEmAberto[]>([]);
+  const [faturasFuturas, setFaturasFuturas] = useState<FaturaEmAberto[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
   
@@ -18,8 +19,7 @@ export function useFaturas(usuarioIdProp?: string) {
     if (loadingUsuarioId) return;
     
     try {
-      
-      // Buscar todas as faturas
+      // Buscar todas as faturas ordenadas por ano/mês desc
       let query = supabase
         .from('faturas_cartao')
         .select('*')
@@ -35,7 +35,7 @@ export function useFaturas(usuarioIdProp?: string) {
       if (error) throw error;
       setFaturas((data as FaturaCartao[]) || []);
 
-      // Buscar faturas em aberto via view
+      // Buscar faturas em aberto (status = 'aberta') via view
       let queryAberto = supabase
         .from('vw_faturas_em_aberto')
         .select('*');
@@ -49,7 +49,13 @@ export function useFaturas(usuarioIdProp?: string) {
       if (errorAberto) {
         console.error('Erro ao buscar faturas em aberto:', errorAberto);
       } else {
-        setFaturasEmAberto((dataAberto as FaturaEmAberto[]) || []);
+        // Separar: status='aberta' (ciclo atual) vs status='futura' (próximos meses)
+        const todasFaturas = (dataAberto as FaturaEmAberto[]) || [];
+        const abertas = todasFaturas.filter(f => f.status === 'aberta');
+        const futuras = todasFaturas.filter(f => f.status === 'futura');
+        
+        setFaturasEmAberto(abertas);
+        setFaturasFuturas(futuras);
       }
 
     } catch (error) {
@@ -79,10 +85,11 @@ export function useFaturas(usuarioIdProp?: string) {
         prev.map((f) => (f.id === id ? (data as FaturaCartao) : f))
       );
       
-      // Atualizar faturas em aberto
+      // Atualizar faturas em aberto e futuras
       setFaturasEmAberto((prev) => prev.filter((f) => f.id !== id));
+      setFaturasFuturas((prev) => prev.filter((f) => f.id !== id));
       
-      // ✅ FIX DASH-4: Recompor limite disponível do cartão
+      // ✅ Recompor limite disponível do cartão
       if (data && data.cartao_id && valorPago > 0) {
         const { data: cartao } = await supabase
           .from('cartoes_credito')
@@ -123,6 +130,7 @@ export function useFaturas(usuarioIdProp?: string) {
   return {
     faturas,
     faturasEmAberto,
+    faturasFuturas,
     loading,
     pagarFatura,
     refetch: fetchFaturas,
