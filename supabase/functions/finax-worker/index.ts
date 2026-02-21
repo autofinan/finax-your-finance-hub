@@ -1933,6 +1933,12 @@ async function processarJob(job: any): Promise<void> {
               execResult = { message: progressResult };
               break;
             }
+            case "debt": {
+              const { registerDebt } = await import("./intents/debt-handler.ts");
+              const debtResult = await registerDebt(userId, execSlots);
+              execResult = { message: debtResult.message };
+              break;
+            }
             default:
               console.log(`⚠️ [FSM] Intent "${activeAction.intent}" não suporta execução direta`);
               // Fallback: pedir confirmação
@@ -3086,6 +3092,28 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       const { listGoals } = await import("./intents/goals.ts");
       const result = await listGoals(userId);
       await sendMessage(payload.phoneNumber, result, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // 💳 DEBT - Registrar dívida
+    // ========================================================================
+    if (decision.actionType === "debt") {
+      console.log(`💳 [DEBT] Registrando dívida: ${JSON.stringify(decision.slots)}`);
+      const { registerDebt } = await import("./intents/debt-handler.ts");
+      const result = await registerDebt(userId, decision.slots);
+      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // 📋 LIST_DEBTS - Listar dívidas
+    // ========================================================================
+    if (decision.actionType === "list_debts") {
+      console.log(`📋 [LIST_DEBTS] Listando dívidas do usuário`);
+      const { listDebts } = await import("./intents/debt-handler.ts");
+      const result = await listDebts(userId);
+      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
       return;
     }
     

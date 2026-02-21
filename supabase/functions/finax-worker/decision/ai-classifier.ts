@@ -198,6 +198,17 @@ Exemplos: "Era pix, não débito"
 Só quando confidence < 0.5.
 Exemplo: "50" (número isolado sem contexto)
 
+### debt - Registrar dívida
+Cadastrar nova dívida (cartão, empréstimo, financiamento).
+Indicadores: "registrar dívida", "tenho dívida", "adicionar dívida", "minha dívida"
+Slots: nome, saldo_devedor, tipo (cartao|emprestimo|financiamento|cheque_especial), taxa_juros, valor_minimo
+Exemplos: "Registrar dívida Nubank 5000", "Tenho dívida de 10000 no banco"
+
+### list_debts - Listar dívidas
+Consultar dívidas ativas.
+Indicadores: "minhas dívidas", "quanto devo", "listar dívidas", "ver dívidas"
+Exemplos: "Quais minhas dívidas?", "Quanto eu devo?"
+
 ## 🎯 NÍVEIS DE CONFIANÇA
 
 | Nível | Quando usar |
@@ -264,7 +275,7 @@ Context: action (start|end)
 ## 📤 RESPOSTA (JSON PURO, SEM MARKDOWN)
 
 {
-  "actionType": "expense|income|installment|recurring|add_card|card_event|bill|pay_bill|goal|purchase|set_budget|query|query_alerts|cancel|chat|set_context|control|edit|unknown",
+  "actionType": "expense|income|installment|recurring|add_card|card_event|bill|pay_bill|goal|purchase|set_budget|query|query_alerts|cancel|chat|set_context|control|edit|debt|list_debts|unknown",
   "confidence": 0.0-1.0,
   "slots": { },
   "reasoning": "Explicação concisa"
