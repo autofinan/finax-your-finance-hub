@@ -30,6 +30,8 @@ export type ActionType =
   | "list_goals"    // listar metas existentes
   | "add_goal_progress" // adicionar valor a meta existente
   | "purchase_advice" // assistente de compras contextual
+  | "debt"          // registrar dívida
+  | "list_debts"    // listar dívidas
   | "unknown";      // não identificado
 
 // Mapeamento interno para compatibilidade
@@ -148,6 +150,8 @@ export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: s
   recurring: { required: ["amount", "description"], optional: ["category", "day_of_month", "recurrence_type"] },
   goal: { required: ["goal_name", "target_amount"], optional: ["deadline", "category"] },
   purchase_advice: { required: ["item_description", "item_value"], optional: ["category"] },
+  debt: { required: ["nome", "saldo_devedor"], optional: ["tipo", "taxa_juros", "valor_minimo"] },
+  list_debts: { required: [], optional: [] },
 };
 
 export const SLOT_PROMPTS: Record<string, { 

@@ -21,6 +21,7 @@ import Auth from "./pages/Auth";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Eventos from '@/pages/Eventos';
 import Metas from '@/pages/Metas';
+import Dividas from '@/pages/Dividas';
 
 const queryClient = new QueryClient();
 
@@ -50,6 +51,7 @@ const App = () => (
             <Route path="/configuracoes" element={<ProtectedRoute><Configuracoes /></ProtectedRoute>} />
             <Route path="/eventos" element={<ProtectedRoute><Eventos /></ProtectedRoute>} />
             <Route path="/metas" element={<ProtectedRoute><Metas /></ProtectedRoute>} />
+            <Route path="/dividas" element={<ProtectedRoute><Dividas /></ProtectedRoute>} />
             
             <Route path="*" element={<NotFound />} />
           </Routes>
