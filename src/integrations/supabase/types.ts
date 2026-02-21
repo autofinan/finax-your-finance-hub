@@ -1089,6 +1089,80 @@ export type Database = {
           },
         ]
       }
+      dividas: {
+        Row: {
+          ativa: boolean | null
+          created_at: string | null
+          data_contratacao: string | null
+          data_vencimento: string | null
+          id: string
+          nome: string
+          saldo_devedor: number
+          taxa_juros: number | null
+          tipo: string
+          updated_at: string | null
+          usuario_id: string
+          valor_minimo: number | null
+        }
+        Insert: {
+          ativa?: boolean | null
+          created_at?: string | null
+          data_contratacao?: string | null
+          data_vencimento?: string | null
+          id?: string
+          nome: string
+          saldo_devedor: number
+          taxa_juros?: number | null
+          tipo: string
+          updated_at?: string | null
+          usuario_id: string
+          valor_minimo?: number | null
+        }
+        Update: {
+          ativa?: boolean | null
+          created_at?: string | null
+          data_contratacao?: string | null
+          data_vencimento?: string | null
+          id?: string
+          nome?: string
+          saldo_devedor?: number
+          taxa_juros?: number | null
+          tipo?: string
+          updated_at?: string | null
+          usuario_id?: string
+          valor_minimo?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dividas_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "dividas_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dividas_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "dividas_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       employees: {
         Row: {
           created_at: string | null
@@ -2510,45 +2584,60 @@ export type Database = {
       savings_goals: {
         Row: {
           auto_save_percentage: number | null
+          categoria_alvo: string | null
           category: string | null
           created_at: string | null
           current_amount: number | null
           deadline: string | null
+          frequencia_atual: number | null
+          frequencia_maxima: number | null
           id: string
           name: string
+          periodo: string | null
           progress_percentage: number | null
           status: string | null
           target_amount: number
+          tipo: string | null
           updated_at: string | null
           user_id: string
           weekly_checkin_enabled: boolean | null
         }
         Insert: {
           auto_save_percentage?: number | null
+          categoria_alvo?: string | null
           category?: string | null
           created_at?: string | null
           current_amount?: number | null
           deadline?: string | null
+          frequencia_atual?: number | null
+          frequencia_maxima?: number | null
           id?: string
           name: string
+          periodo?: string | null
           progress_percentage?: number | null
           status?: string | null
           target_amount: number
+          tipo?: string | null
           updated_at?: string | null
           user_id: string
           weekly_checkin_enabled?: boolean | null
         }
         Update: {
           auto_save_percentage?: number | null
+          categoria_alvo?: string | null
           category?: string | null
           created_at?: string | null
           current_amount?: number | null
           deadline?: string | null
+          frequencia_atual?: number | null
+          frequencia_maxima?: number | null
           id?: string
           name?: string
+          periodo?: string | null
           progress_percentage?: number | null
           status?: string | null
           target_amount?: number
+          tipo?: string | null
           updated_at?: string | null
           user_id?: string
           weekly_checkin_enabled?: boolean | null
@@ -2781,6 +2870,7 @@ export type Database = {
           data_transacao: string | null
           descricao: string | null
           essencial: boolean | null
+          expense_type: string | null
           external_id: string | null
           fatura_id: string | null
           forma_pagamento: string | null
@@ -2817,6 +2907,7 @@ export type Database = {
           data_transacao?: string | null
           descricao?: string | null
           essencial?: boolean | null
+          expense_type?: string | null
           external_id?: string | null
           fatura_id?: string | null
           forma_pagamento?: string | null
@@ -2853,6 +2944,7 @@ export type Database = {
           data_transacao?: string | null
           descricao?: string | null
           essencial?: boolean | null
+          expense_type?: string | null
           external_id?: string | null
           fatura_id?: string | null
           forma_pagamento?: string | null
