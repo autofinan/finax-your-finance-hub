@@ -1,194 +1,288 @@
+# Plano Incremental: Finax Acelerador de Liberdade Financeira
 
-# Plano Completo: Sistema de Cartões, Faturas e Correções de Build
+## Diagnostico Real do Estado Atual
 
----
+Dados do banco confirmam:
 
-## Contexto: O que encontrei na varredura
 
-### Dados reais do banco (estado atual)
-- **nubank**: limite_total=6400, limite_disponivel=6210.10 → `calculado_usado=189.90`
-  - Mas faturas em aberto somam R$ 420 (março R$140 + abril R$70 de parcela)
-  - Parcelas futuras: R$ 210
-  - **O limite_disponivel está ERRADO** — não reflete as faturas abertas
-- **inter**: limite_total=300, limite_disponivel=259.50 → usado=40.50, mas parcelas futuras R$135
-- **Sicredi**: limite_total=2100, limite_disponivel=2100 → faturas todas pagas, correto
-- Transações do nubank: nenhuma tem `fatura_id` preenchido — **é por isso que "detalhar fatura" aparece vazio**
+| Recurso                                 | Estado                              | Acao       |
+| --------------------------------------- | ----------------------------------- | ---------- |
+| Tabela `dividas`                        | NAO EXISTE                          | Criar      |
+| Coluna `expense_type` em transacoes     | NAO EXISTE                          | Criar      |
+| Campos de frequencia em `savings_goals` | NAO EXISTEM                         | Adicionar  |
+| Faturas abertas                         | 0 (2 futuras, 6 pagas)              | Fix status |
+| Transacoes com `fatura_id`              | 0 de 24 (todas usam so `cartao_id`) | Vincular   |
+| Recorrentes com `cartao_id`             | 0 de 8 ativos                       | Vincular   |
 
-### Problemas de Build pendentes (2 erros)
-1. `getMonthlySummary` duplicado: existe em `helpers.ts` (linha 156) E é redeclarado como alias na linha 86 do `index.ts` — conflito de nome
-2. `markAsExecuted` chamado com 3 argumentos (linha 3318) mas a função aceita apenas 2
 
 ---
 
-## PARTE 1 — Correções de Build (urgente, precisa de deploy)
+## FASE 1 -- Correcoes de Dados e Bugs Pendentes (Prioridade Maxima)
 
-### Fix 1A: Remover `getMonthlySummary` do import de `helpers.ts`
-**Arquivo:** `supabase/functions/finax-worker/index.ts` linha 51
-- Remover `getMonthlySummary` do import de `./utils/helpers.ts`
-- O alias na linha 86 (`const getMonthlySummary = getMonthlySummaryInline`) já cobre todos os usos
+### 1A: Corrigir faturas sem status correto
 
-### Fix 1B: Corrigir chamada `markAsExecuted` com 3 args
-**Arquivo:** `supabase/functions/finax-worker/index.ts` linha 3318
-- `await markAsExecuted(decision.decisionId, result.success, result.contextId)`
-- Verificar assinatura real da função e ajustar para 2 argumentos ou adicionar o terceiro parâmetro
+- Nenhuma fatura tem status `aberta` -- todas sao `futura` ou `paga`
+- Problema: a migration anterior marcou TUDO como `futura`, mas fev/2026 (mes atual) deveria ser `aberta`
+- Fix: UPDATE faturas_cartao SET status='aberta' WHERE mes = 2 AND ano = 2026
 
----
+### 1B: Vincular transacoes existentes a faturas
 
-## PARTE 2 — Problema Raiz: `fatura_id` nunca é preenchido nas transações
+- 24 transacoes tem `cartao_id` mas 0 tem `fatura_id`
+- O FaturaDetailModal ja faz fallback por `cartao_id + date range` -- isso funciona
+- Mas o valor_total da fatura pode estar dessincronizado
+- Fix: Criar SQL que recalcula `valor_total` de cada fatura com base nas transacoes reais do ciclo
 
-### Diagnóstico
-As transações do nubank no banco **não têm `fatura_id`** preenchido:
-```
-chinelo → fatura_id: null
-passagem de onibus → fatura_id: null
-açaí → fatura_id: null
-```
-Isso significa que a query do `FaturaDetailModal` por `fatura_id` retorna vazio. A query por `cartao_id + date range` deveria funcionar, mas o modal ainda mostra vazio.
+### 1C: Vincular recorrentes a cartoes
 
-### Causa do "Detalhar Fatura vazio"
-O `FaturaDetailModal` usa dois critérios para buscar transações:
-1. Por `fatura_id` → retorna vazio (porque as transações não têm fatura_id)
-2. Por `cartao_id + date range` (ciclo de fechamento) → deveria funcionar, mas o botão "Detalhar fatura" no Cartões.tsx só abre se `faturaAberta` existir (linha 119: `if (!fatura) return`)
+- 8 recorrentes ativos mas 0 tem `cartao_id` preenchido
+- O campo `cartao_id` ja existe na tabela (migration anterior)
+- Fix: identificar recorrentes que sao de credito e vincular ao cartao correto via UPDATE
 
-**Problema adicional**: A função `openFaturaDetail` em `Cartoes.tsx` (linha 117-132) usa `faturasEmAberto` da view `vw_faturas_em_aberto`. Se a view retorna fatura mas sem transações linkadas, o modal abre mas mostra vazio.
-
-### Fix necessário no `FaturaDetailModal`
-Melhorar a estratégia de busca para usar apenas `cartao_id + date range` quando `fatura_id` não retornar resultados.
+**Arquivos modificados:** Nenhum codigo -- apenas SQLs via ferramenta de insert
 
 ---
 
-## PARTE 3 — Limite Disponível: Cálculo Incorreto
+## FASE 2 -- Tabela de Dividas + Registro Basico
 
-### Como está hoje (errado)
-O `limite_disponivel` é decrementado quando um gasto é registrado via WhatsApp (na função de registro de expense). Mas:
-- Quando o usuário **paga a fatura**, o limite volta (função `pagarFatura` já faz isso)
-- Quando o usuário **aumenta o limite** pelo frontend, `updateCartao` agora recalcula `limite_disponivel` (fix anterior aplicado)
+### 2A: Criar tabela `dividas`
 
-### Problema real encontrado
-`calculado_usado = limite_total - limite_disponivel = 189.90`
-Mas as faturas abertas somam R$ 420. Isso significa que o `limite_disponivel` foi decrementado incorretamente em algum momento.
+Migration SQL:
 
-### Fix: Sincronizar `limite_disponivel` com base nas faturas abertas
-**Arquivo novo:** `src/components/cartoes/useLimiteSync.ts`
-- Criar hook que calcula o `limite_disponivel` real = `limite_total - soma(faturas abertas não pagas + parcelas futuras)`
-- Exibir no card o valor calculado localmente (sem precisar atualizar o banco a cada consulta)
-
-**Regra de negócio correta:**
-```
-limite_disponivel_real = limite_total - (soma das faturas abertas - valor_pago)
+```text
+CREATE TABLE dividas (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  usuario_id UUID NOT NULL,
+  tipo TEXT NOT NULL,        -- 'cartao', 'emprestimo', 'financiamento', 'cheque_especial'
+  nome TEXT NOT NULL,
+  saldo_devedor NUMERIC(10,2) NOT NULL,
+  taxa_juros NUMERIC(5,2),   -- Taxa mensal
+  valor_minimo NUMERIC(10,2),
+  data_vencimento DATE,
+  data_contratacao DATE,
+  ativa BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- RLS policies para usuario acessar apenas suas dividas
+-- Indices em usuario_id e ativa
 ```
 
----
+### 2B: Pagina de dividas no dashboard
 
-## PARTE 4 — Cartões.tsx: Mostrar Recorrentes e Detalhamento Correto
+- Novo arquivo: `src/pages/Dividas.tsx`
+- Novo hook: `src/hooks/useDividas.ts`
+- CRUD basico: listar, adicionar, editar, marcar como paga
+- Card mostrando saldo total devedor e projecao simples
+- Adicionar rota no `App.tsx` e link no `Sidebar.tsx`
 
-### 4A: Buscar recorrentes vinculados ao cartão
-Os recorrentes no banco **não têm `cartao_id`** (o campo não existe na tabela `gastos_recorrentes`). Portanto, não é possível vincular diretamente pelo banco. A solução é mostrar os recorrentes globais em uma seção separada no card, sem vincular por cartão.
+### 2C: Fluxo WhatsApp para registrar divida
 
-**Novo campo necessário na tabela:** `gastos_recorrentes.cartao_id` (migration)
+- Adicionar `debt` e `list_debts` como ActionType valido
+- No `ai-classifier.ts`: mapear "registrar divida", "tenho divida", "quanto devo"
+- No `index.ts` (processarJob): handler para `debt` com coleta de slots (tipo, nome, saldo_devedor, taxa_juros, valor_minimo)
+- Novo arquivo: `supabase/functions/finax-worker/intents/debt-handler.ts`
 
-Enquanto isso, na interface mostrar os recorrentes ativos como "possíveis compromissos mensais" na seção do cartão.
+**Arquivos novos:**
 
-### 4B: Separação visual de "Em Uso"
-Dentro de cada card de cartão, mostrar:
-- Pontuais: gastos da fatura atual
-- Parcelas: valor das parcelas ativas neste cartão
-- Total usado: soma dos dois
+- `src/pages/Dividas.tsx`
+- `src/hooks/useDividas.ts`
+- `supabase/functions/finax-worker/intents/debt-handler.ts`
 
-### 4C: Botão "Detalhar" sempre visível
-Atualmente o botão "Detalhar fatura" só aparece se `faturaAberta` existe. Mudar para: sempre mostrar botão se houver fatura (aberta OU histórica). Se não houver nenhuma fatura, mostrar "Nenhuma fatura ainda".
+**Arquivos modificados:**
 
----
-
-## PARTE 5 — Ciclo Correto de Faturas: Uma por Mês por Cartão
-
-### Problema detectado
-Faturas do nubank:
-- mes=3, ano=2026 → R$140 (aberta)
-- mes=4, ano=2026 → R$70 (aberta) — **parcela futura sendo colocada no mês seguinte automaticamente**
-
-O sistema já cria faturas para meses futuros quando registra parcelas. Isso está correto pelo design (parcela da cadeira 2/2 vai para abril). Mas a interface exibe a fatura de abril como "em aberto" quando deveria ser "futura".
-
-### Fix: Status de faturas futuras
-**Arquivo:** `supabase/functions/finax-worker/intents/expense.ts` ou onde as parcelas são criadas
-Ao criar fatura para mês futuro: `status = 'futura'` em vez de `'aberta'`
-- `aberta` = ciclo atual
-- `futura` = meses que ainda não chegaram
-
-**No frontend** (`useFaturas.ts`):
-- `faturasEmAberto`: filtrar apenas status `aberta` (não `futura`)
-- Historico: mostrar todas incluindo `futura` com badge visual diferente
+- `src/App.tsx` (rota)
+- `src/components/layout/Sidebar.tsx` (link)
+- `supabase/functions/finax-worker/decision/types.ts` (ActionType)
+- `supabase/functions/finax-worker/decision/ai-classifier.ts` (mapeamento)
+- `supabase/functions/finax-worker/index.ts` (handler)
 
 ---
 
-## PARTE 6 — WhatsApp: Fluxo de Consultas de Faturas e Contas
+## FASE 3 -- Classificacao de Gastos (expense_type)
 
-### 6A: Faturas em aberto via WhatsApp
-Já existe `getInvoiceDetail` em `query.ts` (linha 342+). O problema é que busca por `fatura_id` nas transações, mas as transações não têm `fatura_id` preenchido.
+### 3A: Adicionar coluna `expense_type` em transacoes
 
-**Fix em `query.ts`:** Na função `getInvoiceDetail`, adicionar fallback: se não encontrar transações por `fatura_id`, buscar por `cartao_id + mes_referencia`.
+Migration:
 
-### 6B: "Quais contas pendentes esse mês" via WhatsApp
-Já existe handler em `query.ts`. Verificar se está mapeado corretamente no classifier.
-
-### 6C: Duplicata falsa (print enviado)
-O usuário pediu "Me mande o relatório semanal" após registrar um gasto — o sistema interpretou como nova tentativa de registrar "chinelo 49.90" e disparou alerta de duplicata.
-
-**Causa:** A detecção de duplicata está comparando com transações dentro de 5 minutos, e o sistema classificou o pedido de relatório como gasto. O fix correto é no `ai-classifier.ts`: garantir que "me mande o relatório" seja sempre classificado como `weekly_report`, nunca como `expense`.
-
----
-
-## PARTE 7 — Arquivos a Criar/Modificar
-
-### Arquivos Frontend (sem risco de quebrar o backend)
-| Arquivo | Ação | O que muda |
-|---|---|---|
-| `src/pages/Cartoes.tsx` | Modificar | Buscar recorrentes, mostrar breakdown pontuais/parcelas, sempre exibir botão detalhar |
-| `src/pages/Faturas.tsx` | Modificar | Filtrar faturas futuras do "Em Aberto", badge visual para futura |
-| `src/hooks/useFaturas.ts` | Modificar | Separar faturasEmAberto (status=aberta) de faturasFuturas (status=futura) |
-| `src/components/cartoes/FaturaDetailModal.tsx` | Modificar | Melhorar fallback de busca sem fatura_id |
-
-### Arquivos Backend Edge Function (requer deploy)
-| Arquivo | Ação | O que muda |
-|---|---|---|
-| `supabase/functions/finax-worker/index.ts` | Modificar | Fix 2 erros de build + fix duplicata falsa de relatório |
-| `supabase/functions/finax-worker/intents/query.ts` | Modificar | Fix fallback de busca de transações por cartao_id quando fatura_id está vazio |
-| `supabase/functions/finax-worker/decision/ai-classifier.ts` | Modificar | Garantir que "relatório semanal" nunca seja expense |
-
-### Migration de banco (requer execução manual)
-| Tabela | Ação | SQL |
-|---|---|---|
-| `gastos_recorrentes` | Adicionar coluna | `ALTER TABLE gastos_recorrentes ADD COLUMN cartao_id uuid REFERENCES cartoes_credito(id)` |
-| `faturas_cartao` | Adicionar constraint | UPDATE faturas_cartao SET status='futura' WHERE (ano > EXTRACT(YEAR FROM NOW())) OR (ano = EXTRACT(YEAR FROM NOW()) AND mes > EXTRACT(MONTH FROM NOW())) |
-
----
-
-## Sequência de Execução
-
-1. **Fix build errors** → deploy imediato (sem isso o worker não funciona)
-2. **Frontend: useFaturas + Faturas.tsx** → separar futura de aberta
-3. **Frontend: Cartoes.tsx** → mostrar recorrentes + breakdown
-4. **Frontend: FaturaDetailModal** → fix busca por cartao_id+date range
-5. **Migration** → adicionar cartao_id em gastos_recorrentes + corrigir status futuras
-6. **Backend: query.ts** → fallback de busca por cartao_id
-7. **Backend: ai-classifier** → fix duplicata falsa de relatório
-
----
-
-## Secao Tecnica: Fix dos 2 Erros de Build
-
-**Erro 1** — `getMonthlySummary` duplicado:
-```typescript
-// index.ts linha 51 — REMOVER getMonthlySummary do import:
-import { normalizeText, detectQueryScope, detectTimeRange, 
-  isNumericOnly, parseNumericValue, logDecision, extractSlotValue
-} from "./utils/helpers.ts";
-// A linha 86 já tem: const getMonthlySummary = getMonthlySummaryInline;
+```text
+ALTER TABLE transacoes ADD COLUMN expense_type TEXT DEFAULT 'discricionario';
+-- Valores: essencial_fixo, essencial_variavel, estrategico, discricionario, divida
 ```
 
-**Erro 2** — `markAsExecuted` com 3 args:
-```typescript
-// index.ts linha 3318 — CORRIGIR:
-// De: await markAsExecuted(decision.decisionId, result.success, result.contextId);
-// Para: await markAsExecuted(decision.decisionId, result.success);
+### 3B: Auto-classificar na hora do registro
+
+- Modificar `expense-inline.ts`: apos registrar transacao, classificar expense_type baseado em regras de descricao/categoria
+- Mapa de regras estatico (aluguel -> essencial_fixo, mercado -> essencial_variavel, etc.)
+- Nao precisa de edge function separada -- integrar na logica existente
+
+### 3C: Dashboard usar expense_type para insights
+
+- Modificar `useDashboard.ts` e `Dashboard.tsx` para mostrar breakdown por expense_type
+- Widget: "Gastos Essenciais vs Discricionarios"
+
+**Arquivos modificados:**
+
+- `supabase/functions/finax-worker/intents/expense-inline.ts`
+- `src/hooks/useDashboard.ts`
+- `src/components/dashboard/ExpenseChart.tsx`
+
+---
+
+## FASE 4 -- Simulador de Cenarios de Quitacao
+
+### 4A: Calculo de margem real
+
+- Nova funcao em `debt-handler.ts`: `calculateRealMargin(userId)`
+- Receita - essenciais_fixos - minimos_divida = margem real
+
+### 4B: Simulador de 3 cenarios
+
+- Nova funcao: `simulateDebtScenarios(userId)`
+- Cenario atual (30% margem), conservador (-15% discricionario), agressivo (-30% discricionario)
+- Retorna: meses para quitar, juros total, dias para liberdade
+
+### 4C: WhatsApp + Dashboard
+
+- WhatsApp: "simular quitacao" / "quanto tempo pra quitar"
+- Dashboard: Widget de simulacao em `src/pages/Dividas.tsx` com os 3 cenarios lado a lado
+
+**Arquivos modificados:**
+
+- `supabase/functions/finax-worker/intents/debt-handler.ts` (ampliar)
+- `src/pages/Dividas.tsx` (widget simulador)
+
+---
+
+## FASE 5 -- Detector de Padroes e Insights Premium
+
+### 5A: Detector de padroes assertivos
+
+- Funcao em `supabase/functions/finax-worker/intents/reports-handler.ts`: `detectHighImpactPatterns(userId)`
+- Detecta: delivery excessivo (>=12x/mes), assinaturas multiplas (>=3), cafes fora (>=15x/mes)
+- Retorna apenas padroes de alta severidade
+
+### 5B: Gerador de insight com impacto em dias
+
+- Funcao: `generatePremiumInsight(userId)` -- combina padroes + simulador de dividas
+- Formato fixo: situacaoAtual, ajustePossivel, impactoDias, impactoJuros, novaData
+- Usa dados REAIS do usuario (nunca generico)
+
+### 5C: Envio via finax-insights (CRON existente)
+
+- Modificar `supabase/functions/finax-insights/index.ts` para gerar insights premium alem dos alertas basicos
+- Formato WhatsApp com impacto em dias de liberdade
+
+**Arquivos novos:**
+
+- Nenhum (funcoes em arquivos existentes)
+
+**Arquivos modificados:**
+
+- `supabase/functions/finax-worker/intents/reports-handler.ts`
+- `supabase/functions/finax-insights/index.ts`
+
+---
+
+## FASE 6 -- Metas com Frequencia + Retenção
+
+### 6A: Campos de frequencia em savings_goals
+
+Migration:
+
+```text
+ALTER TABLE savings_goals 
+  ADD COLUMN tipo TEXT DEFAULT 'valor',       -- 'valor' | 'frequencia'
+  ADD COLUMN categoria_alvo TEXT,
+  ADD COLUMN frequencia_maxima INTEGER,
+  ADD COLUMN frequencia_atual INTEGER DEFAULT 0,
+  ADD COLUMN periodo TEXT DEFAULT 'mensal';
 ```
+
+### 6B: Monitoramento em tempo real
+
+- Apos cada gasto registrado, verificar se bate com alguma meta de frequencia
+- Alertar quando atingir ou ultrapassar limite
+
+### 6C: Sistema de streak de disciplina
+
+- Funcao que calcula dias consecutivos dentro do orcamento
+- Enviar elogio a cada 7, 14, 21, 30 dias
+
+### 6D: Check-in semanal automatico
+
+- Edge function CRON (toda segunda 9h)
+- Resumo da semana + progresso de dividas
+
+**Arquivos modificados:**
+
+- `src/hooks/useMetas.ts` (suportar tipo frequencia)
+- `src/pages/Metas.tsx` (UI para meta de frequencia)
+- `supabase/functions/finax-worker/index.ts` (check apos registro)
+
+---
+
+## FASE 7 -- Refinar Planos de Assinatura
+
+### 7A: Atualizar logica de trial/planos
+
+- Trial 14 dias: tudo basico + 1 insight
+- Basico R$19/mes: insights 1x/semana, simulador basico
+- Pro R$39/mes: tudo ilimitado
+
+### 7B: Gate de features por plano
+
+- Criar helper `canAccessFeature(plano, feature)` 
+- Bloquear simulador de dividas, insights ilimitados, gestao avancada de cartoes para plano trial/basico
+- UI mostra lock icon + CTA de upgrade
+
+**Arquivos modificados:**
+
+- `src/hooks/usePlanoStatus.ts` (feature gating)
+- Componentes que usam features Pro
+
+---
+
+## Sequencia de Execucao Recomendada
+
+
+| Etapa | Fase                                | Risco | Tempo estimado |
+| ----- | ----------------------------------- | ----- | -------------- |
+| 1     | Fase 1: Fix dados (SQL)             | Baixo | 1 sessao       |
+| 2     | Fase 2A: Tabela dividas (migration) | Baixo | 1 sessao       |
+| 3     | Fase 2B: Pagina dividas (frontend)  | Baixo | 1 sessao       |
+| 4     | Fase 2C: WhatsApp dividas (backend) | Medio | 1-2 sessoes    |
+| 5     | Fase 3: expense_type                | Medio | 1 sessao       |
+| 6     | Fase 4: Simulador                   | Medio | 1-2 sessoes    |
+| 7     | Fase 5: Padroes + Insights          | Alto  | 2 sessoes      |
+| 8     | Fase 6: Metas frequencia + retencao | Medio | 2 sessoes      |
+| 9     | Fase 7: Planos                      | Baixo | 1 sessao       |
+
+
+---
+
+## O que NAO fazer agora
+
+- NAO criar edge functions separadas para cada feature (manter modularizado dentro do finax-worker)
+- NAO implementar gamificacao de competicao (streaks de disciplina sim, ranking nao)
+- NAO adicionar integracao com bancos (Open Banking) -- escopo futuro
+- NAO modularizar mais o processarJob do index.ts (decisao anterior confirmada)
+
+---
+
+## Secao Tecnica: Primeira Acao Imediata (Fase 1)
+
+SQLs para corrigir dados agora:
+
+```text
+-- 1A: Corrigir fatura de fev/2026 para 'aberta'
+UPDATE faturas_cartao 
+SET status = 'aberta' 
+WHERE mes = 2 AND ano = 2026 AND status = 'futura';
+
+-- 1B: Recalcular valor_total das faturas com base nas transacoes reais
+-- (executar apos verificar os dados)
+```
+
+Apos executar a Fase 1, comecar a Fase 2 (tabela dividas + frontend + backend).  
+  
+UM DETALHE, PARA O USUARIO NOA DIGA DESCRICIONARIO, ELE NAO VAI ENTENDER, FICA MUITO VAGO, NO INTERNO OK, MAS PARA O USUARIO CHAME DE GASTOS FLEXIVEIS, PARA ELE NAO ESTRANHAR. 
