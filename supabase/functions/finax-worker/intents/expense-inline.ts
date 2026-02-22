@@ -19,6 +19,43 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// ============================================================================
+// 🏷️ CLASSIFICAÇÃO AUTOMÁTICA DE EXPENSE_TYPE
+// ============================================================================
+const EXPENSE_TYPE_RULES: Record<string, string[]> = {
+  essencial_fixo: [
+    "aluguel", "condominio", "condomínio", "iptu", "internet", "agua", "água",
+    "luz", "energia", "gas", "gás", "seguro", "plano de saude", "plano de saúde"
+  ],
+  essencial_variavel: [
+    "mercado", "supermercado", "feira", "farmacia", "farmácia", "combustivel",
+    "combustível", "gasolina", "etanol", "remedio", "remédio", "hortifruti"
+  ],
+  estrategico: [
+    "academia", "curso", "faculdade", "escola", "livro", "educacao", "educação",
+    "saude", "saúde", "dentista", "medico", "médico", "terapia", "investimento"
+  ],
+  divida: [
+    "fatura", "emprestimo", "empréstimo", "financiamento", "juros",
+    "parcela", "cheque especial", "quitação", "quitacao"
+  ],
+  // flexivel é o default (delivery, restaurante, streaming, lazer, etc.)
+};
+
+export function classifyExpenseType(descricao: string, categoria?: string): string {
+  const text = `${descricao} ${categoria || ""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  
+  for (const [expenseType, keywords] of Object.entries(EXPENSE_TYPE_RULES)) {
+    for (const keyword of keywords) {
+      const normalizedKeyword = keyword.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (text.includes(normalizedKeyword)) {
+        return expenseType;
+      }
+    }
+  }
+  return "flexivel";
+}
+
 type MessageSource = "meta" | "vonage";
 
 interface ExtractedSlots {
@@ -141,6 +178,10 @@ export async function registerExpenseInline(
     timeString = result.timeString;
   }
 
+  // 🏷️ AUTO-CLASSIFICAR EXPENSE TYPE
+  const expenseType = classifyExpenseType(descricao, categoria);
+  console.log(`🏷️ [EXPENSE] expense_type: "${descricao}" → ${expenseType}`);
+
   const { data: tx, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
     valor,
@@ -153,7 +194,8 @@ export async function registerExpenseInline(
     origem: "whatsapp",
     forma_pagamento: formaPagamento,
     cartao_id: cardId,
-    status: "confirmada"
+    status: "confirmada",
+    expense_type: expenseType
   }).select("id").single();
   
   if (error) {
