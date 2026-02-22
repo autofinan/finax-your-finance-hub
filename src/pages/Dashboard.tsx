@@ -2,6 +2,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { StatCard } from '@/components/dashboard/StatCard';
 import { RecentTransactions } from '@/components/dashboard/RecentTransactions';
 import { ExpenseChart } from '@/components/dashboard/ExpenseChart';
+import { ExpenseTypeBreakdown } from '@/components/dashboard/ExpenseTypeBreakdown';
 import { PlanoCard } from '@/components/dashboard/PlanoCard';
 import { BudgetCard } from '@/components/dashboard/BudgetCard';
 import { InsightDoDia } from '@/components/dashboard/InsightDoDia';
@@ -224,6 +225,7 @@ const Dashboard = () => {
               </motion.div>
 
               <RecentTransactions transacoes={transacoes} loading={loading} />
+              <ExpenseTypeBreakdown transacoes={transacoes} />
               <ExpenseChart transacoes={transacoes} />
             </div>
 
