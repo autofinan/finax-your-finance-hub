@@ -2145,6 +2145,42 @@ async function processarJob(job: any): Promise<void> {
     });
     
     // ========================================================================
+    // 🔄 POST-CLASSIFICATION INTERCEPTOR: Payment method correction
+    // ========================================================================
+    // If user says something like "paguei em pix" and last transaction was
+    // registered with unknown/outro payment → reclassify as edit
+    // ========================================================================
+    if (decision.actionType === "expense" || decision.actionType === "unknown" || decision.actionType === "chat") {
+      const paymentMentioned = (() => {
+        const norm = normalizeText(conteudoProcessado);
+        if (norm.includes("pix")) return "pix";
+        if (norm.includes("debito") || norm.includes("débito")) return "debito";
+        if (norm.includes("credito") || norm.includes("crédito")) return "credito";
+        if (norm.includes("dinheiro")) return "dinheiro";
+        return null;
+      })();
+      
+      if (paymentMentioned) {
+        // Check if last transaction has unknown/outro payment (within 5 min for corrections)
+        const lastTx = await getLastTransaction(userId, 5);
+        if (lastTx && (lastTx.forma_pagamento === "outro" || lastTx.forma_pagamento === "unknown" || !lastTx.forma_pagamento)) {
+          console.log(`🔄 [INTERCEPTOR] Corrigindo pagamento da última transação: ${lastTx.id} → ${paymentMentioned}`);
+          const result = await updateTransactionPaymentMethod(lastTx.id, paymentMentioned);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber,
+            user_id: userId,
+            user_message: conteudoProcessado,
+            ai_response: result.message,
+            tipo: "edit"
+          });
+          return;
+        }
+      }
+    }
+    
+    // ========================================================================
     // 🧠 ELITE: SELF-HEALING CHECK (Verificar correções anteriores)
     // ========================================================================
     // Antes de prosseguir, verificar se já temos correções aprendidas para 

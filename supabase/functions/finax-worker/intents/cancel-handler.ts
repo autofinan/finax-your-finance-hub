@@ -43,7 +43,7 @@ export async function cancelTransaction(userId: string, txId: string): Promise<{
 // 🔍 BUSCAR ÚLTIMA TRANSAÇÃO
 // ============================================================================
 
-export async function getLastTransaction(userId: string, withinMinutes: number = 2): Promise<any | null> {
+export async function getLastTransaction(userId: string, withinMinutes: number = 5): Promise<any | null> {
   const cutoff = new Date(Date.now() - withinMinutes * 60 * 1000).toISOString();
   
   const { data } = await supabase
