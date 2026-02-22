@@ -63,18 +63,13 @@ export function FaturaDetailModal({
       const result: FaturaItem[] = [];
 
       // Strategy: query by cartao_id + date range (billing cycle)
-      // If dia_fechamento = 5 and fatura mes=3/ano=2026:
-      //   covers Feb 6 to Mar 5
       if (cartaoId && mes && ano) {
         const dia = diaFechamento || 5;
         
-        // Start date: previous month, day after fechamento
         const prevMonth = mes === 1 ? 12 : mes - 1;
         const prevYear = mes === 1 ? ano - 1 : ano;
         const startDay = dia + 1;
         const startDate = `${prevYear}-${String(prevMonth).padStart(2, '0')}-${String(Math.min(startDay, 28)).padStart(2, '0')}`;
-        
-        // End date: current month, dia_fechamento
         const endDate = `${ano}-${String(mes).padStart(2, '0')}-${String(Math.min(dia, 28)).padStart(2, '0')}`;
 
         // Fetch ALL transactions for this card in this billing cycle
@@ -98,6 +93,28 @@ export function FaturaDetailModal({
             data: t.data || '',
             tipo,
           });
+        }
+
+        // ✅ Buscar recorrentes ativos vinculados a este cartão
+        const { data: recData } = await supabase
+          .from('gastos_recorrentes')
+          .select('id, descricao, valor_parcela, categoria, ativo')
+          .eq('cartao_id', cartaoId)
+          .eq('ativo', true);
+
+        for (const r of (recData || [])) {
+          // Evitar duplicar se já existe como transação
+          if (!result.find(item => item.tipo === 'recorrente' && item.descricao === (r.descricao || r.categoria))) {
+            result.push({
+              id: r.id,
+              descricao: r.descricao || r.categoria || 'Recorrente',
+              valor: Number(r.valor_parcela),
+              categoria: r.categoria || 'outros',
+              parcela: null,
+              data: '',
+              tipo: 'recorrente',
+            });
+          }
         }
       }
 

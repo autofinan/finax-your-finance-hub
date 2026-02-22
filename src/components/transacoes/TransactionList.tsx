@@ -22,6 +22,14 @@ interface TransactionListProps {
   loading?: boolean;
 }
 
+const EXPENSE_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+  essencial_fixo: { label: 'Essencial Fixo', color: 'bg-blue-500/20 text-blue-400' },
+  essencial_variavel: { label: 'Essencial', color: 'bg-teal-500/20 text-teal-400' },
+  estrategico: { label: 'Estratégico', color: 'bg-purple-500/20 text-purple-400' },
+  flexivel: { label: 'Flexível', color: 'bg-amber-500/20 text-amber-400' },
+  divida: { label: 'Dívida', color: 'bg-red-500/20 text-red-400' },
+};
+
 export function TransactionList({ transacoes, onDelete, loading }: TransactionListProps) {
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -65,6 +73,10 @@ export function TransactionList({ transacoes, onDelete, loading }: TransactionLi
     <div className="space-y-3">
       {transacoes.map((transacao, index) => {
         const categoriaInfo = getCategoriaInfo(transacao.categoria);
+        const expenseType = (transacao as any).expense_type as string | undefined;
+        const expenseInfo = expenseType ? EXPENSE_TYPE_LABELS[expenseType] : null;
+        const descricao = (transacao as any).descricao as string | undefined;
+
         return (
           <div
             key={transacao.id}
@@ -87,9 +99,9 @@ export function TransactionList({ transacoes, onDelete, loading }: TransactionLi
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <p className="font-medium truncate">
-                    {transacao.observacao || categoriaInfo.label}
+                    {descricao || transacao.observacao || categoriaInfo.label}
                   </p>
                   <span
                     className="text-xs px-2 py-0.5 rounded-full"
@@ -100,6 +112,11 @@ export function TransactionList({ transacoes, onDelete, loading }: TransactionLi
                   >
                     {categoriaInfo.label}
                   </span>
+                  {expenseInfo && transacao.tipo === 'saida' && (
+                    <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', expenseInfo.color)}>
+                      {expenseInfo.label}
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {format(new Date(transacao.data), "EEEE, dd 'de' MMMM 'às' HH:mm", {
