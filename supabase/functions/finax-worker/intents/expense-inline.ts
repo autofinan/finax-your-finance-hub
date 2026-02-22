@@ -94,7 +94,9 @@ export async function registerExpenseInline(
     console.log(`   └─ 🧠 Termo "${categoryResult.keyTerm}" aprendido para futuras transações!`);
   }
   
-  const formaPagamento = slots.payment_method || "outro";
+  const formaPagamento = (slots.payment_method && slots.payment_method !== "unknown" && slots.payment_method !== "outro") 
+    ? slots.payment_method 
+    : "outro";
   
   // ✅ DEDUPLICAÇÃO
   if (!slots._skip_duplicate) {

@@ -40,6 +40,9 @@ export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: s
 // ✅ hasAllRequiredSlots - FUNÇÃO CANÔNICA
 // ============================================================================
 
+// Values that should NOT count as "filled" for payment_method
+const INVALID_PAYMENT_VALUES = ["unknown", "outro", "desconhecido", "none", "null", "undefined"];
+
 export function hasAllRequiredSlots(actionType: ActionType, slots: Record<string, any>): boolean {
   const requirements = SLOT_REQUIREMENTS[actionType];
   if (!requirements) return true;
@@ -47,6 +50,10 @@ export function hasAllRequiredSlots(actionType: ActionType, slots: Record<string
   for (const required of requirements.required) {
     const value = slots[required];
     if (value === null || value === undefined || value === "") {
+      return false;
+    }
+    // Reject invalid payment method values
+    if (required === "payment_method" && typeof value === "string" && INVALID_PAYMENT_VALUES.includes(value.toLowerCase())) {
       return false;
     }
   }
