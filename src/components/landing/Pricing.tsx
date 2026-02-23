@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Sparkles, ArrowRight, Crown, Zap, Star, Users, TrendingUp, MessageCircle } from 'lucide-react';
+import { Check, Sparkles, ArrowRight, Crown, Zap, Star, Users, TrendingUp, MessageCircle, Lock } from 'lucide-react';
 import { CheckoutModal } from '@/components/checkout/CheckoutModal';
 
 const WHATSAPP_NUMBER = '556581034588';
@@ -8,17 +8,26 @@ const WHATSAPP_LINK = `https://wa.me/${WHATSAPP_NUMBER}?text=Oi`;
 const plans = [
   {
     name: "Básico",
-    description: "Organização + Consciência",
+    description: "Organização + Clareza + Controle",
     price: "19,90",
     period: "/mês",
     icon: Zap,
     features: [
-      "Registro automático de gastos",
-      "Relatórios semanais e mensais",
-      "Orçamentos por categoria",
-      "Alertas de gastos",
-      "Histórico completo",
-      "Consulta de saldo instantânea",
+      { text: "Registro ilimitado de gastos", included: true },
+      { text: "Orçamentos ilimitados", included: true },
+      { text: "Até 5 metas de economia", included: true },
+      { text: "2 cartões de crédito", included: true },
+      { text: "Registro de dívidas", included: true },
+      { text: "Relatórios semanais/mensais", included: true },
+      { text: "Insights básicos", included: true },
+      { text: "Recorrentes e parcelamentos", included: true },
+      { text: "Suporte 24h", included: true },
+      { text: "Exportação CSV", included: true },
+    ],
+    lockedFeatures: [
+      "Simulador de quitação",
+      "Insights preditivos com IA",
+      "Cartões ilimitados",
     ],
     cta: "Assinar Básico",
     popular: false,
@@ -27,22 +36,25 @@ const plans = [
   },
   {
     name: "Pro",
-    description: "Controle Profundo + Evolução",
+    description: "Evolução + Quitação + Estratégia",
     price: "29,90",
     period: "/mês",
     icon: Crown,
     features: [
-      "Tudo do plano Básico",
-      "Controle de cartões com limite",
-      "Parcelamentos rastreados",
-      "Insights preditivos com IA",
-      "Consultor de compras inteligente",
-      "Contextos temporários (viagens)",
-      "Metas de economia avançadas",
-      "Gestão familiar compartilhada",
-      "Projeções financeiras",
-      "Recomendações personalizadas",
+      { text: "Tudo do plano Básico", included: true },
+      { text: "Simulador de quitação (3 cenários)", included: true },
+      { text: "Insights preditivos com IA", included: true },
+      { text: "Consultor IA semanal", included: true },
+      { text: "Detector de padrões", included: true },
+      { text: "Radar de anomalias", included: true },
+      { text: "Cartões ilimitados", included: true },
+      { text: "Gestão avançada de faturas", included: true },
+      { text: "Metas de frequência", included: true },
+      { text: "Projeções financeiras", included: true },
+      { text: "Contextos temporários (viagens)", included: true },
+      { text: "Suporte prioritário 2h", included: true },
     ],
+    lockedFeatures: [],
     cta: "Começar Trial Pro Grátis",
     popular: true,
     trial: true,
@@ -57,10 +69,8 @@ const Pricing = () => {
 
   const handleCTA = (plan: typeof plans[0]) => {
     if (plan.trial) {
-      // Trial grátis → WhatsApp
       window.open(WHATSAPP_LINK, '_blank');
     } else {
-      // Plano pago → Checkout
       setSelectedPlan(plan.plan);
       setCheckoutOpen(true);
     }
@@ -94,8 +104,8 @@ const Pricing = () => {
             </span>
           </h2>
           <p className="text-lg text-slate-300">
-            O Básico organiza sua vida financeira. O Pro te ajuda a{" "}
-            <span className="text-white font-semibold">evoluir de verdade</span>.
+            O Básico <strong className="text-white">organiza</strong> sua vida. O Pro te ajuda a{" "}
+            <strong className="text-white">acelerar sua liberdade financeira</strong>.
           </p>
         </div>
 
@@ -124,7 +134,6 @@ const Pricing = () => {
               {/* Plan Header */}
               <div className="flex items-start justify-between mb-6">
                 <div className="flex-1">
-                  {/* Trial Badge */}
                   {plan.trial && (
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 mb-3">
                       <Star className="w-3.5 h-3.5 text-emerald-400" />
@@ -162,26 +171,32 @@ const Pricing = () => {
               </div>
 
               {/* Features */}
-              <ul className="space-y-3.5 mb-8">
+              <ul className="space-y-3 mb-4">
                 {plan.features.map((feature, idx) => (
                   <li key={idx} className="flex items-start gap-3">
-                    <div
-                      className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                        plan.popular
-                          ? "bg-gradient-to-br from-indigo-500 to-blue-500 shadow-sm"
-                          : "bg-indigo-500/20"
-                      }`}
-                    >
-                      <Check
-                        className={`w-3 h-3 ${
-                          plan.popular ? "text-white" : "text-indigo-400"
-                        }`}
-                      />
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                      plan.popular ? "bg-gradient-to-br from-indigo-500 to-blue-500 shadow-sm" : "bg-indigo-500/20"
+                    }`}>
+                      <Check className={`w-3 h-3 ${plan.popular ? "text-white" : "text-indigo-400"}`} />
                     </div>
-                    <span className="text-slate-300 text-sm leading-relaxed">{feature}</span>
+                    <span className="text-slate-300 text-sm leading-relaxed">{feature.text}</span>
                   </li>
                 ))}
               </ul>
+
+              {/* Locked features for Básico */}
+              {plan.lockedFeatures && plan.lockedFeatures.length > 0 && (
+                <ul className="space-y-2.5 mb-8 pt-3 border-t border-white/5">
+                  {plan.lockedFeatures.map((feat, idx) => (
+                    <li key={idx} className="flex items-start gap-3 opacity-50">
+                      <div className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 bg-slate-700/50">
+                        <Lock className="w-3 h-3 text-slate-500" />
+                      </div>
+                      <span className="text-slate-500 text-sm leading-relaxed">{feat} <span className="text-xs text-indigo-400/80">— Pro</span></span>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
               {/* CTA */}
               <button
@@ -205,7 +220,6 @@ const Pricing = () => {
                 )}
               </button>
 
-              {/* No Card Note */}
               {plan.trial && (
                 <p className="text-center text-xs text-slate-500 mt-4 flex items-center justify-center gap-4">
                   <span className="flex items-center gap-1">

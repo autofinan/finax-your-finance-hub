@@ -3,6 +3,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { useCartoes } from '@/hooks/useCartoes';
 import { useFaturas } from '@/hooks/useFaturas';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
+import { usePlanoStatus } from '@/hooks/usePlanoStatus';
+
 import { CartaoCredito } from '@/types/finance';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -42,6 +44,8 @@ interface Parcela {
 const Cartoes = () => {
   const { usuarioId } = useUsuarioId();
   const { cartoes, loading, addCartao, updateCartao, deleteCartao } = useCartoes(usuarioId || undefined);
+  const { getLimit } = usePlanoStatus();
+  const maxCards = getLimit('maxCards') ?? 999;
   const { faturas, faturasEmAberto, faturasFuturas, pagarFatura } = useFaturas(usuarioId || undefined);
   const [formOpen, setFormOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -225,7 +229,13 @@ const Cartoes = () => {
               <p className="text-slate-500 font-medium mb-1">Controle de crédito</p>
               <h1 className="text-4xl font-bold text-white">Cartões de Crédito <span className="text-indigo-400">💳</span></h1>
             </div>
-            <button onClick={() => setFormOpen(true)}
+            <button onClick={() => {
+                if (cartoes.length >= maxCards) {
+                  alert(`Seu plano permite até ${maxCards} cartões. Faça upgrade para Pro para cartões ilimitados!`);
+                  return;
+                }
+                setFormOpen(true);
+              }}
               className="flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-blue-500 px-6 py-3 rounded-xl font-bold text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all hover:scale-[1.02]">
               <Plus className="w-5 h-5" /> Novo Cartão
             </button>
