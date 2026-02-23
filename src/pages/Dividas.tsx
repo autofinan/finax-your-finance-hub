@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useDividas, type Divida } from '@/hooks/useDividas';
+import { usePlanoStatus } from '@/hooks/usePlanoStatus';
+import { UpgradeTeaser } from '@/components/UpgradeTeaser';
 import { formatCurrency } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -90,8 +92,27 @@ const TIPO_LABELS: Record<string, string> = {
   cheque_especial: 'Cheque Especial',
 };
 
+// Cálculo simples de prazo com pagamento mínimo (Básico)
+function calcularPrazoMinimo(saldo: number, valorMinimo: number | null, taxaJuros: number | null): string | null {
+  if (!valorMinimo || valorMinimo <= 0 || saldo <= 0) return null;
+  if (!taxaJuros || taxaJuros <= 0) {
+    const meses = Math.ceil(saldo / valorMinimo);
+    return `~${meses} meses pagando o mínimo`;
+  }
+  const taxa = taxaJuros / 100;
+  if (valorMinimo <= saldo * taxa) return 'Pagamento mínimo não cobre os juros!';
+  let s = saldo;
+  let meses = 0;
+  while (s > 0 && meses < 600) {
+    s = s * (1 + taxa) - valorMinimo;
+    meses++;
+  }
+  return `~${meses} meses pagando o mínimo`;
+}
+
 export default function Dividas() {
   const { dividas, dividasAtivas, saldoTotal, minimoTotal, isLoading, addDivida, updateDivida, deleteDivida, TIPOS_DIVIDA } = useDividas();
+  const { showUpgradeTeaser } = usePlanoStatus();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingDivida, setEditingDivida] = useState<Divida | null>(null);
 
@@ -133,12 +154,12 @@ export default function Dividas() {
           <Card className="bg-card border-border">
             <CardContent className="pt-6">
               <div className="flex items-center gap-3">
-                <div className="p-3 rounded-xl bg-red-500/10">
-                  <TrendingDown className="w-6 h-6 text-red-400" />
+                <div className="p-3 rounded-xl bg-destructive/10">
+                  <TrendingDown className="w-6 h-6 text-destructive" />
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Saldo Total Devedor</p>
-                  <p className="text-xl font-black text-red-400">{formatCurrency(saldoTotal)}</p>
+                  <p className="text-xl font-black text-destructive">{formatCurrency(saldoTotal)}</p>
                 </div>
               </div>
             </CardContent>
@@ -159,17 +180,37 @@ export default function Dividas() {
           <Card className="bg-card border-border">
             <CardContent className="pt-6">
               <div className="flex items-center gap-3">
-                <div className="p-3 rounded-xl bg-indigo-500/10">
-                  <AlertTriangle className="w-6 h-6 text-indigo-400" />
+                <div className="p-3 rounded-xl bg-primary/10">
+                  <AlertTriangle className="w-6 h-6 text-primary" />
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Dívidas Ativas</p>
-                  <p className="text-xl font-black text-indigo-400">{dividasAtivas.length}</p>
+                  <p className="text-xl font-black text-primary">{dividasAtivas.length}</p>
                 </div>
               </div>
             </CardContent>
           </Card>
         </div>
+
+        {/* Simulador Teaser (Básico) */}
+        {showUpgradeTeaser('debt_simulator') && dividasAtivas.length > 0 && (
+          <UpgradeTeaser
+            feature="debt_simulator"
+            title="Simulador de Quitação"
+            preview={
+              <div className="space-y-4 p-6">
+                <div className="bg-muted p-4 rounded-xl">
+                  <h4 className="font-bold text-foreground">Cenário Atual</h4>
+                  <p className="text-sm text-muted-foreground">12 meses • R$ 1.400 em juros</p>
+                </div>
+                <div className="bg-muted p-4 rounded-xl">
+                  <h4 className="font-bold text-foreground">Cenário Otimizado</h4>
+                  <p className="text-sm text-muted-foreground">8 meses • R$ 890 em juros</p>
+                </div>
+              </div>
+            }
+          />
+        )}
 
         {/* Dividas List */}
         {isLoading ? (
@@ -179,54 +220,67 @@ export default function Dividas() {
             <CardContent className="py-12 text-center">
               <TrendingDown className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
               <p className="text-muted-foreground">Nenhuma dívida registrada</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Registre suas dívidas para simular cenários de quitação</p>
+              <p className="text-xs text-muted-foreground/60 mt-1">Registre suas dívidas para acompanhar e acelerar sua quitação</p>
             </CardContent>
           </Card>
         ) : (
           <div className="grid gap-4">
-            {dividas.map(d => (
-              <Card key={d.id} className={`bg-card border-border ${!d.ativa ? 'opacity-50' : ''}`}>
-                <CardContent className="py-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <span className="text-2xl">{TIPO_ICONS[d.tipo] || '📄'}</span>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-bold text-foreground">{d.nome}</h3>
-                          <Badge variant={d.ativa ? 'default' : 'secondary'} className="text-[10px]">
-                            {d.ativa ? TIPO_LABELS[d.tipo] || d.tipo : 'Quitada'}
-                          </Badge>
-                        </div>
-                        <div className="flex gap-4 mt-1 text-xs text-muted-foreground">
-                          <span>Saldo: <strong className="text-red-400">{formatCurrency(d.saldo_devedor)}</strong></span>
-                          {d.taxa_juros && <span>Juros: {d.taxa_juros}%/mês</span>}
-                          {d.valor_minimo && <span>Mínimo: {formatCurrency(d.valor_minimo)}</span>}
+            {dividas.map(d => {
+              const prazo = calcularPrazoMinimo(d.saldo_devedor, d.valor_minimo, d.taxa_juros);
+              return (
+                <Card key={d.id} className={`bg-card border-border ${!d.ativa ? 'opacity-50' : ''}`}>
+                  <CardContent className="py-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <span className="text-2xl">{TIPO_ICONS[d.tipo] || '📄'}</span>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-foreground">{d.nome}</h3>
+                            <Badge variant={d.ativa ? 'default' : 'secondary'} className="text-[10px]">
+                              {d.ativa ? TIPO_LABELS[d.tipo] || d.tipo : 'Quitada'}
+                            </Badge>
+                          </div>
+                          <div className="flex gap-4 mt-1 text-xs text-muted-foreground">
+                            <span>Saldo: <strong className="text-destructive">{formatCurrency(d.saldo_devedor)}</strong></span>
+                            {d.taxa_juros && <span>Juros: {d.taxa_juros}%/mês</span>}
+                            {d.valor_minimo && <span>Mínimo: {formatCurrency(d.valor_minimo)}</span>}
+                          </div>
+                          {/* Projeção simples para Básico, completa para Pro */}
+                          {d.ativa && prazo && (
+                            <p className="text-xs text-amber-400 mt-1">⏱️ {prazo}</p>
+                          )}
+                          {/* Teaser de projeção de liberdade */}
+                          {d.ativa && showUpgradeTeaser('debt_freedom_projection') && d.taxa_juros && (
+                            <p className="text-xs text-primary/60 mt-1 italic">
+                              🔒 Veja em quantos dias pode ficar livre — Pro
+                            </p>
+                          )}
                         </div>
                       </div>
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="icon" onClick={() => handleToggleAtiva(d)} title={d.ativa ? 'Marcar como quitada' : 'Reativar'}>
+                          <CheckCircle className={`w-4 h-4 ${d.ativa ? 'text-muted-foreground' : 'text-emerald-400'}`} />
+                        </Button>
+                        <Dialog open={editingDivida?.id === d.id} onOpenChange={(open) => !open && setEditingDivida(null)}>
+                          <DialogTrigger asChild>
+                            <Button variant="ghost" size="icon" onClick={() => setEditingDivida(d)}>
+                              <Edit2 className="w-4 h-4" />
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader><DialogTitle>Editar Dívida</DialogTitle></DialogHeader>
+                            <DividaForm onSubmit={handleEdit} initial={d} tipos={TIPOS_DIVIDA} />
+                          </DialogContent>
+                        </Dialog>
+                        <Button variant="ghost" size="icon" onClick={() => deleteDivida.mutate(d.id)}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => handleToggleAtiva(d)} title={d.ativa ? 'Marcar como quitada' : 'Reativar'}>
-                        <CheckCircle className={`w-4 h-4 ${d.ativa ? 'text-muted-foreground' : 'text-green-400'}`} />
-                      </Button>
-                      <Dialog open={editingDivida?.id === d.id} onOpenChange={(open) => !open && setEditingDivida(null)}>
-                        <DialogTrigger asChild>
-                          <Button variant="ghost" size="icon" onClick={() => setEditingDivida(d)}>
-                            <Edit2 className="w-4 h-4" />
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader><DialogTitle>Editar Dívida</DialogTitle></DialogHeader>
-                          <DividaForm onSubmit={handleEdit} initial={d} tipos={TIPOS_DIVIDA} />
-                        </DialogContent>
-                      </Dialog>
-                      <Button variant="ghost" size="icon" onClick={() => deleteDivida.mutate(d.id)}>
-                        <Trash2 className="w-4 h-4 text-red-400" />
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>

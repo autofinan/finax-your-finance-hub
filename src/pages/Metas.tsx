@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { useMetas, Meta } from '@/hooks/useMetas';
+import { usePlanoStatus } from '@/hooks/usePlanoStatus';
+
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +26,8 @@ import { motion } from 'framer-motion';
 
 const Metas = () => {
   const { usuarioId } = useUsuarioId();
+  const { getLimit } = usePlanoStatus();
+  const maxGoals = getLimit('maxGoals') ?? 999;
   const {
     metas,
     loading,
@@ -53,6 +57,11 @@ const Metas = () => {
 
   const handleCreate = async () => {
     if (!name || !targetAmount) return;
+    const metasAtivas = getMetasAtivas();
+    if (metasAtivas.length >= maxGoals) {
+      alert(`Seu plano permite até ${maxGoals} metas. Faça upgrade para Pro para metas ilimitadas!`);
+      return;
+    }
     
     await criarMeta({
       name,

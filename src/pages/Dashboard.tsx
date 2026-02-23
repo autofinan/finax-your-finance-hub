@@ -31,7 +31,7 @@ const Dashboard = () => {
   const { usuarioId } = useUsuarioId();
   const { transacoes, loading, addTransacao } = useTransacoes(usuarioId || undefined);
   const { dashboard } = useDashboard(usuarioId || undefined);
-  const { planoStatus } = usePlanoStatus();
+  const { diasRestantesTrial } = usePlanoStatus();
   const [formOpen, setFormOpen] = useState(false);
 
   // Use view data for stats (server-side calculation)
@@ -112,7 +112,7 @@ const Dashboard = () => {
                 <p className="text-sm text-amber-300">
                   {isTrialExpirado
                     ? '⏰ Seu período de teste acabou. Escolha um plano para continuar!'
-                    : `⏰ Seu trial acaba em ${planoStatus?.diasRestantesTrial} dias. Aproveite!`
+                    : `⏰ Seu trial acaba em ${diasRestantesTrial} dias. Aproveite!`
                   }
                 </p>
               </div>
