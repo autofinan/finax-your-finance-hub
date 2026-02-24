@@ -358,7 +358,40 @@ async function processarJob(job: any): Promise<void> {
         });
         
         // 4. Fluxo baseado no resultado
-        if (ocrResult.valor && ocrResult.descricao) {
+        
+        // ✅ NOVO: Múltiplos itens detectados na imagem
+        if (ocrResult.items && ocrResult.items.length >= 2) {
+          console.log(`📷 [OCR] ${ocrResult.items.length} itens detectados na imagem`);
+          
+          // Formatar lista de itens
+          const itemsList = ocrResult.items.map((item, i) => `${i + 1}. ${item.descricao} R$ ${item.valor.toFixed(2)}`).join("\n");
+          const totalValue = ocrResult.items.reduce((sum, item) => sum + item.valor, 0);
+          
+          // Reutilizar fluxo multi_expense existente com slot names compatíveis
+          const detectedExpenses = ocrResult.items.map(item => ({
+            amount: item.valor,
+            description: item.descricao
+          }));
+          
+          await createAction(userId, "multi_expense", "multi_expense", {
+            from_image: true,
+            detected_expenses: detectedExpenses,
+            total: totalValue,
+            original_message: `[IMAGEM: ${ocrResult.items.map(i => i.descricao).join(" + ")}]`,
+            forma_pagamento: ocrResult.forma_pagamento || undefined
+          }, null, payload.messageId);
+          
+          await sendButtons(
+            payload.phoneNumber,
+            `📷 Vi *${ocrResult.items.length} gastos* na imagem:\n\n${itemsList}\n\n💰 *Total:* R$ ${totalValue.toFixed(2)}\n\nComo quer registrar?`,
+            [
+              { id: "multi_separado", title: "📝 Separado" },
+              { id: "multi_junto", title: "💰 Tudo junto" }
+            ],
+            payload.messageSource
+          );
+          
+        } else if (ocrResult.valor && ocrResult.descricao) {
           // Caso perfeito: tem valor E descrição → processar como expense
           console.log(`📷 [OCR] Dados completos: R$ ${ocrResult.valor} - ${ocrResult.descricao}`);
           
@@ -1986,6 +2019,27 @@ async function processarJob(job: any): Promise<void> {
             await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
           } else {
             await sendMessage(payload.phoneNumber, prompt.text, payload.messageSource);
+          }
+          return;
+        } else {
+          // ✅ FIX: nextMissing é null mas readyToExecute era false
+          // Todos os slots preenchidos → executar direto como fallback
+          console.log(`⚠️ [FSM] nextMissing null com readyToExecute false, executando direto como fallback para intent: ${activeAction.intent}`);
+          
+          const updatedSlots = contextResult.updatedSlots!;
+          
+          if (activeAction.intent === "expense") {
+            const result = await registerExpense(userId, updatedSlots, undefined);
+            await closeAction(activeAction.id);
+            await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
+          } else if (activeAction.intent === "income") {
+            const result = await registerIncome(userId, updatedSlots);
+            await closeAction(activeAction.id);
+            await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          } else {
+            // Fallback genérico: fechar action e avisar
+            await closeAction(activeAction.id);
+            await sendMessage(payload.phoneNumber, "✅ Registrado!", payload.messageSource);
           }
           return;
         }

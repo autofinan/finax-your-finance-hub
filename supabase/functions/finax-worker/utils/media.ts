@@ -25,6 +25,7 @@ export interface OCRResult {
   data?: string;
   confidence: number;
   raw?: string;
+  items?: Array<{ valor: number; descricao: string }>; // Múltiplos itens detectados na imagem
 }
 
 // ============================================================================
@@ -141,11 +142,15 @@ export async function analyzeImageWithGemini(base64Image: string): Promise<OCRRe
                 type: "text",
                 text: `Analise esta imagem de um cupom fiscal, recibo ou comprovante de pagamento.
 
-EXTRAIA APENAS as seguintes informações (se visíveis):
+EXTRAIA as seguintes informações (se visíveis):
 1. VALOR TOTAL (número em reais)
 2. DESCRIÇÃO (o que foi comprado - resumo curto)
 3. FORMA DE PAGAMENTO (pix, débito, crédito, dinheiro - se identificável)
 4. DATA (se visível)
+
+IMPORTANTE - MÚLTIPLOS ITENS:
+Se a imagem contiver MAIS DE UMA transação/viagem/compra separada (ex: 2 corridas de Uber, 2 recibos diferentes), retorne um campo "items" com array de objetos.
+Cada item deve ter "valor" e "descricao".
 
 REGRAS:
 - Retorne APENAS JSON válido, sem texto adicional
@@ -154,10 +159,21 @@ REGRAS:
 - Para descrição, seja breve (máximo 30 caracteres)
 - Se não conseguir identificar NADA útil, retorne {"confidence": 0}
 
-Formato de resposta:
+Formato para UM item:
 {
   "valor": 45.90,
   "descricao": "Supermercado",
+  "forma_pagamento": "pix",
+  "data": "15/01/2024",
+  "confidence": 0.85
+}
+
+Formato para MÚLTIPLOS itens:
+{
+  "items": [
+    {"valor": 3.52, "descricao": "Moto IFMT"},
+    {"valor": 5.96, "descricao": "Moto Paris"}
+  ],
   "forma_pagamento": "pix",
   "data": "15/01/2024",
   "confidence": 0.85
@@ -193,11 +209,29 @@ Formato de resposta:
         raw: cleanJson
       };
       
-      if (parsed.valor && typeof parsed.valor === "number" && parsed.valor > 0) {
+      // ✅ Suporte a múltiplos itens
+      if (parsed.items && Array.isArray(parsed.items) && parsed.items.length > 0) {
+        result.items = parsed.items
+          .filter((item: any) => item.valor && typeof item.valor === "number" && item.valor > 0)
+          .map((item: any) => ({
+            valor: item.valor,
+            descricao: typeof item.descricao === "string" ? item.descricao.slice(0, 50) : "Item"
+          }));
+        
+        // Se tem items, usar o primeiro como valor/descricao principal para compatibilidade
+        if (result.items.length > 0) {
+          result.valor = result.items[0].valor;
+          result.descricao = result.items[0].descricao;
+        }
+        
+        console.log(`📷 [GEMINI] Múltiplos itens detectados: ${result.items.length}`);
+      }
+      
+      if (!result.valor && parsed.valor && typeof parsed.valor === "number" && parsed.valor > 0) {
         result.valor = parsed.valor;
       }
       
-      if (parsed.descricao && typeof parsed.descricao === "string" && parsed.descricao.length > 0) {
+      if (!result.descricao && parsed.descricao && typeof parsed.descricao === "string" && parsed.descricao.length > 0) {
         result.descricao = parsed.descricao.slice(0, 50);
       }
       
@@ -221,7 +255,7 @@ Formato de resposta:
         result.data = String(parsed.data);
       }
       
-      console.log(`📷 [GEMINI] Análise concluída: valor=${result.valor}, desc=${result.descricao}, conf=${result.confidence}`);
+      console.log(`📷 [GEMINI] Análise concluída: valor=${result.valor}, desc=${result.descricao}, items=${result.items?.length || 0}, conf=${result.confidence}`);
       return result;
       
     } catch (parseError) {
