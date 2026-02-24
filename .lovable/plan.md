@@ -1,154 +1,153 @@
 
+# Plano: Corrigir Bug "undefined" no WhatsApp + Status do Plano Acelerador
 
-# Plano: Sistema Completo de Feature Gating + Teasers + Precificacao Atualizada
+## Diagnostico do Bug "Qual o undefined?"
 
-## Minha Opiniao sobre a Precificacao
+O problema ocorre quando o usuario envia uma imagem com 2 gastos (ex: 2 corridas Uber). O OCR do Gemini extrai apenas 1 valor. Apos registrar o primeiro gasto, quando o usuario diz "Registra tambem 5,95 Uber", o sistema cria uma action de expense com amount=5.95 e description="Uber", mas a logica de slot prompts tem um caminho onde `getNextMissingSlot` ou `getSlotPrompt` recebe `undefined` como parametro, gerando "Qual o undefined?".
 
-A estrutura esta muito bem pensada. Concordo com os ajustes sugeridos pelo chat:
+**Causa raiz:** No `index.ts` linhas 1977-1991, quando `contextResult.updatedSlots` e processado e `getNextMissingSlot` retorna `null` (todos os slots preenchidos), o codigo continua para a linha 1983 que chama `getSlotPrompt(nextMissing)` - mas `nextMissing` pode ser `null`. Alem disso, o fluxo de expense inline nao esta gerando botoes de payment_method corretamente apos a segunda despesa, porque a action ja foi fechada e o novo registro "5,95 Uber" cai no decision engine que cria uma action mas o slot prompt para `payment_method` nao esta sendo enviado com botoes.
 
-1. **Basico com 2 cartoes** (nao 1) -- reduz cancelamento por frustracao
-2. **Basico mostra projecao simples de divida** (prazo com pagamento minimo) -- o usuario precisa sentir que tem "algo" antes de ver o teaser Pro
-3. **Insights basicos no Basico** (categoria que mais cresceu, maior gasto, alerta de excesso) -- sem isso o Basico parece vazio
-4. **Recorrentes no Basico** -- confirmado, entra
-
-A diferenca de R$10/mes entre Basico e Pro e perfeita. O Pro precisa parecer "absurdamente barato pelo que entrega", e essa tabela consegue isso.
+**Segunda causa:** Na mensagem "Registra tambem 5,95 Uber", o decision engine classifica como expense com amount=5.95 e description="Uber", mas `payment_method` esta faltando. O sistema deveria perguntar "Como voce pagou?" com botoes, mas em vez disso o fluxo passa por um caminho onde o slot name vira `undefined`.
 
 ---
 
-## Fase 1: Refatorar usePlanoStatus com Feature Matrix
+## Correcao 1: Proteger getSlotPrompt contra undefined/null
 
-**Arquivo:** `src/hooks/usePlanoStatus.ts`
+**Arquivo:** `supabase/functions/finax-worker/fsm/context-handler.ts`
 
-Reescrever completamente com:
-- Type `Feature` com todas as 25+ features mapeadas
-- `FEATURE_MATRIX` definindo quais planos acessam cada feature
-- `LIMITS` por plano (maxCards, maxGoals, etc.)
-- Funcoes: `canAccessFeature()`, `showUpgradeTeaser()`, `getUpgradeMessage()`, `getLimit()`
-- Trial ativo = acesso Pro completo (como definido)
-- Trial expirado = nenhum acesso (modo bloqueado)
+Na funcao `getSlotPrompt` (linha 546), adicionar guard:
 
----
+```typescript
+export function getSlotPrompt(slotType: string): { text: string; buttons?: ... } {
+  if (!slotType) {
+    return { text: "Como voce pagou?", buttons: [/* payment buttons */] };
+  }
+  // ... resto
+}
+```
 
-## Fase 2: Componente UpgradeTeaser
+Na funcao `getNextMissingSlot` (linha 529), garantir que valida slots de payment_method com a mesma logica do `INVALID_PAYMENT_VALUES`:
 
-**Arquivo novo:** `src/components/UpgradeTeaser.tsx`
-
-Componente reutilizavel com:
-- Preview borrado (blur) do conteudo bloqueado
-- Overlay com icone de cadeado
-- Mensagem personalizada por feature (via `getUpgradeMessage`)
-- Botao CTA "Fazer Upgrade Pro - R$ 29,90/mês"
-- Link para pagina de planos ou checkout direto
-- Texto "Apenas +R$ 10/mês para acelerar sua liberdade"
-
----
-
-## Fase 3: Aplicar Feature Gating nas Paginas
-
-### 3A: Dividas (`src/pages/Dividas.tsx`)
-- Basico: mostra lista de dividas + saldo total + prazo simples (meses no minimo)
-- Simulador de cenarios: teaser com preview borrado para Basico
-- Pro: tudo desbloqueado
-
-### 3B: Cartoes (`src/pages/Cartoes.tsx`)
-- Basico: limite de 2 cartoes (mostrar aviso ao tentar adicionar 3o)
-- Composicao do uso / breakdown: teaser para Basico
-- Pro: ilimitado + gestao avancada
-
-### 3C: Metas (`src/pages/Metas.tsx`)
-- Basico: limite de 5 metas de valor
-- Metas de frequencia: teaser para Basico
-- Pro: ilimitado
-
-### 3D: Dashboard Insights
-- Basico: insights basicos (maior gasto, categoria crescente)
-- Insights preditivos com impacto em dias: teaser para Basico
-- Pro: completo
-
-### 3E: Relatorios (`src/pages/Relatorios.tsx`)
-- Basico: semanal/mensal
-- Projecoes financeiras: teaser
-- Pro: tudo
+```typescript
+export function getNextMissingSlot(intent: string, slots: ExtractedSlots): string | null {
+  // ... existing code
+  for (const required of requirements.required) {
+    const value = slots[required];
+    if (!value) return required;
+    // Rejeitar payment_method invalidos
+    if (required === "payment_method" && typeof value === "string" && 
+        ["unknown","outro","desconhecido","none","null","undefined"].includes(value.toLowerCase())) {
+      return required;
+    }
+  }
+  return null;
+}
+```
 
 ---
 
-## Fase 4: Atualizar Landing Page Pricing
+## Correcao 2: Proteger index.ts contra nextMissing null
 
-**Arquivo:** `src/components/landing/Pricing.tsx`
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
 
-Atualizar as features listadas nos planos para refletir a nova tabela comparativa:
+Nas linhas 1981-1991, adicionar guard para `nextMissing` nulo:
 
-**Basico R$ 19,90:**
-- Registro ilimitado de gastos
-- Orcamentos ilimitados
-- Ate 5 metas de economia
-- 2 cartoes de credito
-- Registro de dividas
-- Relatorios semanais/mensais
-- Insights basicos
-- Recorrentes
-- Parcelamentos
-- Suporte 24h
-
-**Pro R$ 29,90:**
-- Tudo do Basico +
-- Simulador de quitacao (3 cenarios)
-- Insights preditivos com IA
-- Consultor IA semanal
-- Detector de padroes
-- Radar de anomalias
-- Cartoes ilimitados
-- Gestao avancada de faturas
-- Metas de frequencia
-- Projecoes financeiras
-- Contextos temporarios
-- Suporte prioritario 2h
+```typescript
+if (nextMissing) {
+  // ... send prompt (existing code)
+} else {
+  // Todos os slots preenchidos mas readyToExecute era false
+  // Executar direto como fallback
+  console.log("[FSM] nextMissing null, executando direto");
+  // ... execute
+}
+```
 
 ---
 
-## Fase 5: Atualizar PlanoCard no Dashboard
+## Correcao 3: OCR Multi-Expense - Melhorar prompt do Gemini
 
-**Arquivo:** `src/components/dashboard/PlanoCard.tsx`
+**Arquivo:** `supabase/functions/finax-worker/utils/media.ts`
 
-- Basico: mostrar features ativas corretas (orcamentos, metas, relatorios, recorrentes)
-- Pro: mostrar features premium (insights preditivos, simulador, consultor IA)
-- Trial expirado: mostrar resumo do que usou durante trial (usando dados reais se disponiveis)
-- Botoes de upgrade direcionam para checkout
+Alterar o prompt do Gemini Vision para detectar MULTIPLOS itens na imagem. O `OCRResult` precisa suportar um array de resultados:
+
+```typescript
+export interface OCRResult {
+  valor?: number;
+  descricao?: string;
+  forma_pagamento?: string;
+  data?: string;
+  confidence: number;
+  raw?: string;
+  items?: Array<{ valor: number; descricao: string }>; // NOVO: multiplos itens
+}
+```
+
+Alterar o prompt para:
+- "Se houver MULTIPLOS itens/transacoes na imagem, retorne um campo 'items' com array"
+- Formato: `{ items: [{valor: 3.52, descricao: "Moto IFMT"}, {valor: 5.96, descricao: "Moto Paris"}] }`
 
 ---
 
-## Fase 6: CheckoutModal e Pricing - Preco Correto
+## Correcao 4: Fluxo de imagem com multiplos itens
 
-**Arquivos:** `src/components/checkout/CheckoutModal.tsx`, `src/components/landing/Pricing.tsx`
+**Arquivo:** `supabase/functions/finax-worker/index.ts`
 
-Confirmar que os precos estao corretos:
-- Basico: R$ 19,90/mes
-- Pro: R$ 29,90/mes
+No bloco de processamento de imagem (linhas 333-433), apos o OCR:
+- Se `ocrResult.items` tem 2+ itens, usar o mesmo fluxo de multi_expense (botoes "Separado" / "Tudo junto")
+- Se tem apenas 1 item, manter fluxo atual
+
+```text
+Fluxo:
+1. OCR detecta 2 itens na imagem
+2. Enviar: "Vi 2 gastos na imagem: 1. Moto IFMT R$3,52  2. Moto Paris R$5,96 - Como quer registrar?"
+3. Botoes: [Separado] [Tudo junto]
+4. Reutilizar fluxo multi_expense existente
+```
+
+---
+
+## Status do Plano Acelerador de Liberdade Financeira
+
+### Ja Implementado:
+1. Tabela `dividas` + CRUD + pagina web de dividas
+2. Classificacao automatica `expense_type` (essencial_fixo, flexivel, etc.)
+3. Widget "Essenciais vs Flexiveis" no Dashboard
+4. TransactionList mostrando descricao + badge expense_type
+5. Feature Gating completo (`usePlanoStatus.ts` com FEATURE_MATRIX)
+6. Componente `UpgradeTeaser.tsx` reutilizavel
+7. Gating aplicado em Dividas, Cartoes, Metas
+8. Landing Page Pricing atualizado (R$19,90 / R$29,90)
+9. PlanoCard atualizado no Dashboard
+10. CheckoutModal com precos corretos
+11. Debt Handler no WhatsApp (registrar/listar dividas)
+12. Interceptor de correcao de pagamento
+
+### Falta Implementar (Proximas Fases):
+1. **Simulador de Quitacao (Pro)** - 3 cenarios de pagamento com calculo de juros e "dias de liberdade"
+2. **Insights Preditivos (Pro)** - "Se voce reduzir delivery em 40%, quita 47 dias antes"
+3. **Consultor IA Semanal (Pro)** - Analise automatica com plano de acao
+4. **Detector de Padroes (Pro)** - Identificar gastos recorrentes nao registrados
+5. **Radar de Anomalias (Pro)** - Alertar gastos fora do padrao
+6. **Projecoes Financeiras (Pro)** - Onde voce estara em 3, 6, 12 meses
+7. **Metas de Frequencia (Pro)** - "Maximo 8 deliveries/mes"
+8. **Progresso Acumulado** - "Desde que entrou no Finax, voce economizou X"
+9. **Trial End Summary** - Tela mostrando o que o usuario conquistou nos 14 dias
+10. **Gating no WhatsApp** - Diferenciar respostas Basico vs Pro no bot
+11. **Relatorios diferenciados** - Basico: resumo simples / Pro: insights com impacto em dias
 
 ---
 
 ## Secao Tecnica: Arquivos Modificados
 
-| Arquivo | Tipo | Mudanca |
-|---|---|---|
-| `src/hooks/usePlanoStatus.ts` | Reescrita | Feature matrix + gating completo |
-| `src/components/UpgradeTeaser.tsx` | Novo | Componente de teaser reutilizavel |
-| `src/pages/Dividas.tsx` | Editar | Gating no simulador |
-| `src/pages/Cartoes.tsx` | Editar | Limite de cartoes |
-| `src/pages/Metas.tsx` | Editar | Limite de metas + frequencia |
-| `src/components/dashboard/PlanoCard.tsx` | Editar | Features corretas por plano |
-| `src/components/landing/Pricing.tsx` | Editar | Features e precos atualizados |
-| `src/components/checkout/CheckoutModal.tsx` | Editar | Precos confirmados |
-
-Nenhuma mudanca de banco de dados necessaria nesta fase -- tudo e frontend/logica de UI.
-
----
+| Arquivo | Mudanca |
+|---|---|
+| `supabase/functions/finax-worker/fsm/context-handler.ts` | Guard contra slot undefined + validacao payment_method |
+| `supabase/functions/finax-worker/index.ts` | Guard nextMissing null + fluxo multi-expense para imagens |
+| `supabase/functions/finax-worker/utils/media.ts` | OCRResult com items[] + prompt multi-item |
 
 ## Ordem de Execucao
 
-1. `usePlanoStatus.ts` (base de tudo)
-2. `UpgradeTeaser.tsx` (componente reutilizavel)
-3. Aplicar gating nas paginas (Dividas, Cartoes, Metas)
-4. Atualizar PlanoCard
-5. Atualizar Pricing na landing
-
+1. Corrigir bug "Qual o undefined?" (correcoes 1 e 2 - urgente)
+2. Melhorar OCR para multiplos itens (correcoes 3 e 4)
+3. Deploy e teste do finax-worker
