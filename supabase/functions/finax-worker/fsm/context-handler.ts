@@ -526,12 +526,21 @@ export async function setActionAwaitingConfirmation(
 // 📝 OBTER PRÓXIMO SLOT FALTANTE
 // ============================================================================
 
+// Values that should NOT count as "filled" for payment_method
+const INVALID_PAYMENT_VALUES = ["unknown", "outro", "desconhecido", "none", "null", "undefined"];
+
 export function getNextMissingSlot(intent: string, slots: ExtractedSlots): string | null {
   const requirements = SLOT_REQUIREMENTS[intent as keyof typeof SLOT_REQUIREMENTS];
   if (!requirements) return null;
   
   for (const required of requirements.required) {
-    if (!slots[required]) {
+    const value = slots[required];
+    if (!value) {
+      return required;
+    }
+    // Rejeitar payment_method com valores inválidos
+    if (required === "payment_method" && typeof value === "string" && 
+        INVALID_PAYMENT_VALUES.includes(value.toLowerCase())) {
       return required;
     }
   }
@@ -544,6 +553,19 @@ export function getNextMissingSlot(intent: string, slots: ExtractedSlots): strin
 // ============================================================================
 
 export function getSlotPrompt(slotType: string): { text: string; buttons?: Array<{ id: string; title: string }> } {
+  // ✅ Guard contra undefined/null — default para payment_method
+  if (!slotType) {
+    console.log(`⚠️ [FSM] getSlotPrompt chamado com slotType falsy, defaulting to payment_method`);
+    return { 
+      text: "Como você pagou?",
+      buttons: [
+        { id: "pay_pix", title: "📱 Pix" },
+        { id: "pay_debito", title: "💳 Débito" },
+        { id: "pay_credito", title: "💳 Crédito" }
+      ]
+    };
+  }
+  
   const prompts: Record<string, { text: string; buttons?: Array<{ id: string; title: string }> }> = {
     amount: { text: "Qual foi o valor? 💸" },
     payment_method: { 
