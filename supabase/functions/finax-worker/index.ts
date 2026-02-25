@@ -212,12 +212,53 @@ async function processarJob(job: any): Promise<void> {
       if (plano === "trial" && trialFim && trialFim < agora) {
         console.log(`🔒 [BLOQUEIO] Trial expirado para usuário ${userId}`);
         
-        // Verificar se a mensagem é um código de ativação (FINAX-XXXXXX)
+        // ================================================================
+        // 🔗 CHECKOUT LINKS - Gerar URLs reais do Stripe
+        // ================================================================
+        const SITE_URL = "https://finaxassistente.lovable.app";
+        
+        async function generateCheckoutUrl(planType: "basico" | "pro", phone: string): Promise<string> {
+          try {
+            const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+            const priceId = planType === "pro" 
+              ? Deno.env.get("STRIPE_PRICE_PRO") 
+              : Deno.env.get("STRIPE_PRICE_BASICO");
+            
+            if (!stripeSecretKey || !priceId) {
+              console.error(`[CHECKOUT] Missing Stripe config for ${planType}`);
+              return `${SITE_URL}/?plan=${planType}`;
+            }
+            
+            const { default: Stripe } = await import("https://esm.sh/stripe@14.21.0?target=deno");
+            const stripe = new Stripe(stripeSecretKey, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
+            
+            const session = await stripe.checkout.sessions.create({
+              mode: "subscription",
+              payment_method_types: ["card"],
+              line_items: [{ price: priceId, quantity: 1 }],
+              success_url: `${SITE_URL}/dashboard?success=true&plan=${planType}`,
+              cancel_url: `${SITE_URL}/?canceled=true`,
+              metadata: { plan: planType, phone },
+              subscription_data: { metadata: { plan: planType } },
+              allow_promotion_codes: true,
+              phone_number_collection: { enabled: true },
+            });
+            
+            return session.url || `${SITE_URL}/?plan=${planType}`;
+          } catch (err) {
+            console.error(`[CHECKOUT] Error generating URL:`, err);
+            return `${SITE_URL}/?plan=${planType}`;
+          }
+        }
+        
+        // ================================================================
+        // 🔑 VERIFICAR CÓDIGO DE ATIVAÇÃO
+        // ================================================================
         const msgText = payload.messageText?.trim().toUpperCase() || "";
+        const msgLower = payload.messageText?.trim().toLowerCase() || "";
         const codigoMatch = msgText.match(/^(FINAX[-\s]?)?([A-Z0-9]{6,12})$/);
         
         if (codigoMatch) {
-          // Tentar validar código
           const codigo = codigoMatch[2] || codigoMatch[0];
           console.log(`🔑 [ATIVAÇÃO] Tentando validar código: ${codigo}`);
           
@@ -231,8 +272,6 @@ async function processarJob(job: any): Promise<void> {
               `✅ *Plano ${resultado.plano === 'pro' ? 'Pro' : 'Básico'} ativado com sucesso!*\n\nAgora você tem acesso completo ao Finax. 🎉\n\nMe conta: o que posso te ajudar hoje?`, 
               payload.messageSource
             );
-            
-            // Salvar no histórico
             await supabase.from("historico_conversas").insert({
               phone_number: payload.phoneNumber,
               user_id: userId,
@@ -247,7 +286,6 @@ async function processarJob(job: any): Promise<void> {
               codigo_usado: "Esse código já foi usado anteriormente.",
               codigo_expirado: "Esse código expirou. Entre em contato para ajuda."
             };
-            
             await sendMessage(payload.phoneNumber, 
               erroMsgs[resultado?.erro] || "Código inválido. Tenta de novo?", 
               payload.messageSource
@@ -256,19 +294,147 @@ async function processarJob(job: any): Promise<void> {
           }
         }
         
-        // Se não é código, enviar mensagem de trial expirado
+        // ================================================================
+        // 🧠 DETECÇÃO INTELIGENTE DE INTENÇÃO DE COMPRA
+        // ================================================================
+        const PURCHASE_INTENT_WORDS = ["link", "pagar", "assinar", "plano", "valor", "preço", "checkout", "comprar", "quero", "como assinar", "manda o link", "manda o site", "site"];
+        const wantsBasico = /\b(b[aá]sico|plano\s*1|basico)\b/i.test(msgLower);
+        const wantsPro = /\b(pro|plano\s*2|premium)\b/i.test(msgLower);
+        const wantsSite = /\b(site|ver\s*site|plano\s*3)\b/i.test(msgLower);
+        const hasPurchaseIntent = PURCHASE_INTENT_WORDS.some(w => msgLower.includes(w));
+        
+        // Resposta numérica direta (1, 2, 3)
+        const numericChoice = msgText.match(/^[123]$/);
+        
         const primeiroNome = nomeUsuario.split(" ")[0];
+        
+        if (numericChoice) {
+          const choice = numericChoice[0];
+          if (choice === "1" || wantsBasico) {
+            const url = await generateCheckoutUrl("basico", payload.phoneNumber);
+            await sendMessage(payload.phoneNumber,
+              `📱 *Plano Básico* — R$ 19,90/mês\n\nRegistro ilimitado, orçamentos, relatórios e controle completo.\n\n👉 Assine aqui: ${url}`,
+              payload.messageSource
+            );
+          } else if (choice === "2" || wantsPro) {
+            const url = await generateCheckoutUrl("pro", payload.phoneNumber);
+            await sendMessage(payload.phoneNumber,
+              `⭐ *Plano Pro* — R$ 29,90/mês\n\nTudo do Básico + simulador de quitação, insights preditivos, cartões ilimitados e suporte prioritário.\n\n👉 Assine aqui: ${url}`,
+              payload.messageSource
+            );
+          } else if (choice === "3" || wantsSite) {
+            await sendMessage(payload.phoneNumber,
+              `🌐 Acesse nosso site para ver todos os detalhes:\n\n👉 ${SITE_URL}`,
+              payload.messageSource
+            );
+          }
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber, user_id: userId,
+            user_message: payload.messageText, ai_response: `[SALES - choice ${choice}]`, tipo: "venda_trial"
+          });
+          return;
+        }
+        
+        // Pediu plano específico diretamente
+        if (wantsBasico) {
+          const url = await generateCheckoutUrl("basico", payload.phoneNumber);
+          await sendMessage(payload.phoneNumber,
+            `Perfeito! 👌\n\n📱 *Básico* — R$ 19,90/mês\nRegistro ilimitado, relatórios e controle completo.\n\n👉 Assine aqui: ${url}`,
+            payload.messageSource
+          );
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber, user_id: userId,
+            user_message: payload.messageText, ai_response: "[SALES - basico link]", tipo: "venda_trial"
+          });
+          return;
+        }
+        
+        if (wantsPro) {
+          const url = await generateCheckoutUrl("pro", payload.phoneNumber);
+          await sendMessage(payload.phoneNumber,
+            `Excelente escolha! 🚀\n\n⭐ *Pro* — R$ 29,90/mês\nTudo do Básico + simulador, insights com IA e cartões ilimitados.\n\n👉 Assine aqui: ${url}`,
+            payload.messageSource
+          );
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber, user_id: userId,
+            user_message: payload.messageText, ai_response: "[SALES - pro link]", tipo: "venda_trial"
+          });
+          return;
+        }
+        
+        if (wantsSite) {
+          await sendMessage(payload.phoneNumber, `🌐 Acesse: ${SITE_URL}`, payload.messageSource);
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber, user_id: userId,
+            user_message: payload.messageText, ai_response: "[SALES - site]", tipo: "venda_trial"
+          });
+          return;
+        }
+        
+        // Pediu link genérico ou tem intenção de compra
+        if (hasPurchaseIntent) {
+          const urlBasico = await generateCheckoutUrl("basico", payload.phoneNumber);
+          const urlPro = await generateCheckoutUrl("pro", payload.phoneNumber);
+          await sendMessage(payload.phoneNumber,
+            `Perfeito! 👌\n\nEscolha seu plano:\n\n📱 *Básico* — R$ 19,90/mês\n👉 ${urlBasico}\n\n⭐ *Pro* — R$ 29,90/mês\n👉 ${urlPro}\n\n🌐 Mais detalhes: ${SITE_URL}`,
+            payload.messageSource
+          );
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber, user_id: userId,
+            user_message: payload.messageText, ai_response: "[SALES - links enviados]", tipo: "venda_trial"
+          });
+          return;
+        }
+        
+        // ================================================================
+        // 💬 MENSAGEM PADRÃO DE TRIAL EXPIRADO (com trial summary)
+        // ================================================================
+        
+        // Buscar dados do trial para summary personalizado
+        let trialSummary = "";
+        try {
+          const { count: gastosCount } = await supabase
+            .from("transacoes")
+            .select("*", { count: "exact", head: true })
+            .eq("usuario_id", userId);
+          
+          const { count: cartoesCount } = await supabase
+            .from("cartoes_credito")
+            .select("*", { count: "exact", head: true })
+            .eq("usuario_id", userId);
+          
+          const { data: gastosFlex } = await supabase
+            .from("transacoes")
+            .select("valor")
+            .eq("usuario_id", userId)
+            .eq("tipo", "despesa")
+            .in("expense_type", ["flexivel", "lazer_social", "impulso"]);
+          
+          const valorAjustavel = gastosFlex?.reduce((sum, t) => sum + Math.abs(t.valor || 0), 0) || 0;
+          
+          if (gastosCount && gastosCount > 0) {
+            trialSummary = `\nDurante o trial você:\n• Registrou *${gastosCount} gastos*`;
+            if (cartoesCount && cartoesCount > 0) trialSummary += `\n• Organizou *${cartoesCount} cartão(ões)*`;
+            if (valorAjustavel > 0) trialSummary += `\n• Identificou *R$ ${valorAjustavel.toFixed(0)}* em gastos ajustáveis`;
+            trialSummary += "\n";
+          }
+        } catch (e) {
+          console.log(`[TRIAL] Erro ao buscar summary:`, e);
+        }
+        
+        const urlBasico = await generateCheckoutUrl("basico", payload.phoneNumber);
+        const urlPro = await generateCheckoutUrl("pro", payload.phoneNumber);
+        
         await sendMessage(payload.phoneNumber, 
-          `⏰ Oi ${primeiroNome}! Seu período de teste de 14 dias acabou.\n\nO Finax te ajudou a organizar suas finanças. Quer continuar?\n\n📱 *Básico* - Registros, orçamentos e relatórios\n⭐ *Pro* - Tudo + cartões, metas e insights\n\n👉 Acesse: [link do checkout]\n\nOu envie seu código de ativação aqui!`, 
+          `⏳ Oi ${primeiroNome}! Seu período de teste terminou.${trialSummary}\n━━━━━━━━━━━━━━━━━━\n\nQuer continuar evoluindo?\n\n📱 *Básico* — R$ 19,90/mês\nControle completo, relatórios e organização.\n👉 ${urlBasico}\n\n⭐ *Pro* — R$ 29,90/mês\nSimulador de quitação + insights que aceleram sua liberdade.\n👉 ${urlPro}\n\n━━━━━━━━━━━━━━━━━━\n\nResponda:\n1️⃣ Assinar Básico\n2️⃣ Assinar Pro\n3️⃣ Ver site\n\nOu envie seu código de ativação!`, 
           payload.messageSource
         );
         
-        // Salvar no histórico
         await supabase.from("historico_conversas").insert({
           phone_number: payload.phoneNumber,
           user_id: userId,
           user_message: payload.messageText || "[MÍDIA]",
-          ai_response: "[TRIAL EXPIRADO - BLOQUEIO]",
+          ai_response: "[TRIAL EXPIRADO - VENDEDOR]",
           tipo: "bloqueio_trial"
         });
         return;
