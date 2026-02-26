@@ -650,10 +650,25 @@ async function processarJob(job: any): Promise<void> {
       .from("user_onboarding")
       .select("current_step")
       .eq("user_id", userId)
-      .neq("current_step", "done")
       .single();
     
-    if (activeOnboarding) {
+    // ✅ FIX Bug 2: Handler para "Vamos"/"Bora" APÓS onboarding done
+    if (activeOnboarding?.current_step === "done") {
+      const postOnbNormalized = normalizeText(conteudoProcessado);
+      const POST_ONB_WORDS = ["vamos", "bora", "comecar", "comecando", "iniciar", "start", "vamo", "partiu"];
+      
+      if (POST_ONB_WORDS.some(w => postOnbNormalized.includes(w))) {
+        console.log(`🎯 [ONBOARDING] Texto pós-onboarding detectado: "${conteudoProcessado}"`);
+        await sendMessage(payload.phoneNumber,
+          `🚀 *Vamos lá!*\n\nÉ simples, me manda:\n\n• *"Gastei 50 no mercado"* — registro rápido\n• *"Quanto gastei?"* — resumo do mês\n• *"Orçamento 2000"* — definir limite\n• *"Me ajuda"* — ver tudo que posso fazer\n\nBora começar? Me conta seu primeiro gasto! 💪`,
+          payload.messageSource
+        );
+        await supabase.from("historico_conversas").insert({ phone_number: payload.phoneNumber, user_id: userId, user_message: conteudoProcessado, ai_response: "[ONBOARDING - VAMOS]", tipo: "onboarding" });
+        return;
+      }
+    }
+    
+    if (activeOnboarding && activeOnboarding.current_step !== "done") {
       console.log(`🎯 [ONBOARDING] Step ativo: ${activeOnboarding.current_step}`);
       const handled = await handleOnboardingStep(userId, payload.phoneNumber, payload.messageText || "", payload.buttonReplyId || undefined);
       if (handled) {
@@ -1042,6 +1057,41 @@ async function processarJob(job: any): Promise<void> {
           }));
           await sendButtons(payload.phoneNumber, catMsg, detailButtons, payload.messageSource);
         }
+        return;
+      }
+      
+      // ====================================================================
+      // 🎯 HANDLER ONBOARDING BUTTONS (onb_start, onb_plan)
+      // ====================================================================
+      if (payload.buttonReplyId === "onb_start") {
+        await sendMessage(payload.phoneNumber,
+          `🚀 *Vamos lá!*\n\nÉ simples, me manda:\n\n• *"Gastei 50 no mercado"* — registro rápido\n• *"Quanto gastei?"* — resumo do mês\n• *"Orçamento 2000"* — definir limite\n• *"Me ajuda"* — ver tudo que posso fazer\n\nBora começar? Me conta seu primeiro gasto! 💪`,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      if (payload.buttonReplyId === "onb_plan") {
+        const { data: onbData } = await supabase
+          .from("user_onboarding")
+          .select("main_problem, problem_details, financial_state")
+          .eq("user_id", userId)
+          .single();
+        
+        let planMsg = `📋 *Seu Plano no Finax*\n\n`;
+        if (onbData?.main_problem === "prob_debt") {
+          planMsg += `🎯 Objetivo: Sair da dívida\n`;
+          if (onbData.problem_details?.amount) planMsg += `💳 Valor: R$ ${onbData.problem_details.amount}\n`;
+        } else if (onbData?.main_problem === "goal_save") {
+          planMsg += `🎯 Objetivo: Juntar grana\n`;
+          if (onbData.problem_details?.text) planMsg += `📌 Para: ${onbData.problem_details.text}\n`;
+        } else if (onbData?.main_problem === "prob_overspend") {
+          planMsg += `🎯 Objetivo: Gastar menos do que ganha\n`;
+        } else {
+          planMsg += `🎯 Objetivo: Organizar suas finanças\n`;
+        }
+        planMsg += `\n📱 Comece registrando seus gastos diários!\nMe manda: *"Gastei X no Y"*`;
+        await sendMessage(payload.phoneNumber, planMsg, payload.messageSource);
         return;
       }
       
@@ -4376,6 +4426,10 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       console.log(`💰 [SET_BUDGET] Definindo orçamento para: ${userId}`);
       
       if (!decision.slots.amount) {
+        // ✅ FIX Bug 3: Criar action com pending_slot para manter contexto
+        await createAction(userId, "set_budget", "set_budget", {
+          ...decision.slots
+        }, "amount", payload.messageId);
         await sendMessage(payload.phoneNumber, "Qual valor de limite mensal você quer definir? 💸", payload.messageSource);
         return;
       }

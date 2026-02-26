@@ -20,6 +20,7 @@ interface ActiveActionLocal {
   pending_selection_id?: string | null;
   origin_message_id?: string | null;
   last_message_id?: string | null;
+  meta?: Record<string, any> | null;
   created_at: string;
   updated_at: string;
   expires_at: string;
@@ -48,6 +49,87 @@ export interface ContextHandlerResult {
 }
 
 // ============================================================================
+// 🚫 DETECTAR INTENÇÃO DE CANCELAMENTO (AMPLIADO)
+// ============================================================================
+
+const CANCEL_WORDS = [
+  "cancela", "cancelar", "esquece", "nao quero", "não quero",
+  "deixa pra la", "deixa pra lá", "para", "parar", "desiste",
+  "tchau", "nenhuma", "nenhum", "sair", "depois", "nao sei",
+  "não sei", "deixa", "esquece isso", "volta", "desisto"
+];
+
+function isCancelIntent(normalized: string): boolean {
+  return CANCEL_WORDS.some(word => normalized.includes(word));
+}
+
+// ============================================================================
+// 🔄 DETECTAR MUDANÇA DE ASSUNTO
+// ============================================================================
+
+const SUBJECT_CHANGE_KEYWORDS = [
+  "orcamento", "orçamento", "meta", "divida", "dívida", "resumo",
+  "cartao", "cartão", "gasto", "entrada", "parcelamento", "parcelar",
+  "recorrente", "ajuda", "cancelar assinatura", "registrar",
+  "quanto gastei", "quanto tenho", "relatorio", "relatório",
+  "fatura", "conta", "salario", "salário", "renda",
+  "definir limite", "definir gasto", "viagem", "evento"
+];
+
+function isSubjectChange(normalized: string, currentIntent: string): boolean {
+  // Só detectar mudança se a mensagem tem conteúdo semântico (2+ palavras ou keyword clara)
+  const words = normalized.split(/\s+/).filter(w => w.length > 1);
+  
+  for (const keyword of SUBJECT_CHANGE_KEYWORDS) {
+    if (normalized.includes(keyword)) {
+      // Não considerar mudança se a keyword é do mesmo intent
+      const sameIntentKeywords: Record<string, string[]> = {
+        expense: ["gasto", "gastei"],
+        income: ["entrada", "renda", "salario", "salário"],
+        set_budget: ["orcamento", "orçamento", "limite", "definir limite", "definir gasto"],
+        goal: ["meta"],
+        debt: ["divida", "dívida"],
+        recurring: ["recorrente"],
+        installment: ["parcelamento", "parcelar"],
+        add_card: ["cartao", "cartão"],
+      };
+      
+      const currentKeywords = sameIntentKeywords[currentIntent] || [];
+      if (currentKeywords.some(k => keyword.includes(k) || k.includes(keyword))) {
+        continue; // Mesma intenção, não é mudança
+      }
+      
+      console.log(`🔄 [FSM] Mudança de assunto detectada: "${keyword}" (intent atual: ${currentIntent})`);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// ============================================================================
+// 🔢 RETRY TRACKER (in-memory por action)
+// ============================================================================
+
+const retryCounters = new Map<string, number>();
+
+function getRetryCount(actionId: string): number {
+  return retryCounters.get(actionId) || 0;
+}
+
+function incrementRetry(actionId: string): number {
+  const count = getRetryCount(actionId) + 1;
+  retryCounters.set(actionId, count);
+  return count;
+}
+
+function resetRetry(actionId: string): void {
+  retryCounters.delete(actionId);
+}
+
+const MAX_RETRIES = 2;
+
+// ============================================================================
 // 🎯 HANDLER PRINCIPAL DE CONTEXTO ATIVO
 // ============================================================================
 
@@ -55,9 +137,8 @@ export async function handleActiveContext(
   userId: string,
   activeAction: ActiveActionLocal,
   message: string,
-  _phoneNumber?: string // Opcional para compatibilidade
+  _phoneNumber?: string
 ): Promise<ContextHandlerResult> {
-  // Normalizar mensagem
   const normalizedMessage = message.toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -69,18 +150,33 @@ export async function handleActiveContext(
   // 1. VERIFICAR SE USUÁRIO QUER CANCELAR O FLUXO
   // ========================================================================
   if (isCancelIntent(normalizedMessage)) {
+    resetRetry(activeAction.id);
     return {
       handled: true,
       shouldContinue: false,
       shouldCancel: true,
       cancelled: true,
       action: "cancelled",
-      message: "👍 Ok, cancelado!"
+      message: "👍 Ok, sem problemas! Me chama quando precisar 😊"
     };
   }
   
   // ========================================================================
-  // 2. STATUS: AWAITING_CONFIRMATION → processar sim/não
+  // 2. VERIFICAR MUDANÇA DE ASSUNTO (ANTES de processar slot)
+  // ========================================================================
+  if (activeAction.pending_slot && isSubjectChange(normalizedMessage, activeAction.intent)) {
+    resetRetry(activeAction.id);
+    return {
+      handled: false,
+      shouldContinue: true,
+      shouldCancel: true,
+      action: "subject_change",
+      message: undefined
+    };
+  }
+  
+  // ========================================================================
+  // 3. STATUS: AWAITING_CONFIRMATION → processar sim/não
   // ========================================================================
   if (activeAction.status === "awaiting_confirmation") {
     const result = handleConfirmation(normalizedMessage);
@@ -88,7 +184,7 @@ export async function handleActiveContext(
   }
   
   // ========================================================================
-  // 3. STATUS: COLLECTING → preencher slot pendente
+  // 4. STATUS: COLLECTING → preencher slot pendente
   // ========================================================================
   if (activeAction.pending_slot) {
     const result = fillPendingSlot(activeAction, message, normalizedMessage);
@@ -96,26 +192,14 @@ export async function handleActiveContext(
   }
   
   // ========================================================================
-  // 4. SEM SLOT PENDENTE → mudança de assunto
+  // 5. SEM SLOT PENDENTE → mudança de assunto
   // ========================================================================
   console.log(`🔄 [FSM] Sem slot pendente - possível mudança de assunto`);
   return {
     handled: false,
     shouldContinue: true,
-    shouldCancel: true // Cancelar action atual para permitir novo fluxo
+    shouldCancel: true
   };
-}
-
-// ============================================================================
-// 🚫 DETECTAR INTENÇÃO DE CANCELAMENTO
-// ============================================================================
-
-function isCancelIntent(normalized: string): boolean {
-  const cancelWords = [
-    "cancela", "cancelar", "esquece", "nao quero", "não quero",
-    "deixa pra la", "deixa pra lá", "para", "parar", "desiste"
-  ];
-  return cancelWords.some(word => normalized.includes(word));
 }
 
 // ============================================================================
@@ -134,7 +218,7 @@ function handleConfirmation(normalized: string): ContextHandlerResult {
       handled: true,
       shouldContinue: false,
       readyToExecute: true,
-      message: undefined // Executor vai gerar mensagem de sucesso
+      message: undefined
     };
   }
   
@@ -147,7 +231,6 @@ function handleConfirmation(normalized: string): ContextHandlerResult {
     };
   }
   
-  // Resposta ambígua → pedir novamente
   return {
     handled: true,
     shouldContinue: false,
@@ -178,11 +261,12 @@ function fillPendingSlot(
     // Verificar se é um número para seleção de lista
     const numMatch = rawMessage.trim().match(/^(\d+)$/);
     if (numMatch && options) {
-      const selectedIndex = parseInt(numMatch[1]) - 1; // 1-indexed
+      const selectedIndex = parseInt(numMatch[1]) - 1;
       
       if (selectedIndex >= 0 && selectedIndex < options.length) {
         const selectedId = options[selectedIndex];
         console.log(`✅ [FSM] Seleção numérica: índice ${selectedIndex + 1} → ID ${selectedId}`);
+        resetRetry(activeAction.id);
         
         return {
           handled: true,
@@ -194,7 +278,7 @@ function fillPendingSlot(
             selected_id: selectedId,
             selection_index: selectedIndex
           },
-          readyToExecute: true // Seleção completa → executar
+          readyToExecute: true
         };
       } else {
         return {
@@ -205,11 +289,31 @@ function fillPendingSlot(
       }
     }
     
-    // Não é número válido para seleção
+    // Não é número → verificar retry limit
+    const retryCount = incrementRetry(activeAction.id);
+    
+    if (retryCount >= MAX_RETRIES) {
+      console.log(`❌ [FSM] Limite de tentativas atingido para selection`);
+      resetRetry(activeAction.id);
+      return {
+        handled: true,
+        shouldContinue: false,
+        shouldCancel: true,
+        cancelled: true,
+        message: "Sem problema, vou liberar você! Me chama quando quiser continuar 😊"
+      };
+    }
+    
+    // Variar mensagem de retry
+    const retryMessages = [
+      "Hmm, não entendi 🤔 Manda o *número* da opção que você quer.",
+      "Tenta mandar só o número (1, 2, 3...) da opção desejada 👆"
+    ];
+    
     return {
       handled: true,
       shouldContinue: false,
-      message: `Responde com o número da opção 👆`
+      message: retryMessages[Math.min(retryCount - 1, retryMessages.length - 1)]
     };
   }
   
@@ -217,18 +321,18 @@ function fillPendingSlot(
   // 🔢 CASO ESPECIAL: Seleção de cartão por número
   // ========================================================================
   if (pendingSlot === "card") {
-    // Verificar se o usuário enviou um número (seleção de lista)
     const numMatch = rawMessage.trim().match(/^(\d+)$/);
     
     if (numMatch) {
       const cardOptions = activeAction.slots.card_options as Array<{ id: string; nome: string }> | undefined;
       
       if (cardOptions && cardOptions.length > 0) {
-        const selectedIndex = parseInt(numMatch[1]) - 1; // 1-indexed
+        const selectedIndex = parseInt(numMatch[1]) - 1;
         
         if (selectedIndex >= 0 && selectedIndex < cardOptions.length) {
           const selectedCard = cardOptions[selectedIndex];
           console.log(`✅ [FSM] Cartão selecionado por número: ${selectedIndex + 1} → ${selectedCard.nome}`);
+          resetRetry(activeAction.id);
           
           return {
             handled: true,
@@ -252,16 +356,12 @@ function fillPendingSlot(
         }
       }
       
-      // Não tem lista de opções mas usuário enviou número
-      // Esse caso não deveria acontecer, mas trata gracefully
       return {
         handled: true,
         shouldContinue: false,
         message: `Qual o nome do cartão? (ex: Nubank, Inter...) 💳`
       };
     }
-    
-    // Não é número → continuar com extração normal (nome do cartão)
   }
   
   // Tentar extrair valor baseado no tipo de slot
@@ -269,12 +369,31 @@ function fillPendingSlot(
   
   if (extractedValue === null) {
     console.log(`❌ [FSM] Não conseguiu extrair valor para slot "${pendingSlot}"`);
+    
+    // Retry com limite
+    const retryCount = incrementRetry(activeAction.id);
+    
+    if (retryCount >= MAX_RETRIES) {
+      console.log(`❌ [FSM] Limite de tentativas atingido para ${pendingSlot}`);
+      resetRetry(activeAction.id);
+      return {
+        handled: true,
+        shouldContinue: false,
+        shouldCancel: true,
+        cancelled: true,
+        message: "Tá difícil entender 😅 Vou liberar você, depois a gente tenta de novo!"
+      };
+    }
+    
     return {
       handled: true,
       shouldContinue: false,
-      message: getSlotErrorMessage(pendingSlot)
+      message: getSlotRetryMessage(pendingSlot, retryCount)
     };
   }
+  
+  // Slot coletado com sucesso → reset retry
+  resetRetry(activeAction.id);
   
   // Merge com slots existentes
   const updatedSlots: ExtractedSlots = {
@@ -303,7 +422,7 @@ function fillPendingSlot(
     filledSlot: pendingSlot,
     slotValue: extractedValue,
     updatedSlots,
-    readyToConfirm: false, // NUNCA pedir confirmação — executa direto
+    readyToConfirm: false,
     readyToExecute: missingSlots.length === 0
   };
 }
@@ -314,7 +433,6 @@ function fillPendingSlot(
 
 function extractSlotValue(rawMessage: string, normalized: string, slotType: string): any {
   switch (slotType) {
-    // Valores numéricos
     case "amount":
     case "value":
     case "limit":
@@ -325,7 +443,6 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
       }
       return null;
     
-    // Dia do mês (1-31)
     case "due_day":
     case "day_of_month":
     case "closing_day":
@@ -336,17 +453,14 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
       }
       return null;
     
-    // Escolha de tipo (gasto/entrada) - validar estritamente
     case "type_choice": {
       const expenseWords = ["gasto", "despesa", "saida", "saída", "expense", "1"];
       const incomeWords = ["entrada", "receita", "renda", "income", "2"];
       if (expenseWords.some(w => normalized.includes(w))) return "expense";
       if (incomeWords.some(w => normalized.includes(w))) return "income";
-      // Não é uma resposta válida para type_choice
       return null;
     }
     
-    // Forma de pagamento
     case "payment_method":
       if (normalized.includes("pix")) return "pix";
       if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
@@ -355,7 +469,6 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
       if (normalized.includes("dinheiro") || normalized.includes("cash")) return "dinheiro";
       return null;
     
-    // Fonte de entrada
     case "source":
       if (normalized.includes("pix")) return "pix";
       if (normalized.includes("dinheiro")) return "dinheiro";
@@ -363,13 +476,11 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
       if (normalized.includes("salario") || normalized.includes("salário")) return "salario";
       return normalized.trim() || null;
     
-    // Textos livres
     case "description":
     case "card_name":
     case "bill_name":
     case "card":
       if (rawMessage.trim().length > 0) {
-        // Remover números para nomes de cartão/conta
         if (slotType === "card_name" || slotType === "bill_name") {
           const cleaned = rawMessage.replace(/\d+/g, "").trim();
           return cleaned.length > 0 ? cleaned : rawMessage.trim();
@@ -378,40 +489,69 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
       }
       return null;
     
-    // Periodicidade
     case "periodicity":
     case "recurrence_type":
       if (normalized.includes("diario") || normalized.includes("diária") || normalized.includes("dia")) return "diaria";
       if (normalized.includes("semana")) return "semanal";
       if (normalized.includes("mes") || normalized.includes("mês") || normalized.includes("mensal")) return "mensal";
       if (normalized.includes("ano") || normalized.includes("anual")) return "anual";
-      return "mensal"; // Default
+      return "mensal";
     
     default:
-      // Para outros slots, aceitar qualquer texto
       return rawMessage.trim() || null;
   }
 }
 
 // ============================================================================
-// ❌ MENSAGENS DE ERRO POR SLOT
+// ❌ MENSAGENS DE RETRY POR SLOT (variadas, não repetitivas)
 // ============================================================================
 
-function getSlotErrorMessage(slotType: string): string {
-  const errorMessages: Record<string, string> = {
-    amount: "Não entendi o valor 🤔\n\nManda só o número (ex: 50 ou 150,90)",
-    value: "Qual o valor? Manda só o número 💰",
-    limit: "Qual o limite? Manda só o número 💰",
-    payment_method: "Não entendi a forma de pagamento.\n\nÉ *pix*, *débito*, *crédito* ou *dinheiro*?",
-    due_day: "Qual o dia do vencimento? (1 a 31)",
-    closing_day: "Qual o dia de fechamento? (1 a 31)",
-    description: "Manda uma descrição curta 📝",
-    card_name: "Qual o nome do cartão? (ex: Nubank, Inter...)",
-    bill_name: "Qual o nome da conta? (ex: Luz, Internet...)",
-    type_choice: "É *gasto* ou *entrada*? 🤔",
+function getSlotRetryMessage(slotType: string, retryCount: number): string {
+  const retryMessages: Record<string, string[]> = {
+    amount: [
+      "Não entendi o valor 🤔 Manda só o número (ex: 50 ou 150,90)",
+      "Qual foi o valor? Manda assim: 50 ou 150,90"
+    ],
+    value: [
+      "Qual o valor? Manda só o número 💰",
+      "Tenta assim: 300 ou 1500,00"
+    ],
+    limit: [
+      "Qual o limite? Manda só o número 💰",
+      "Exemplo: 2000 ou 3500,00"
+    ],
+    payment_method: [
+      "Como você pagou? *Pix*, *débito*, *crédito* ou *dinheiro*?",
+      "Foi pix, cartão ou dinheiro? Pode escrever!"
+    ],
+    due_day: [
+      "Qual o dia do vencimento? (1 a 31)",
+      "Me diz o dia (ex: 10, 15, 25...)"
+    ],
+    closing_day: [
+      "Qual o dia de fechamento? (1 a 31)",
+      "Me manda o dia do fechamento (ex: 5, 10...)"
+    ],
+    description: [
+      "Manda uma descrição curta 📝",
+      "O que foi? Tipo: mercado, uber, farmácia..."
+    ],
+    card_name: [
+      "Qual o nome do cartão? (ex: Nubank, Inter...)",
+      "Me diz o nome do cartão 💳"
+    ],
+    bill_name: [
+      "Qual o nome da conta? (ex: Luz, Internet...)",
+      "Qual conta é essa?"
+    ],
+    type_choice: [
+      "É *gasto* ou *entrada*? 🤔",
+      "Isso foi uma despesa ou um dinheiro que entrou?"
+    ],
   };
   
-  return errorMessages[slotType] || `Qual o ${slotType}?`;
+  const messages = retryMessages[slotType] || ["Não entendi 🤔 Pode reformular?", "Tenta de novo de outra forma?"];
+  return messages[Math.min(retryCount - 1, messages.length - 1)];
 }
 
 // ============================================================================
@@ -459,86 +599,72 @@ export function generateConfirmationMessage(
     case "bill":
       message = `*Confirmar fatura:*\n\n`;
       message += `📄 ${slots.bill_name || slots.description}\n`;
-      if (slots.due_day) message += `📅 Vence dia ${slots.due_day}\n`;
-      if (slots.estimated_value) message += `💰 ~R$ ${slots.estimated_value.toFixed(2)}\n`;
+      if (slots.due_day) message += `📅 Vencimento: dia ${slots.due_day}\n`;
+      if (slots.estimated_value) message += `💰 Valor estimado: R$ ${slots.estimated_value.toFixed(2)}\n`;
       break;
     
     case "recurring":
-      message = `*Confirmar recorrente:*\n\n`;
-      message += `🔄 ${slots.description}\n`;
-      message += `💸 R$ ${slots.amount?.toFixed(2)}/mês\n`;
-      if (slots.payment_method) message += `💳 ${slots.payment_method}\n`;
-      if (slots.day_of_month) message += `📅 Todo dia ${slots.day_of_month}\n`;
+      message = `*Confirmar gasto recorrente:*\n\n`;
+      message += `📝 ${slots.description}\n`;
+      message += `💸 R$ ${slots.amount?.toFixed(2)}\n`;
       break;
     
-    case "numero_isolado":
-      message = `*Confirmar registro:*\n\n`;
-      if (slots.amount) message += `💸 R$ ${Number(slots.amount).toFixed(2)}\n`;
-      if (slots.description) message += `📝 ${slots.description}\n`;
-      if (slots.type_choice === "expense") message += `📂 Gasto\n`;
-      else if (slots.type_choice === "income") message += `📂 Entrada\n`;
+    case "installment":
+      message = `*Confirmar parcelamento:*\n\n`;
+      message += `📝 ${slots.description}\n`;
+      if (slots.amount) message += `💸 Total: R$ ${slots.amount?.toFixed(2)}\n`;
+      if (slots.installments) message += `🔢 ${slots.installments}x\n`;
       break;
     
     default:
-      message = `*Confirmar:*\n\n`;
-      if (slots.amount) message += `💸 R$ ${Number(slots.amount).toFixed(2)}\n`;
-      if (slots.description) message += `📝 ${slots.description}\n`;
-      if (slots.category) message += `📂 ${slots.category}\n`;
-      if (slots.payment_method) message += `💳 ${slots.payment_method}\n`;
+      message = `*Confirmar ${intent}?*\n\n`;
+      for (const [key, value] of Object.entries(slots)) {
+        if (value !== undefined && value !== null) {
+          message += `${key}: ${value}\n`;
+        }
+      }
   }
   
-  message += `\n✅ *Tudo certo?*`;
-  
+  message += `\n*Confirma?*`;
   return message;
 }
 
 // ============================================================================
-// 🔄 ATUALIZAR ACTION PARA CONFIRMAÇÃO
+// 🔄 SETAR STATUS AWAITING_CONFIRMATION
 // ============================================================================
 
 export async function setActionAwaitingConfirmation(
   actionId: string,
-  updatedSlots: ExtractedSlots
+  slots: ExtractedSlots
 ): Promise<void> {
-  const { data: existing } = await supabase
-    .from("actions")
-    .select("meta")
-    .eq("id", actionId)
-    .single();
+  const { data: existing } = await supabase.from("actions").select("meta").eq("id", actionId).single();
+  const meta = { ...(existing?.meta as Record<string, any> || {}) };
+  meta.pending_slot = null;
   
-  const meta = { ...(existing?.meta as Record<string, any>) };
-  meta.pending_slot = null; // Limpar slot pendente
+  await supabase.from("actions").update({
+    status: "awaiting_confirmation",
+    slots,
+    meta,
+    updated_at: new Date().toISOString()
+  }).eq("id", actionId);
   
-  await supabase
-    .from("actions")
-    .update({
-      status: "awaiting_confirmation",
-      slots: updatedSlots,
-      meta,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", actionId);
-  
-  console.log(`✅ [FSM] Action ${actionId.slice(-8)} → awaiting_confirmation`);
+  console.log(`⏳ [ACTION] Aguardando confirmação: ${actionId.slice(-8)}`);
 }
 
 // ============================================================================
-// 📝 OBTER PRÓXIMO SLOT FALTANTE
+// 🔍 VERIFICAR PRÓXIMO SLOT FALTANDO
 // ============================================================================
-
-// Values that should NOT count as "filled" for payment_method
-const INVALID_PAYMENT_VALUES = ["unknown", "outro", "desconhecido", "none", "null", "undefined"];
 
 export function getNextMissingSlot(intent: string, slots: ExtractedSlots): string | null {
   const requirements = SLOT_REQUIREMENTS[intent as keyof typeof SLOT_REQUIREMENTS];
   if (!requirements) return null;
   
+  const INVALID_PAYMENT_VALUES = ["unknown", "outro", "desconhecido", "none", "null", "undefined"];
+  
   for (const required of requirements.required) {
     const value = slots[required];
-    if (!value) {
-      return required;
-    }
-    // Rejeitar payment_method com valores inválidos
+    if (!value) return required;
+    
     if (required === "payment_method" && typeof value === "string" && 
         INVALID_PAYMENT_VALUES.includes(value.toLowerCase())) {
       return required;
@@ -549,41 +675,55 @@ export function getNextMissingSlot(intent: string, slots: ExtractedSlots): strin
 }
 
 // ============================================================================
-// 📝 OBTER PROMPT PARA SLOT
+// 💬 GERAR PROMPT PARA SLOT
 // ============================================================================
 
 export function getSlotPrompt(slotType: string): { text: string; buttons?: Array<{ id: string; title: string }> } {
-  // ✅ Guard contra undefined/null — default para payment_method
   if (!slotType) {
-    console.log(`⚠️ [FSM] getSlotPrompt chamado com slotType falsy, defaulting to payment_method`);
-    return { 
+    return {
       text: "Como você pagou?",
       buttons: [
         { id: "pay_pix", title: "📱 Pix" },
         { id: "pay_debito", title: "💳 Débito" },
-        { id: "pay_credito", title: "💳 Crédito" }
+        { id: "pay_credito", title: "💳 Crédito" },
+        { id: "pay_dinheiro", title: "💵 Dinheiro" }
       ]
     };
   }
   
   const prompts: Record<string, { text: string; buttons?: Array<{ id: string; title: string }> }> = {
-    amount: { text: "Qual foi o valor? 💸" },
-    payment_method: { 
+    amount: { text: "Qual foi o valor? 💰" },
+    value: { text: "Qual o valor? 💰" },
+    limit: { text: "Qual o limite do cartão? 💰" },
+    description: { text: "O que você comprou? 📝" },
+    payment_method: {
       text: "Como você pagou?",
       buttons: [
         { id: "pay_pix", title: "📱 Pix" },
         { id: "pay_debito", title: "💳 Débito" },
-        { id: "pay_credito", title: "💳 Crédito" }
+        { id: "pay_credito", title: "💳 Crédito" },
+        { id: "pay_dinheiro", title: "💵 Dinheiro" }
       ]
     },
-    description: { text: "O que foi essa compra?" },
-    source: { text: "De onde veio esse dinheiro?" },
+    source: {
+      text: "De onde veio o dinheiro?",
+      buttons: [
+        { id: "src_pix", title: "📱 Pix" },
+        { id: "src_dinheiro", title: "💵 Dinheiro" },
+        { id: "src_transferencia", title: "🏦 Transferência" }
+      ]
+    },
+    due_day: { text: "Qual o dia do vencimento? (1 a 31)" },
+    closing_day: { text: "Qual o dia de fechamento? (1 a 31)" },
     card_name: { text: "Qual o nome do cartão? (ex: Nubank, Inter...)" },
-    limit: { text: "Qual o limite total? 💰" },
-    due_day: { text: "Qual o dia de vencimento? (1-31)" },
-    closing_day: { text: "Qual o dia de fechamento?" },
     bill_name: { text: "Qual o nome da conta? (ex: Luz, Internet...)" },
-    estimated_value: { text: "Qual o valor estimado? (pode aproximar)" }
+    type_choice: {
+      text: "Esse valor foi um gasto ou uma entrada?",
+      buttons: [
+        { id: "num_gasto", title: "💸 Gasto" },
+        { id: "num_entrada", title: "💰 Entrada" }
+      ]
+    }
   };
   
   return prompts[slotType] || { text: `Qual o ${slotType}?` };
