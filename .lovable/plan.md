@@ -1,105 +1,90 @@
 
-# Plano: Corrigir Engessamento do Finax WhatsApp
 
-## Diagnostico Real (5 Bugs Criticos)
+# Plano: Corrigir Build Errors + Melhorar Landing Page + Avaliar Plano Acelerador
 
-Analisei cada imagem e tracei o fluxo no codigo. Encontrei 5 problemas raiz:
+## 1. Corrigir Build Errors (URGENTE)
 
-### Bug 1: Loop "Responde com o numero da opcao" (CRITICO)
-**Onde:** `fsm/context-handler.ts` linha 210-213
-**Causa:** Quando `pending_slot === "selection"` e o usuario NAO envia um numero, o bot responde "Responde com o numero da opcao" e retorna `handled: true, shouldContinue: false`. NAO tem:
-- Deteccao de escape ("tchau", "nenhuma", "para")  
-- Deteccao de mudanca de assunto ("orcamento", "meta")
-- Limite de tentativas (loop infinito)
-- Aceitacao de linguagem natural
+### 1A: `conteudoProcessado` usado antes da declaracao (`index.ts`)
 
-### Bug 2: "Vamos" apos onboarding nao funciona
-**Onde:** `utils/onboarding.ts` linha 295 envia botoes `onb_start` e `onb_plan`, mas quando o usuario DIGITA "Vamos" em vez de clicar no botao, cai no fluxo normal que nao reconhece. Resultado: classificacao unknown, que pode cair em loop.
+O bloco de onboarding pos-done (linha 657) usa `conteudoProcessado` que so e declarado na linha 1928. 
 
-### Bug 3: "Definir gasto mensal" → 300 → "Gasto ou Entrada?"
-**Onde:** `index.ts` linha 4378-4381 - O bloco `set_budget` NAO cria action quando falta `amount`. Ele so manda texto e retorna. Quando o usuario envia "300,00", chega como mensagem NOVA, sem contexto. O fast-track classifica como "numero isolado", cria action `numero_isolado` e pergunta "Gasto ou Entrada?" - COMPLETAMENTE fora de contexto.
+**Fix:** Substituir `conteudoProcessado` por `payload.messageText` nas linhas 657, 661 e 666, ja que nesse ponto do codigo o texto ainda nao foi processado.
 
-### Bug 4: "selection" sem escape no context-handler
-**Onde:** `fsm/context-handler.ts` funcao `fillPendingSlot` - O bloco `selection` (linhas 175-214) nao verifica `isCancelIntent` antes de checar se e numero. O `isCancelIntent` e chamado antes na funcao `handleActiveContext`, mas APENAS para palavras exatas como "cancela", "esquece". Palavras como "tchau", "nenhuma", "orcamento" NAO estao na lista.
+### 1B: `result.items` possivelmente undefined (`media.ts`)
 
-### Bug 5: context-handler nao detecta mudanca de assunto
-**Onde:** `fsm/context-handler.ts` funcao `handleActiveContext` - Quando tem `pending_slot`, o codigo SEMPRE vai para `fillPendingSlot` sem verificar se o usuario mudou de assunto. Precisa verificar ANTES se a mensagem e uma nova intencao.
+Linhas 222-227 acessam `result.items` sem verificar se existe.
+
+**Fix:** Adicionar optional chaining: `result.items?.length` e `result.items?.[0]`.
 
 ---
 
-## Solucao
+## 2. Landing Page - Correcoes
 
-### Arquivo 1: `supabase/functions/finax-worker/fsm/context-handler.ts`
+### 2A: Botao "Entrar" no header
 
-**Mudancas:**
+Adicionar botao "Entrar" na navbar que linka para `/auth`. Ao lado do "Comecar gratis", com estilo ghost.
 
-1. **Ampliar `isCancelIntent`** para incluir palavras de escape:
-   - Adicionar: "tchau", "nenhuma", "nenhum", "para", "sair", "depois", "nao sei", "nao quero"
+### 2B: Botoes de compra direta nos planos
 
-2. **Adicionar `isSubjectChange`** - nova funcao que detecta mudanca de assunto:
-   - Palavras-chave: "orcamento", "meta", "divida", "resumo", "cartao", "gasto", "entrada", "parcelamento", "recorrente", "ajuda", "cancelar", "registrar"
-   - Se mensagem contem 2+ palavras e inclui keyword de outro intent, retornar `shouldContinue: true, shouldCancel: true`
+Os botoes de plano atualmente direcionam ao WhatsApp. Adicionar opcao de compra direta:
+- Basico: link para `/auth?plan=basico` ou checkout direto
+- Pro: manter "Testar 14 dias gratis" via WhatsApp + adicionar "Assinar direto" como botao secundario
+- Ambos os cards terao 2 CTAs: trial gratis (WhatsApp) + assinar agora (checkout/auth)
 
-3. **Refatorar bloco `selection`** (linhas 175-214):
-   - ANTES de checar numero, verificar `isSubjectChange` e escape
-   - Se escape: retornar `cancelled: true`
-   - Se mudanca de assunto: retornar `shouldContinue: true, shouldCancel: true`
-   - Adicionar contador de tentativas: apos 2 falhas, cancelar automaticamente
-   - Variar mensagem de erro em vez de repetir "Responde com o numero da opcao"
+### 2C: Mockup com rotacao de exemplos
 
-4. **Refatorar `fillPendingSlot`** (linhas 162-309):
-   - Adicionar deteccao de mudanca de assunto ANTES de tentar extrair slot
-   - Se mensagem parece ser nova intencao (ex: "orcamento"), retornar `shouldContinue: true`
+O ChatMockup ja roda 5 conversas diferentes automaticamente. O problema e que em telas menores o mockup pode ficar muito grande. Verificar e ajustar padding/sizing para mobile.
 
-### Arquivo 2: `supabase/functions/finax-worker/index.ts`
+### 2D: Responsividade mobile
 
-**Mudancas:**
+Problemas identificados:
+- Antes vs Depois: grid 3 colunas (com seta no meio) nao colapsa em mobile
+- Stats bar: 4 colunas pode ficar apertado em 320px
+- Navbar: botao "Comecar gratis" pode cortar em telas pequenas
+- Plans grid: ja tem media query para 1 coluna mas verificar padding
 
-1. **set_budget SEM amount** (linha 4378): Criar action com `pending_slot: "amount"` em vez de so enviar texto
-   ```
-   Antes:  sendMessage("Qual valor?") → return
-   Depois: createAction("set_budget", ..., pending_slot: "amount") → sendMessage("Qual valor?") → return
-   ```
-   Isso garante que quando o usuario enviar "300", o contexto sabe que e para `set_budget`.
-
-2. **Botoes de onboarding como texto:** Adicionar handler para "Vamos", "vamos", "bora" apos onboarding done:
-   - Se onboarding.current_step === "done" E mensagem e tipo "vamos/bora/comecar"
-   - Responder com o guia de uso (mesmo conteudo do botao onb_start)
-
-3. **Handler de `onb_start` e `onb_plan`** nos callbacks de botao (bloco de BUTTON): adicionar tratamento para esses IDs, que hoje nao tem handler.
-
-### Arquivo 3: `supabase/functions/finax-worker/utils/onboarding.ts`
-
-**Mudancas:**
-
-1. Apos onboarding `done`, marcar `current_step = "done"` para evitar re-entrada
-2. Adicionar handler para texto "vamos" / "bora" como alternativa aos botoes
+**Fix:** Adicionar media queries para:
+- `@media(max-width:900px)`: Antes/Depois vira 1 coluna (sem seta), navbar botao menor
+- `@media(max-width:540px)`: Stats vira 2x2, padding reduzido geral
 
 ---
 
-## Impacto nas Imagens
+## 3. Status do Plano Acelerador - O Que Podemos Fazer AGORA
 
-**Imagem 1 (Onboarding):** Usuario envia "Quero comecar meu trial" → onboarding inicia OK. Mas "Vamos" depois nao funciona → FIX: handler de texto pos-onboarding
+### Implementavel nesta sessao:
 
-**Imagem 2 ("Opa perdi contexto" + "Vamos" → help):** Apos timeout, usuario digita "Vamos" → AI nao entende → help menu. Depois "Gastei 10 com cafe" → funciona. ESSE FLUXO JA ESTA OK, so precisa que "Vamos" apos onboarding funcione.
+**A) Gating no WhatsApp (Alta prioridade)**
+Ja temos o "Modo Vendedor" para trial expirado. O que falta e diferenciar respostas Basico vs Pro no bot. Por exemplo:
+- Basico pede insights preditivos -> teaser "Isso e Pro, quer upgrade?"
+- Basico pede simulador -> teaser
 
-**Imagem 3 ("Definir gasto mensal" → 300 → "Gasto ou Entrada?"):** FIX: set_budget cria action com pending_slot.
+Isso e uma verificacao simples no `index.ts`: antes de executar intents Pro, checar `user.plano`.
 
-**Imagem 4 (Loop "Responde com numero da opcao"):** FIX: escape + mudanca de assunto + retry limit no context-handler.
+**B) Trial End Summary (Baixa prioridade, mas rapido)**
+Quando trial expira, o modo vendedor ja envia resumo. Podemos melhorar com dados reais (gastos registrados, cartoes, metas).
+
+### NAO implementavel agora (requer mais sessoes):
+
+- Simulador de Quitacao: logica complexa de juros compostos, 3 cenarios, UI dedicada
+- Insights Preditivos: requer analise de dados historicos, ML basico
+- Consultor IA Semanal: edge function agendada + prompt complexo
+- Detector de Padroes / Radar de Anomalias: analise estatistica
+- Projecoes Financeiras: graficos + calculos de projecao
+- Metas de Frequencia: novo tipo de meta no banco
 
 ---
 
-## Secao Tecnica
+## Secao Tecnica: Arquivos Modificados
 
 | Arquivo | Mudanca |
 |---------|---------|
-| `fsm/context-handler.ts` | Ampliar escape, detectar mudanca assunto, retry limit, variar mensagens |
-| `index.ts` | set_budget cria action, handler onb_start/onb_plan, handler texto "vamos" |
-| `utils/onboarding.ts` | Handler texto "vamos"/"bora" como alternativa a botoes |
+| `supabase/functions/finax-worker/index.ts` | Fix `conteudoProcessado` -> `payload.messageText` (linhas 657, 661, 666) |
+| `supabase/functions/finax-worker/utils/media.ts` | Fix optional chaining em `result.items` (linhas 222-227) |
+| `src/pages/Landing.tsx` | Botao Entrar, botoes compra, responsividade mobile, media queries |
 
 ## Ordem de Execucao
 
-1. context-handler.ts (corrige loop infinito - mais critico)
-2. index.ts (set_budget + onboarding handlers)  
-3. onboarding.ts (texto como alternativa a botoes)
-4. Deploy + teste
+1. Fix build errors (index.ts + media.ts) - deploy
+2. Landing page (header + botoes + responsividade)
+3. Gating no WhatsApp (se der tempo)
+
