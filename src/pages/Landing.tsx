@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import finaxLogo from "@/assets/finax-logo-transparent.png";
 
 // ═══════════════════════════════════════════════════════════════
@@ -224,8 +225,10 @@ function FeatureCard({ icon, title, desc, ex, color }: { icon: string; title: st
 export default function Landing() {
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
   const [heroRef, heroVisible] = useReveal(0.1);
+  const navigate = useNavigate();
 
   const go = () => window.open(WA_LINK, "_blank");
+  const goAuth = (plan?: string) => navigate(plan ? `/auth?plan=${plan}` : "/auth");
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 
   // Section refs
@@ -334,10 +337,14 @@ export default function Landing() {
           .compare-grid{grid-template-columns:1fr 70px 70px!important}
           .nav-links{display:none!important}
           .footer-row{flex-direction:column!important;text-align:center}
+          .ba-grid{grid-template-columns:1fr!important}
+          .ba-arrow{display:none!important}
+          .nav-ctas .btn-primary{padding:8px 14px!important;font-size:12px!important}
         }
         @media(max-width:540px){
           .feat-grid{grid-template-columns:1fr!important}
           .hero-h1{font-size:30px!important}
+          .nav-ctas .nav-enter{display:none!important}
         }
       `}</style>
 
@@ -352,7 +359,10 @@ export default function Landing() {
             <button key={id} className="nav-item" onClick={() => scrollTo(id)}>{label}</button>
           ))}
         </div>
-        <button className="btn-primary" style={{ padding: "10px 22px", fontSize: 14, borderRadius: 10 }} onClick={go}>Começar grátis →</button>
+        <div className="nav-ctas" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button className="nav-enter btn-ghost" onClick={() => goAuth()} style={{ padding: "8px 18px", fontSize: 13, borderRadius: 10 }}>Entrar</button>
+          <button className="btn-primary" style={{ padding: "10px 22px", fontSize: 14, borderRadius: 10 }} onClick={go}>Começar grátis →</button>
+        </div>
       </nav>
 
       {/* ═══ HERO ═══ */}
@@ -433,7 +443,7 @@ export default function Landing() {
             <div className="tag" style={{ background: `${B.blue}15`, border: `1px solid ${B.blue}30`, color: B.blue, marginBottom: 20 }}>A realidade de quem não controla</div>
             <h2 className="section-h" style={{ fontSize: 40, fontWeight: 900, letterSpacing: -1.5 }}>Você se reconhece <span className="gradient-text">aqui?</span></h2>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 24, alignItems: "center" }}>
+          <div className="ba-grid" style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 24, alignItems: "center" }}>
             <div style={{ background: "#1A0F0F", border: "1px solid #3D1515", borderRadius: 20, padding: 28 }}>
               <div style={{ color: "#EF4444", fontSize: 13, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", marginBottom: 18 }}>❌ Sem o Finax</div>
               {["Fim do mês, zero no saldo e não sabe por quê","Abre o app de finanças, fecha em 30 segundos","Planilha que funcionou por 3 dias","Assinaturas que você nem lembra que tem","Cartão estourado sempre na pior hora"].map(t => (
@@ -443,7 +453,7 @@ export default function Landing() {
                 </div>
               ))}
             </div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+            <div className="ba-arrow" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{ width: 48, height: 48, borderRadius: "50%", background: GRAD, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, boxShadow: `0 0 24px ${B.cyan}40` }}>→</div>
             </div>
             <div style={{ background: `${B.cyan}08`, border: `1px solid ${B.cyan}25`, borderRadius: 20, padding: 28 }}>
@@ -547,7 +557,10 @@ export default function Landing() {
                   <span style={{ color: B.textSub, fontSize: 13.5 }}>{f}</span>
                 </div>
               ))}
-              <button onClick={go} className="btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 24, padding: "13px" }}>Começar no Básico</button>
+              <button onClick={go} className="btn-wa" style={{ width: "100%", justifyContent: "center", marginTop: 24, padding: "13px", fontSize: 14 }}>
+                <span>💬</span> Testar grátis pelo WhatsApp
+              </button>
+              <button onClick={() => goAuth("basico")} className="btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 10, padding: "11px", fontSize: 13 }}>Assinar direto → R$ 19,90/mês</button>
             </div>
             {/* PRO */}
             <div style={{ background: `linear-gradient(160deg, ${B.card}, #08111f)`, border: `2px solid ${B.cyan}45`, borderRadius: 24, padding: 36, position: "relative", boxShadow: `0 0 60px ${B.cyan}10, 0 20px 60px rgba(0,0,0,.3)` }}>
@@ -568,6 +581,7 @@ export default function Landing() {
               <button className="btn-primary" onClick={go} style={{ width: "100%", justifyContent: "center", marginTop: 24, padding: "15px" }}>
                 <span style={{ fontSize: 18 }}>💬</span> Começar Trial Pro Grátis
               </button>
+              <button onClick={() => goAuth("pro")} className="btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 10, padding: "11px", fontSize: 13 }}>Assinar direto → R$ 29,90/mês</button>
             </div>
           </div>
           <div style={{ textAlign: "center", marginTop: 28, display: "flex", justifyContent: "center", gap: 32, flexWrap: "wrap" }}>

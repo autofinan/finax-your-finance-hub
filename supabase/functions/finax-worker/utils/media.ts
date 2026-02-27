@@ -219,12 +219,12 @@ Formato para MÚLTIPLOS itens:
           }));
         
         // Se tem items, usar o primeiro como valor/descricao principal para compatibilidade
-        if (result.items.length > 0) {
+      if (result.items && result.items.length > 0) {
           result.valor = result.items[0].valor;
           result.descricao = result.items[0].descricao;
         }
         
-        console.log(`📷 [GEMINI] Múltiplos itens detectados: ${result.items.length}`);
+        console.log(`📷 [GEMINI] Múltiplos itens detectados: ${result.items?.length || 0}`);
       }
       
       if (!result.valor && parsed.valor && typeof parsed.valor === "number" && parsed.valor > 0) {

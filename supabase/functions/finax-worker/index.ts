@@ -654,16 +654,16 @@ async function processarJob(job: any): Promise<void> {
     
     // ✅ FIX Bug 2: Handler para "Vamos"/"Bora" APÓS onboarding done
     if (activeOnboarding?.current_step === "done") {
-      const postOnbNormalized = normalizeText(conteudoProcessado);
+      const postOnbNormalized = normalizeText(payload.messageText);
       const POST_ONB_WORDS = ["vamos", "bora", "comecar", "comecando", "iniciar", "start", "vamo", "partiu"];
       
       if (POST_ONB_WORDS.some(w => postOnbNormalized.includes(w))) {
-        console.log(`🎯 [ONBOARDING] Texto pós-onboarding detectado: "${conteudoProcessado}"`);
+        console.log(`🎯 [ONBOARDING] Texto pós-onboarding detectado: "${payload.messageText}"`);
         await sendMessage(payload.phoneNumber,
           `🚀 *Vamos lá!*\n\nÉ simples, me manda:\n\n• *"Gastei 50 no mercado"* — registro rápido\n• *"Quanto gastei?"* — resumo do mês\n• *"Orçamento 2000"* — definir limite\n• *"Me ajuda"* — ver tudo que posso fazer\n\nBora começar? Me conta seu primeiro gasto! 💪`,
           payload.messageSource
         );
-        await supabase.from("historico_conversas").insert({ phone_number: payload.phoneNumber, user_id: userId, user_message: conteudoProcessado, ai_response: "[ONBOARDING - VAMOS]", tipo: "onboarding" });
+        await supabase.from("historico_conversas").insert({ phone_number: payload.phoneNumber, user_id: userId, user_message: payload.messageText, ai_response: "[ONBOARDING - VAMOS]", tipo: "onboarding" });
         return;
       }
     }
