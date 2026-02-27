@@ -390,32 +390,63 @@ async function processarJob(job: any): Promise<void> {
         // 💬 MENSAGEM PADRÃO DE TRIAL EXPIRADO (com trial summary)
         // ================================================================
         
-        // Buscar dados do trial para summary personalizado
+        // Buscar dados do trial para summary personalizado (ENHANCED)
         let trialSummary = "";
         try {
+          // Transações totais
           const { count: gastosCount } = await supabase
             .from("transacoes")
             .select("*", { count: "exact", head: true })
             .eq("usuario_id", userId);
           
+          // Cartões cadastrados
           const { count: cartoesCount } = await supabase
             .from("cartoes_credito")
             .select("*", { count: "exact", head: true })
             .eq("usuario_id", userId);
           
-          const { data: gastosFlex } = await supabase
-            .from("transacoes")
-            .select("valor")
+          // Metas criadas
+          const { count: metasCount } = await supabase
+            .from("orcamentos")
+            .select("*", { count: "exact", head: true })
             .eq("usuario_id", userId)
-            .eq("tipo", "despesa")
-            .in("expense_type", ["flexivel", "lazer_social", "impulso"]);
+            .eq("ativo", true);
           
-          const valorAjustavel = gastosFlex?.reduce((sum, t) => sum + Math.abs(t.valor || 0), 0) || 0;
+          // Dívidas registradas
+          const { count: dividasCount } = await supabase
+            .from("dividas")
+            .select("*", { count: "exact", head: true })
+            .eq("usuario_id", userId)
+            .eq("ativa", true);
+          
+          // Total de entradas e saídas
+          const { data: totais } = await supabase
+            .from("transacoes")
+            .select("valor, tipo, expense_type")
+            .eq("usuario_id", userId)
+            .neq("status", "cancelada");
+          
+          const totalEntradas = totais?.filter(t => t.tipo === "entrada").reduce((s, t) => s + Math.abs(t.valor || 0), 0) || 0;
+          const totalSaidas = totais?.filter(t => t.tipo === "saida").reduce((s, t) => s + Math.abs(t.valor || 0), 0) || 0;
+          const valorAjustavel = totais?.filter(t => ["flexivel", "lazer_social", "impulso"].includes(t.expense_type || "")).reduce((s, t) => s + Math.abs(t.valor || 0), 0) || 0;
+          
+          // Recorrentes
+          const { count: recorrentesCount } = await supabase
+            .from("gastos_recorrentes")
+            .select("*", { count: "exact", head: true })
+            .eq("usuario_id", userId)
+            .eq("ativo", true);
           
           if (gastosCount && gastosCount > 0) {
-            trialSummary = `\nDurante o trial você:\n• Registrou *${gastosCount} gastos*`;
-            if (cartoesCount && cartoesCount > 0) trialSummary += `\n• Organizou *${cartoesCount} cartão(ões)*`;
-            if (valorAjustavel > 0) trialSummary += `\n• Identificou *R$ ${valorAjustavel.toFixed(0)}* em gastos ajustáveis`;
+            trialSummary = `\n📋 *Seu resumo do trial:*\n`;
+            trialSummary += `• 🧾 *${gastosCount} transações* registradas`;
+            if (totalEntradas > 0) trialSummary += `\n• 💰 R$ ${totalEntradas.toFixed(0)} em entradas`;
+            if (totalSaidas > 0) trialSummary += `\n• 💸 R$ ${totalSaidas.toFixed(0)} em saídas`;
+            if (cartoesCount && cartoesCount > 0) trialSummary += `\n• 💳 ${cartoesCount} cartão(ões) organizados`;
+            if (metasCount && metasCount > 0) trialSummary += `\n• 🎯 ${metasCount} orçamento(s) criados`;
+            if (dividasCount && dividasCount > 0) trialSummary += `\n• 📊 ${dividasCount} dívida(s) mapeadas`;
+            if (recorrentesCount && recorrentesCount > 0) trialSummary += `\n• 🔄 ${recorrentesCount} gasto(s) recorrentes`;
+            if (valorAjustavel > 0) trialSummary += `\n• ✂️ *R$ ${valorAjustavel.toFixed(0)}* em gastos ajustáveis identificados`;
             trialSummary += "\n";
           }
         } catch (e) {
@@ -865,6 +896,46 @@ async function processarJob(job: any): Promise<void> {
       if (payload.buttonReplyId === "confirm_no" && activeAction) {
         await cancelAction(userId);
         await sendMessage(payload.phoneNumber, "👍 Cancelado!", payload.messageSource);
+        return;
+      }
+      
+      // ====================================================================
+      // ⭐ UPGRADE PRO - Gating button response
+      // ====================================================================
+      if (payload.buttonReplyId === "upgrade_pro") {
+        const SITE_URL = "https://finaxassistente.lovable.app";
+        try {
+          const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+          const priceId = Deno.env.get("STRIPE_PRICE_PRO");
+          if (stripeSecretKey && priceId) {
+            const { default: Stripe } = await import("https://esm.sh/stripe@14.21.0?target=deno");
+            const stripe = new Stripe(stripeSecretKey, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
+            const session = await stripe.checkout.sessions.create({
+              mode: "subscription",
+              payment_method_types: ["card"],
+              line_items: [{ price: priceId, quantity: 1 }],
+              success_url: `${SITE_URL}/dashboard?success=true&plan=pro`,
+              cancel_url: `${SITE_URL}/?canceled=true`,
+              metadata: { plan: "pro", phone: payload.phoneNumber },
+              subscription_data: { metadata: { plan: "pro" } },
+              allow_promotion_codes: true,
+            });
+            await sendMessage(payload.phoneNumber, 
+              `⭐ *Plano Pro* — R$ 29,90/mês\n\nSimulador de quitação, alertas inteligentes, cartões ilimitados e muito mais!\n\n👉 Assine aqui: ${session.url}`,
+              payload.messageSource
+            );
+          } else {
+            await sendMessage(payload.phoneNumber, `⭐ Acesse ${SITE_URL} para assinar o Pro!`, payload.messageSource);
+          }
+        } catch (err) {
+          console.error(`[UPGRADE] Error:`, err);
+          await sendMessage(payload.phoneNumber, `⭐ Acesse https://finaxassistente.lovable.app para assinar o Pro!`, payload.messageSource);
+        }
+        return;
+      }
+      
+      if (payload.buttonReplyId === "gating_ok") {
+        await sendMessage(payload.phoneNumber, "Beleza! 👍 Me manda o que precisar 😊", payload.messageSource);
         return;
       }
       
@@ -2522,6 +2593,39 @@ async function processarJob(job: any): Promise<void> {
     const domainCheck = assertDomainIsolation(decision.actionType as ActionType, activeAction);
     if (domainCheck.shouldDiscard) {
       await cancelAction(userId);
+    }
+    
+    // ========================================================================
+    // 🔒 PRO-ONLY FEATURE GATING (Básico vs Pro no WhatsApp)
+    // ========================================================================
+    const PRO_ONLY_INTENTS = ["query_alerts", "purchase"];
+    const PRO_TEASER_INTENTS: Record<string, string> = {
+      query_alerts: "🚨 *Alertas Proativos* são exclusivos do plano Pro!\n\nCom o Pro, você recebe alertas automáticos sobre anomalias e riscos nos seus gastos.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
+      purchase: "🛒 *Consultor de Compras* é exclusivo do plano Pro!\n\nCom o Pro, eu analiso se a compra cabe no seu orçamento antes de comprar.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
+    };
+    
+    const userPlano = usuario?.plano || "trial";
+    const isProUser = userPlano === "pro" || (userPlano === "trial" && usuario?.trial_fim && new Date(usuario.trial_fim) > new Date());
+    
+    if (PRO_ONLY_INTENTS.includes(decision.actionType) && !isProUser) {
+      const teaser = PRO_TEASER_INTENTS[decision.actionType] || "⭐ Este recurso é exclusivo do plano Pro!";
+      console.log(`🔒 [GATING] Bloqueando intent Pro "${decision.actionType}" para plano "${userPlano}"`);
+      await sendButtons(payload.phoneNumber,
+        teaser,
+        [
+          { id: "upgrade_pro", title: "⭐ Quero o Pro" },
+          { id: "gating_ok", title: "👍 Entendi" }
+        ],
+        payload.messageSource
+      );
+      await supabase.from("historico_conversas").insert({
+        phone_number: payload.phoneNumber,
+        user_id: userId,
+        user_message: conteudoProcessado,
+        ai_response: `[GATING - ${decision.actionType} bloqueado]`,
+        tipo: "gating_pro"
+      });
+      return;
     }
     
     // ========================================================================
