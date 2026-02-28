@@ -14,6 +14,7 @@ import { countPendingMessages } from "../utils/message-queue.ts";
 import { ensurePerfilCliente } from "../utils/profile.ts";
 import { checkBudgetAfterExpense } from "./budget.ts";
 import { linkTransactionToContext, getActiveContext } from "./context-handler.ts";
+import { getFreedomMicroInsight } from "./freedom-insights.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -283,6 +284,12 @@ export async function registerExpenseInline(
   
   if (budgetAlert) {
     message += `\n\n${budgetAlert}`;
+  }
+  
+  // 🏁 FREEDOM MICRO-INSIGHT
+  const freedomInsight = await getFreedomMicroInsight(userId, valor);
+  if (freedomInsight) {
+    message += freedomInsight;
   }
   
   if (queueInfo) {

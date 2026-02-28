@@ -319,6 +319,11 @@ Pedir simulação de aceleração de dívidas.
 Indicadores: "simular quitação", "quanto tempo pra quitar", "cenários", "como quitar mais rápido"
 Exemplos: "Simular quitação", "Quanto tempo para quitar minhas dívidas"
 
+### query_freedom - Consultar dias de liberdade financeira ⚠️ NOVA
+Perguntar sobre previsão de quitação total, dias de liberdade, quando será livre.
+Indicadores: "liberdade financeira", "quando vou quitar", "quanto falta", "dias de liberdade", "quando serei livre", "previsão de quitação"
+Exemplos: "Quanto falta pra minha liberdade?", "Quando vou quitar tudo?", "Dias de liberdade"
+
 ### unknown - Último recurso
 Só quando confidence < 0.5 E não se encaixa em nenhuma categoria acima.
 Exemplo: "50" (número isolado sem contexto)
@@ -399,7 +404,7 @@ Context: action (start|end)
 
 \`\`\`json
 {
-  "actionType": "expense|income|installment|recurring|add_card|card_event|bill|pay_bill|goal|purchase|set_budget|query|query_alerts|cancel|skip|chat|set_context|control|edit|debt|list_debts|simulate_debts|unknown",
+  "actionType": "expense|income|installment|recurring|add_card|card_event|bill|pay_bill|goal|purchase|set_budget|query|query_alerts|cancel|skip|chat|set_context|control|edit|debt|list_debts|simulate_debts|query_freedom|unknown",
   "confidence": 0.0-1.0,
   "slots": { },
   "reasoning": "Explicação concisa",

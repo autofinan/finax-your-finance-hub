@@ -7,6 +7,7 @@ import { PlanoCard } from '@/components/dashboard/PlanoCard';
 import { BudgetCard } from '@/components/dashboard/BudgetCard';
 import { InsightDoDia } from '@/components/dashboard/InsightDoDia';
 import { QuickActions } from '@/components/dashboard/QuickActions';
+import { FreedomCard } from '@/components/dashboard/FreedomCard';
 import { useTransacoes } from '@/hooks/useTransacoes';
 import { useDashboard } from '@/hooks/useDashboard';
 import { usePlanoStatus } from '@/hooks/usePlanoStatus';
@@ -231,6 +232,7 @@ const Dashboard = () => {
 
             {/* Right Column - 1/3 */}
             <div className="space-y-6">
+              <FreedomCard usuarioId={usuarioId || undefined} />
               <PlanoCard />
               <BudgetCard />
               <QuickActions onAddTransaction={() => setFormOpen(true)} />

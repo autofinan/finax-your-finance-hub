@@ -2598,10 +2598,12 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     // 🔒 PRO-ONLY FEATURE GATING (Básico vs Pro no WhatsApp)
     // ========================================================================
-    const PRO_ONLY_INTENTS = ["query_alerts", "purchase"];
+    const PRO_ONLY_INTENTS = ["query_alerts", "purchase", "query_freedom", "simulate_debts"];
     const PRO_TEASER_INTENTS: Record<string, string> = {
       query_alerts: "🚨 *Alertas Proativos* são exclusivos do plano Pro!\n\nCom o Pro, você recebe alertas automáticos sobre anomalias e riscos nos seus gastos.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
       purchase: "🛒 *Consultor de Compras* é exclusivo do plano Pro!\n\nCom o Pro, eu analiso se a compra cabe no seu orçamento antes de comprar.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
+      query_freedom: "🏁 *Previsão de Liberdade Financeira* é exclusiva do plano Pro!\n\nCom o Pro, eu calculo quando você será livre das dívidas e o impacto de cada gasto.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
+      simulate_debts: "📊 *Simulador de Quitação* é exclusivo do plano Pro!\n\nCom o Pro, simulo cenários para você quitar suas dívidas mais rápido.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
     };
     
     const userPlano = usuario?.plano || "trial";
@@ -3534,6 +3536,17 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       console.log(`📊 [SIMULATE_DEBTS] Simulando quitação para usuário`);
       const { simulateDebts } = await import("./intents/debt-handler.ts");
       const result = await simulateDebts(userId, decision.slots);
+      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // 🏁 QUERY_FREEDOM - Consultar dias de liberdade financeira
+    // ========================================================================
+    if (decision.actionType === "query_freedom") {
+      console.log(`🏁 [QUERY_FREEDOM] Consultando dias de liberdade`);
+      const { queryFreedomDays } = await import("./intents/freedom-insights.ts");
+      const result = await queryFreedomDays(userId);
       await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
       return;
     }

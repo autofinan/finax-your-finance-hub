@@ -32,6 +32,7 @@ export type ActionType =
   | "purchase_advice" // assistente de compras contextual
   | "debt"          // registrar dívida
   | "list_debts"    // listar dívidas
+  | "query_freedom" // consultar dias de liberdade financeira
   | "unknown";      // não identificado
 
 // Mapeamento interno para compatibilidade
@@ -152,6 +153,7 @@ export const SLOT_REQUIREMENTS: Record<string, { required: string[]; optional: s
   purchase_advice: { required: ["item_description", "item_value"], optional: ["category"] },
   debt: { required: ["nome", "saldo_devedor"], optional: ["tipo", "taxa_juros", "valor_minimo"] },
   list_debts: { required: [], optional: [] },
+  query_freedom: { required: [], optional: [] },
 };
 
 export const SLOT_PROMPTS: Record<string, { 
