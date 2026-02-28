@@ -3526,6 +3526,17 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
       return;
     }
+
+    // ========================================================================
+    // 📊 SIMULATE_DEBTS - Simulador de quitação via WhatsApp
+    // ========================================================================
+    if (decision.actionType === "simulate_debts") {
+      console.log(`📊 [SIMULATE_DEBTS] Simulando quitação para usuário`);
+      const { simulateDebts } = await import("./intents/debt-handler.ts");
+      const result = await simulateDebts(userId, decision.slots);
+      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      return;
+    }
     
     // ========================================================================
     // 💰 ADD_GOAL_PROGRESS - Adicionar valor à meta existente
