@@ -13,6 +13,7 @@ interface CenarioResult {
   meses: number;
   totalJuros: number;
   totalPago: number;
+  pagamentoMensal: number;
   ordemQuitacao: { nome: string; meses: number }[];
 }
 
@@ -22,10 +23,12 @@ function simularCenario(
   nome: string
 ): CenarioResult {
   if (dividas.length === 0) {
-    return { nome, meses: 0, totalJuros: 0, totalPago: 0, ordemQuitacao: [] };
+    return { nome, meses: 0, totalJuros: 0, totalPago: 0, pagamentoMensal: 0, ordemQuitacao: [] };
   }
 
-  // Clone dividas for simulation - sort by interest rate DESC (avalanche method)
+  const minimoTotal = dividas.reduce((s, d) => s + (d.valor_minimo || 0), 0);
+  const pagamentoMensal = minimoTotal + margemExtra;
+
   let saldos = dividas.map(d => ({
     nome: d.nome,
     saldo: d.saldo_devedor,
@@ -45,7 +48,6 @@ function simularCenario(
     meses++;
     let extraDisponivel = margemExtra;
 
-    // Apply interest to all active debts
     for (const s of saldos) {
       if (s.quitada || s.saldo <= 0) continue;
       const juros = s.saldo * s.taxa;
@@ -53,7 +55,6 @@ function simularCenario(
       s.saldo += juros;
     }
 
-    // Pay minimums first
     for (const s of saldos) {
       if (s.quitada || s.saldo <= 0) continue;
       const pagamento = Math.min(s.minimo, s.saldo);
@@ -67,7 +68,6 @@ function simularCenario(
       }
     }
 
-    // Apply extra margin to highest-interest debt (avalanche)
     for (const s of saldos) {
       if (s.quitada || s.saldo <= 0 || extraDisponivel <= 0) continue;
       const pagamento = Math.min(extraDisponivel, s.saldo);
@@ -83,7 +83,14 @@ function simularCenario(
     }
   }
 
-  return { nome, meses, totalJuros: Math.round(totalJuros * 100) / 100, totalPago: Math.round(totalPago * 100) / 100, ordemQuitacao };
+  return {
+    nome,
+    meses,
+    totalJuros: Math.round(totalJuros * 100) / 100,
+    totalPago: Math.round(totalPago * 100) / 100,
+    pagamentoMensal: Math.round(pagamentoMensal * 100) / 100,
+    ordemQuitacao,
+  };
 }
 
 interface SimuladorProps {
@@ -112,10 +119,6 @@ export function SimuladorQuitacao({ dividasAtivas, receitaMensal = 0, gastoEssen
 
     return { atual, conservador, agressivo };
   }, [calculado, dividasAtivas, margemReal]);
-
-  const handleSimular = () => {
-    setCalculado(true);
-  };
 
   if (dividasAtivas.length === 0) return null;
 
@@ -167,7 +170,7 @@ export function SimuladorQuitacao({ dividasAtivas, receitaMensal = 0, gastoEssen
           </span>
         </div>
 
-        <Button onClick={handleSimular} className="w-full" disabled={receitaNum <= 0}>
+        <Button onClick={() => setCalculado(true)} className="w-full" disabled={receitaNum <= 0}>
           <Zap className="w-4 h-4 mr-2" />
           Simular Cenários
         </Button>
@@ -185,7 +188,7 @@ export function SimuladorQuitacao({ dividasAtivas, receitaMensal = 0, gastoEssen
             <TabsContent value="comparativo">
               <div className="grid gap-3 mt-2">
                 {[cenarios.atual, cenarios.conservador, cenarios.agressivo].map((c, i) => {
-                  const economia = cenarios.atual.totalJuros - c.totalJuros;
+                  const economia = cenarios.atual.totalPago - c.totalPago;
                   const mesesEconomia = cenarios.atual.meses - c.meses;
                   const colors = ['text-amber-400', 'text-blue-400', 'text-emerald-400'];
                   const bgs = ['bg-amber-400/10', 'bg-blue-400/10', 'bg-emerald-400/10'];
@@ -195,7 +198,7 @@ export function SimuladorQuitacao({ dividasAtivas, receitaMensal = 0, gastoEssen
 
                   return (
                     <div key={c.nome} className={`rounded-xl p-4 ${bgs[i]} border border-border`}>
-                      <div className="flex items-center gap-3 mb-2">
+                      <div className="flex items-center gap-3 mb-3">
                         <Icon className={`w-5 h-5 ${colors[i]}`} />
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
@@ -204,7 +207,13 @@ export function SimuladorQuitacao({ dividasAtivas, receitaMensal = 0, gastoEssen
                           </div>
                         </div>
                       </div>
-                      <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                        <div>
+                          <p className="text-[10px] text-muted-foreground">Pgto/mês</p>
+                          <p className="font-bold text-foreground text-sm">
+                            {formatCurrency(c.pagamentoMensal)}
+                          </p>
+                        </div>
                         <div>
                           <p className="text-[10px] text-muted-foreground">Prazo</p>
                           <p className="font-bold text-foreground text-sm">
@@ -212,19 +221,17 @@ export function SimuladorQuitacao({ dividasAtivas, receitaMensal = 0, gastoEssen
                           </p>
                         </div>
                         <div>
-                          <p className="text-[10px] text-muted-foreground">Juros Totais</p>
-                          <p className="font-bold text-destructive text-sm">{formatCurrency(c.totalJuros)}</p>
+                          <p className="text-[10px] text-muted-foreground">Total Pago</p>
+                          <p className="font-bold text-foreground text-sm">{formatCurrency(c.totalPago)}</p>
                         </div>
                         <div>
-                          <p className="text-[10px] text-muted-foreground">Economia</p>
-                          <p className="font-bold text-emerald-400 text-sm">
-                            {i === 0 ? '—' : `${formatCurrency(economia)}`}
-                          </p>
+                          <p className="text-[10px] text-muted-foreground">Juros Pagos</p>
+                          <p className="font-bold text-destructive text-sm">{formatCurrency(c.totalJuros)}</p>
                         </div>
                       </div>
                       {mesesEconomia > 0 && i > 0 && (
                         <p className="text-xs text-center mt-2 text-emerald-400">
-                          🚀 {mesesEconomia} meses mais rápido!
+                          🚀 {mesesEconomia} meses mais rápido • Economia de {formatCurrency(economia)}
                         </p>
                       )}
                     </div>
@@ -243,15 +250,27 @@ export function SimuladorQuitacao({ dividasAtivas, receitaMensal = 0, gastoEssen
                   <div className="bg-muted/50 rounded-xl p-4">
                     <div className="grid grid-cols-2 gap-4 text-center">
                       <div>
+                        <p className="text-xs text-muted-foreground">Pagamento Mensal</p>
+                        <p className="text-2xl font-black text-foreground">
+                          {formatCurrency(data.pagamentoMensal)}
+                        </p>
+                      </div>
+                      <div>
                         <p className="text-xs text-muted-foreground">Prazo Total</p>
                         <p className="text-2xl font-black text-foreground">
                           {data.meses >= 600 ? '∞' : `${data.meses}`}
                         </p>
                         <p className="text-[10px] text-muted-foreground">meses</p>
                       </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 text-center mt-4 pt-4 border-t border-border">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total Pago</p>
+                        <p className="text-lg font-bold text-foreground">{formatCurrency(data.totalPago)}</p>
+                      </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Total em Juros</p>
-                        <p className="text-2xl font-black text-destructive">{formatCurrency(data.totalJuros)}</p>
+                        <p className="text-lg font-bold text-destructive">{formatCurrency(data.totalJuros)}</p>
                       </div>
                     </div>
                   </div>
