@@ -17,13 +17,14 @@
 | FSM humanizado (escape, subject change, retry limit) | ✅ |
 | Gating no WhatsApp (Básico vs Pro) | ✅ |
 | Trial End Summary (dados reais) | ✅ |
+| Simulador de Quitação (3 cenários - Web UI) | ✅ |
 
 ## 🔜 Pendente (por prioridade)
 
 ### Alta Prioridade
 | Item | Complexidade | Estimativa |
 |------|-------------|-----------|
-| Simulador de Quitação (3 cenários) | Alta | 2-3 sessões |
+| Simulador de Quitação (handler WhatsApp) | Baixa | 1 sessão |
 | Insights Preditivos (impacto em dias de liberdade) | Alta | 2 sessões |
 
 ### Média Prioridade
@@ -43,7 +44,7 @@
 
 ## Próximo Passo Recomendado
 
-**Simulador de Quitação** — Lógica de juros compostos com 3 cenários (Atual, Conservador, Agressivo) baseado na "Margem Real" do usuário. Requer:
-1. Edge function para cálculo dos cenários
-2. UI no dashboard (página Dividas)
-3. Handler no WhatsApp para "simular quitação"
+**Insights Preditivos** — Calcular impacto de cada gasto em "dias de liberdade financeira". Requer:
+1. Lógica de cálculo baseada na margem real e dívidas ativas
+2. UI com indicadores no dashboard
+3. Handler no WhatsApp para consultar insights

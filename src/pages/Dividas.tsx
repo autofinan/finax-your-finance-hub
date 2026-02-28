@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Plus, Trash2, Edit2, TrendingDown, DollarSign, AlertTriangle, CheckCircle } from 'lucide-react';
+import { SimuladorQuitacao } from '@/components/dividas/SimuladorQuitacao';
 
 function DividaForm({ onSubmit, initial, tipos }: {
   onSubmit: (data: any) => void;
@@ -112,7 +113,7 @@ function calcularPrazoMinimo(saldo: number, valorMinimo: number | null, taxaJuro
 
 export default function Dividas() {
   const { dividas, dividasAtivas, saldoTotal, minimoTotal, isLoading, addDivida, updateDivida, deleteDivida, TIPOS_DIVIDA } = useDividas();
-  const { showUpgradeTeaser } = usePlanoStatus();
+  const { showUpgradeTeaser, canAccessFeature } = usePlanoStatus();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingDivida, setEditingDivida] = useState<Divida | null>(null);
 
@@ -192,24 +193,28 @@ export default function Dividas() {
           </Card>
         </div>
 
-        {/* Simulador Teaser (Básico) */}
-        {showUpgradeTeaser('debt_simulator') && dividasAtivas.length > 0 && (
-          <UpgradeTeaser
-            feature="debt_simulator"
-            title="Simulador de Quitação"
-            preview={
-              <div className="space-y-4 p-6">
-                <div className="bg-muted p-4 rounded-xl">
-                  <h4 className="font-bold text-foreground">Cenário Atual</h4>
-                  <p className="text-sm text-muted-foreground">12 meses • R$ 1.400 em juros</p>
+        {/* Simulador de Quitação */}
+        {dividasAtivas.length > 0 && (
+          canAccessFeature('debt_simulator') ? (
+            <SimuladorQuitacao dividasAtivas={dividasAtivas} />
+          ) : showUpgradeTeaser('debt_simulator') ? (
+            <UpgradeTeaser
+              feature="debt_simulator"
+              title="Simulador de Quitação"
+              preview={
+                <div className="space-y-4 p-6">
+                  <div className="bg-muted p-4 rounded-xl">
+                    <h4 className="font-bold text-foreground">Cenário Atual</h4>
+                    <p className="text-sm text-muted-foreground">12 meses • R$ 1.400 em juros</p>
+                  </div>
+                  <div className="bg-muted p-4 rounded-xl">
+                    <h4 className="font-bold text-foreground">Cenário Otimizado</h4>
+                    <p className="text-sm text-muted-foreground">8 meses • R$ 890 em juros</p>
+                  </div>
                 </div>
-                <div className="bg-muted p-4 rounded-xl">
-                  <h4 className="font-bold text-foreground">Cenário Otimizado</h4>
-                  <p className="text-sm text-muted-foreground">8 meses • R$ 890 em juros</p>
-                </div>
-              </div>
-            }
-          />
+              }
+            />
+          ) : null
         )}
 
         {/* Dividas List */}
