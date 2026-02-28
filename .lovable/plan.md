@@ -24,8 +24,8 @@
 ### Alta Prioridade
 | Item | Complexidade | Estimativa |
 |------|-------------|-----------|
-| Simulador de Quitação (handler WhatsApp) | Baixa | 1 sessão |
-| Insights Preditivos (impacto em dias de liberdade) | Alta | 2 sessões |
+| ~~Simulador de Quitação (handler WhatsApp)~~ | ~~Baixa~~ | ✅ |
+| ~~Insights Preditivos (impacto em dias de liberdade)~~ | ~~Alta~~ | ✅ |
 
 ### Média Prioridade
 | Item | Complexidade | Estimativa |
