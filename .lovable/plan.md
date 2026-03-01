@@ -17,22 +17,22 @@
 | FSM humanizado (escape, subject change, retry limit) | ✅ |
 | Gating no WhatsApp (Básico vs Pro) | ✅ |
 | Trial End Summary (dados reais) | ✅ |
-| Simulador de Quitação (3 cenários - Web UI) | ✅ |
+| Simulador de Quitação (3 cenários - Web + WhatsApp) | ✅ |
+| Insights Preditivos (Freedom Days - Web + WhatsApp) | ✅ |
+| Consultor IA Semanal (relatório + padrões + anomalias) | ✅ |
+| Detector de Padrões (análise 4 semanas) | ✅ |
+| Radar de Anomalias (spike, tendência, fim de semana) | ✅ |
 
 ## 🔜 Pendente (por prioridade)
 
 ### Alta Prioridade
 | Item | Complexidade | Estimativa |
 |------|-------------|-----------|
-| ~~Simulador de Quitação (handler WhatsApp)~~ | ~~Baixa~~ | ✅ |
-| ~~Insights Preditivos (impacto em dias de liberdade)~~ | ~~Alta~~ | ✅ |
+| Melhorar prompt IA (Tool Calling + CoT + redução) | Alta | 1-2 sessões |
 
 ### Média Prioridade
 | Item | Complexidade | Estimativa |
 |------|-------------|-----------|
-| Consultor IA Semanal (edge function agendada) | Média | 1-2 sessões |
-| Detector de Padrões (análise estatística) | Média | 1-2 sessões |
-| Radar de Anomalias (alertas automáticos) | Média | 1 sessão |
 | Projeções Financeiras (3/6/12 meses) | Média | 1-2 sessões |
 
 ### Baixa Prioridade
@@ -44,7 +44,4 @@
 
 ## Próximo Passo Recomendado
 
-**Insights Preditivos** — Calcular impacto de cada gasto em "dias de liberdade financeira". Requer:
-1. Lógica de cálculo baseada na margem real e dívidas ativas
-2. UI com indicadores no dashboard
-3. Handler no WhatsApp para consultar insights
+**Melhorar Prompt IA** — Migrar para Tool Calling, Chain-of-Thought obrigatório, reduzir prompt de ~475 para ~200 linhas. Isso reduz quebras em todos os fluxos.
