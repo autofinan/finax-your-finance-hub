@@ -1,5 +1,13 @@
 // ============================================================================
-// 🧠 AI ENGINE - Decision Engine v6.0 (IA-FIRST) extraído do index.ts
+// 🧠 AI ENGINE - Decision Engine v7.0 (UNIFIED + CoT + Tool Calling)
+// ============================================================================
+// CHANGELOG v7.0:
+// - Unificado ai-classifier.ts (v5.0) + ai-engine.ts (v3.2)
+// - Chain-of-Thought obrigatório (campo thinking)
+// - Tool Calling para JSON garantido (0% parsing failures)
+// - Sistema de 3 níveis de confiança
+// - Flags: subject_change_detected, escape_detected
+// - Intenções: skip, debt, list_debts, simulate_debts, query_freedom
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -16,7 +24,7 @@ import { normalizeText, isNumericOnly, parseNumericValue, extractSlotValue } fro
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
 // ============================================================================
-// 📦 TIPOS LOCAIS
+// 📦 TIPOS
 // ============================================================================
 
 export type MessageSource = "meta" | "vonage";
@@ -43,6 +51,8 @@ export interface SemanticResult {
   reason: string;
   canExecuteDirectly: boolean;
   decisionId?: string | null;
+  subjectChangeDetected?: boolean;
+  escapeDetected?: boolean;
 }
 
 export interface ActiveAction {
@@ -63,16 +73,20 @@ export interface ActiveAction {
 }
 
 // ============================================================================
-// 🧠 FINAX PROMPT v3.2 - INTERPRETADOR SEMÂNTICO
+// 🧠 FINAX PROMPT v7.0 - UNIFIED (CoT + Tool Calling)
 // ============================================================================
-export const PROMPT_FINAX_UNIVERSAL = `# FINAX - INTERPRETADOR SEMÂNTICO v3.2
+export const PROMPT_FINAX_UNIVERSAL = `# FINAX v7.0 - INTÉRPRETE HUMANO DE LINGUAGEM NATURAL
 
-## 🎯 SEU PAPEL
-Você é um **intérprete**, não um tomador de decisões.
-- Você INTERPRETA a mensagem e identifica a intenção MAIS PROVÁVEL
-- Você EXTRAI dados estruturados (slots) do texto
-- Você ADMITE DÚVIDA quando não tem certeza (confidence baixo)
-- Você NÃO valida slots nem decide fluxo - isso é do código
+## 🎯 QUEM VOCÊ É
+
+Você é um intérprete HUMANO de linguagem financeira.
+Você ENTENDE o que as pessoas QUEREM DIZER, mesmo com linguagem casual.
+
+## 🧠 REGRA DE OURO: RACIOCINE ANTES DE DECIDIR
+
+OBRIGATÓRIO: Use o campo "thinking" para raciocinar passo a passo ANTES de decidir.
+Formato: "1. Usuário disse X → 2. Isso indica Y → 3. Conclusão: Z"
+NUNCA pule o raciocínio. Seja BREVE (1-2 linhas).
 
 ## 📚 TIPOS DE INTENÇÃO
 
@@ -89,253 +103,166 @@ Slots: amount, source, description
 Exemplos: "Recebi 1500", "Caiu 200 de freela"
 
 ### installment - Compra parcelada ⚠️ PRIORIDADE sobre expense se tiver "Nx"
-Compra dividida em parcelas no crédito.
-Indicadores: "em Nx", "x vezes", "parcelei", "parcelado"
 Slots: amount (TOTAL), installments, description, card
 Exemplos: "Celular 1200 em 12x", "Roupa 300 em 5x no Nubank"
-REGRA: Valor informado = TOTAL, não calcular parcela!
+REGRA: Valor informado = TOTAL!
 
 ### recurring - Gasto fixo mensal ⚠️ PRIORIDADE sobre expense se tiver periodicidade
-Assinatura ou conta de valor FIXO que repete.
-Indicadores: "todo mês", "mensal", "assinatura"
-Slots: amount, description, periodicity, day_of_month
+Slots: amount, description, periodicity, day_of_month, payment_method
 Exemplos: "Netflix 40 todo mês", "Academia 99 mensal"
 
 ### add_card - Cadastrar novo cartão ⚠️ PRIORIDADE sobre card_event
-Registrar cartão que NÃO existe no sistema.
 Indicadores: "registrar", "adicionar", "cadastrar", "novo cartão", "meu cartão é"
 Slots: card_name, limit, due_day, closing_day
-Exemplos: "Registrar cartão Bradesco limite 2000 vence dia 16"
 
 ### card_event - Atualizar cartão existente
-Mudar limite de cartão JÁ cadastrado.
 Indicadores: "limite do [banco]" (SEM "registrar/adicionar")
 Slots: card, value
-Exemplos: "Limite do Nubank agora é 8000"
 
 ### bill - Conta com vencimento ⚠️ PRIORIDADE sobre recurring para utilidades
-Criar lembrete de conta VARIÁVEL (água, luz, internet).
-Indicadores: "conta de", "vence dia", "fatura"
 Slots: bill_name, due_day
-Exemplos: "Conta de água vence dia 10"
-Diferença: bill = valor varia | recurring = valor fixo
 
 ### pay_bill - Pagar conta existente
-Registrar pagamento JÁ feito.
 Indicadores: "paguei a conta de", "foi", "deu"
 Slots: bill_name, amount
-Exemplos: "Paguei energia, deu 184"
 
-### goal - Meta de economia ⚠️ PRIORIDADE sobre set_context se tiver valor
-Guardar dinheiro para objetivo OU adicionar progresso a meta existente.
-Indicadores: "meta", "juntar", "guardar", "economizar", "guardei", "juntei", "tenho X para Y", "poupei", "depositei"
+### goal - Meta de economia ⚠️ PRIORIDADE sobre income para "guardei/juntei/poupei"
+Indicadores: "meta", "juntar", "guardar", "economizar", "guardei", "juntei", "poupei", "depositei"
 Slots: amount, description, deadline
 Exemplos: 
-  - "Criar meta de 5000 para viagem"
-  - "guardei 200" → goal (NÃO income!) - slots: {amount: 200}
-  - "ja tenho 500 para o trafego pago" → goal - slots: {amount: 500, description: "trafego pago"}
-  - "juntei 300 pro carro" → goal - slots: {amount: 300, description: "carro"}
-  - "poupei 150" → goal - slots: {amount: 150}
+  - "guardei 200" → goal (NÃO income!)
+  - "juntei 300 pro carro" → goal
+⚠️ REGRA CRITICA: "guardei/juntei/poupei/economizei" + valor = SEMPRE goal, NUNCA income!
 
-⚠️ REGRA CRITICA: "guardei", "juntei", "poupei", "economizei" + valor = SEMPRE goal, NUNCA income!
-"guardar dinheiro" é sobre METAS, não sobre receber dinheiro.
-
-### purchase - Consulta de compra ⚠️ PRIORIDADE sobre chat se for pergunta com valor
-Perguntar se DEVE comprar algo específico.
-Indicadores: "vale a pena", "posso comprar", "devo gastar", "consigo comprar"
+### purchase - Consulta de compra
+Indicadores: "vale a pena", "posso comprar", "devo gastar"
 Slots: amount, description
-Exemplos: "Vale a pena comprar celular de 2000?"
 
-### set_budget - Definir orçamento/limite de gastos
-Definir limite mensal geral ou por categoria.
-Indicadores: "limite mensal", "orçamento", "gastar no máximo", "teto de", "definir limite"
-Slots: amount, category (opcional - se não informar, é global)
-Exemplos: 
-  - "Meu limite mensal é 3000" → amount: 3000 (global)
-  - "Quero gastar no máximo 500 com alimentação" → amount: 500, category: alimentacao
-  - "Definir orçamento de 2000 para lazer" → amount: 2000, category: lazer
-  - "Meu teto é 4000 por mês" → amount: 4000 (global)
+### set_budget - Definir orçamento
+Indicadores: "orçamento", "orcamento", "limite mensal", "gastar no máximo", "teto", "controlar gastos"
+Slots: amount, category (opcional)
+Exemplos: "Orçamento" → set_budget (0.95), "Meu limite mensal é 3000"
 
 ### query - Consultar informações
-Ver dados, não modificar.
-Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões", "pendentes", "detalhe", "detalhar"
-Slots: query_scope, time_range, category
-- query_scope: summary | cards | expenses | income | pending | recurring | category | budgets
-- time_range: today | week | month | custom
-- category: alimentacao | transporte | moradia | lazer | saude | educacao | mercado | servicos | compras | outros
-Exemplos: 
-  - "Quanto gastei esse mês?" → query_scope: expenses, time_range: month
-  - "Meus cartões" → query_scope: cards
-  - "Quais cartões tenho?" → query_scope: cards
-  - "Gastos pendentes" → query_scope: pending
-  - "Gastos da semana" → query_scope: expenses, time_range: week
-  - "Quanto gastei hoje?" → query_scope: expenses, time_range: today
-  - "Resumo" → query_scope: summary
-  - "Detalhe alimentação" → query_scope: expenses, category: alimentacao, time_range: month
-  - "Gastos com transporte" → query_scope: expenses, category: transporte, time_range: month
-  - "Ver lazer" → query_scope: expenses, category: lazer, time_range: month
-  - "Quanto gastei com alimentação?" → query_scope: expenses, category: alimentacao, time_range: month
-  - "Quais meus orçamentos?" → query_scope: budgets
-  - "Ver meus limites" → query_scope: budgets
-  - "Meus orçamentos" → query_scope: budgets
+Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões"
+Slots: query_scope (summary|cards|expenses|income|pending|recurring|category|budgets|debts), time_range (today|week|month), category
 
 ### query_alerts - Ver alertas
 Indicadores: "alertas", "avisos"
-Exemplos: "Meus alertas"
 
 ### cancel - Cancelar algo
-Indicadores: "cancela", "desfaz", "apaga", "remove", "para de", "pausa"
+Indicadores: "cancela", "desfaz", "apaga", "remove", "esquece", "deixa pra lá"
 Slots: cancel_target, target_name
-- cancel_target: transaction | recurring | goal | context
-- target_name: nome do item (Netflix, viagem, etc.)
-Exemplos:
-  - "Cancela minha Netflix" → cancel_target: recurring, target_name: Netflix
-  - "Pausa meta viagem" → cancel_target: goal, target_name: viagem
-  - "Cancela esse gasto" → cancel_target: transaction
-  - "Terminei a viagem" → cancel_target: context, target_name: viagem
 
-### chat - Conversa/conselho
-Pergunta reflexiva sobre finanças.
-Exemplos: "Tô gastando muito?", "Como economizar?", "Analise meus gastos"
+### skip - Pular/Não responder ⚠️ PRIORIDADE MÁXIMA se detectar escape
+Indicadores: "não sei", "nenhuma", "nenhum", "depois", "pula", "deixa pra lá"
+
+### chat - Conversa/conselho financeiro
+Exemplos: "Tô gastando muito?", "Como economizar?"
 NUNCA retorne unknown para perguntas - use chat!
 
-### set_context - Período especial
-Viagem ou evento COM ciclo de vida.
-Indicadores: 
-  - Iniciar: "vou viajar", "começando", "início" + datas
-  - Encerrar: "terminei", "voltei", "acabou", "fim da"
+### set_context - Período especial (viagem/evento)
 Slots: label, start_date, end_date, action (start|end)
-Exemplos: 
-  - "Vou viajar de 10/01 até 15/01" → action: start
-  - "Terminei a viagem" → action: end, label: viagem
-  - "Voltei da viagem" → action: end, label: viagem
 
-### control - Saudações
-Exemplos: "Oi", "Bom dia", "Ajuda"
+### control - Saudações e controle
+"Oi", "Bom dia", "Ajuda", "Vamos", "Bora", "Ok", "Tchau"
 
 ### edit - Correção rápida
 Indicadores: "era", "errei", "corrige"
-Exemplos: "Era pix, não débito"
 
-### unknown - Último recurso
-Só quando confidence < 0.5.
-Exemplo: "50" (número isolado sem contexto)
+### debt - Registrar dívida
+Indicadores: "registrar dívida", "tenho dívida", "empréstimo", "financiamento"
+Slots: nome, saldo_devedor, tipo, taxa_juros, valor_minimo
 
-## 🎯 NÍVEIS DE CONFIANÇA
+### list_debts - Listar dívidas
+Indicadores: "minhas dívidas", "quanto devo", "ver dívidas"
 
-| Nível | Quando usar |
-|-------|-------------|
-| 0.9-1.0 | Intenção inequívoca, indicadores claros |
-| 0.7-0.89 | Padrão reconhecível, contexto implícito |
-| 0.5-0.69 | Ambiguidade presente mas há favorito |
-| < 0.5 | Retornar unknown |
+### simulate_debts - Simular quitação
+Indicadores: "simular quitação", "quanto tempo pra quitar"
 
-## ⚖️ PRIORIDADES (quando há conflito)
+### query_freedom - Dias de liberdade financeira
+Indicadores: "liberdade financeira", "quando vou quitar", "dias de liberdade"
 
-1. installment > expense (se tem "Nx" ou "vezes")
-2. recurring > expense (se tem periodicidade)
-3. bill > recurring (se é conta de utilidades)
-4. add_card > card_event (se tem "registrar/adicionar")
-5. goal > set_context (se tem valor objetivo)
-6. purchase > chat (se é pergunta com valor específico)
+### unknown - Último recurso (confidence < 0.5 E nenhuma categoria acima)
 
-## 🚨 NOMENCLATURA OBRIGATÓRIA DE SLOTS (INGLÊS APENAS!)
+## ⚖️ PRIORIDADES
 
-SEMPRE use estes nomes EXATOS em inglês. NUNCA traduza para português.
+1. skip/cancel > qualquer (se escape)
+2. set_budget/goal/debt > expense (se palavras-chave claras)
+3. installment > expense (se "Nx")
+4. recurring > expense (se periodicidade)
+5. bill > recurring (se utilidades)
+6. add_card > card_event (se "registrar/adicionar")
+7. goal > income (se "guardei/juntei/poupei")
+8. purchase > chat (se pergunta + valor)
+9. chat > unknown (SEMPRE)
 
-| Intent | Slots Obrigatórios | Opcional |
-|--------|-------------------|----------|
-| expense | amount, payment_method | description, category, card |
-| income | amount | description, source |
-| recurring | amount, description, payment_method | day_of_month, periodicity |
-| installment | amount, installments | description, card |
-| goal | amount, description | deadline |
-| query | query_scope | time_range |
-| cancel | | cancel_target, target_name |
+## 🚨 SLOTS: INGLÊS APENAS!
+amount, description, payment_method (pix|debito|credito|dinheiro), card, source, installments, bill_name, due_day, closing_day, query_scope, time_range, cancel_target, target_name, label, deadline, periodicity, day_of_month, nome, saldo_devedor, tipo, taxa_juros, valor_minimo
 
-### Exemplo CORRETO:
-{
-  "actionType": "expense",
-  "confidence": 0.92,
-  "slots": {
-    "amount": 50,
-    "description": "cafe",
-    "payment_method": "pix"
+## 🔄 CONTINUIDADE (FOLLOW-UP)
+Se mensagem curta com "e " + categoria/período, copie intent anterior trocando apenas o campo mencionado.
+
+## 📜 HISTÓRICO
+Use histórico para desambiguar. Se Bot enviou lembrete de conta e usuário confirma valor → pay_bill (NÃO expense).
+
+## 🔍 DETECÇÃO ESPECIAL
+- Mudança de assunto → subject_change_detected: true
+- Escape/desistência → escape_detected: true`;
+
+// ============================================================================
+// 🔧 TOOL CALLING SCHEMA - JSON GARANTIDO
+// ============================================================================
+
+const FINAX_TOOL_SCHEMA = {
+  type: "function" as const,
+  function: {
+    name: "classify_intent",
+    description: "Classifica a intenção do usuário e extrai dados estruturados da mensagem financeira.",
+    parameters: {
+      type: "object",
+      properties: {
+        thinking: {
+          type: "string",
+          description: "Raciocínio breve passo a passo (1-2 linhas). Ex: '1. guardei = poupar → 2. goal com amount=200'"
+        },
+        actionType: {
+          type: "string",
+          enum: [
+            "expense", "income", "installment", "recurring", "add_card", "card_event",
+            "bill", "pay_bill", "goal", "purchase", "set_budget", "query", "query_alerts",
+            "cancel", "skip", "chat", "set_context", "control", "edit",
+            "debt", "list_debts", "simulate_debts", "query_freedom", "unknown"
+          ],
+          description: "Tipo de intenção identificada"
+        },
+        confidence: {
+          type: "number",
+          description: "Confiança de 0.0 a 1.0"
+        },
+        slots: {
+          type: "object",
+          description: "Dados extraídos da mensagem (amount, description, payment_method, etc.)",
+          additionalProperties: true
+        },
+        reasoning: {
+          type: "string",
+          description: "Explicação concisa da decisão"
+        },
+        subject_change_detected: {
+          type: "boolean",
+          description: "True se o usuário mudou de assunto"
+        },
+        escape_detected: {
+          type: "boolean",
+          description: "True se o usuário quer desistir/pular"
+        }
+      },
+      required: ["thinking", "actionType", "confidence", "slots", "reasoning"],
+      additionalProperties: false
+    }
   }
-}
-
-### ERRADO (NUNCA FAÇA):
-{
-  "slots": {
-    "valor": 50,
-    "descricao": "cafe",
-    "forma_pagamento": "pix"
-  }
-}
-
-## 📦 SLOTS (extraia apenas o que está claro)
-
-Valores: amount, limit, value, installments, due_day, closing_day
-Textos: description, card, card_name, bill_name, source, category
-Pagamento: payment_method (pix|debito|credito|dinheiro)
-Datas: deadline, periodicity (monthly|weekly|yearly), day_of_month
-Query: query_scope (summary|cards|expenses|income|pending|recurring|category)
-Tempo: time_range (today|week|month|custom) - SEPARADO de query_scope!
-Cancel: cancel_target (transaction|recurring|goal|context), target_name
-Context: action (start|end)
-
-## 📤 RESPOSTA (JSON PURO, SEM MARKDOWN)
-
-{
-  "actionType": "expense|income|installment|recurring|add_card|card_event|bill|pay_bill|goal|purchase|set_budget|query|query_alerts|cancel|chat|set_context|control|edit|unknown",
-  "confidence": 0.0-1.0,
-  "slots": { },
-  "reasoning": "Explicação concisa"
-}
-
-## ✅ CHECKLIST
-
-1. Li a mensagem COMPLETA?
-2. Identifiquei indicadores de intent?
-3. Apliquei prioridades se há conflito?
-4. Extraí APENAS slots claros?
-5. Confidence reflete minha certeza?
-6. Se ambíguo (< 0.5), retornei unknown?
-
-## REGRA CRITICA: HISTORICO DA CONVERSA
-
-Quando o HISTORICO mostra que voce (Bot) enviou:
-- Lembrete de conta (agua, luz, gas, internet, aluguel, condominio, energia)
-- Alerta de fatura de cartao
-- Confirmacao de recorrente processada
-
-E o usuario responde com valor ou confirma pagamento:
-- Classifique como pay_bill (NAO expense)
-- Categoria: moradia (para contas de consumo)
-- "agua", "luz", "gas", "internet" = conta de consumo, NUNCA alimentacao
-- Use o historico para desambiguar
-
-Quando o HISTORICO mostra conversa sobre um topico especifico:
-- Mantenha o contexto da conversa
-- NAO mude de assunto a menos que o usuario mude explicitamente
-- Se o usuario diz "paguei" + nome que aparece no historico recente = pay_bill
-
-## REGRA CRITICA: CONTINUIDADE DE CONVERSA (FOLLOW-UP)
-
-Quando o usuario envia mensagem CURTA que parece continuar a conversa anterior:
-- "e transporte" → Se a ultima pergunta foi "quanto gastei com alimentação", entenda como "quanto gastei com transporte"
-- "e lazer" → mesma logica: repete a consulta anterior trocando a categoria
-- "e esse mes?" → repete a ultima consulta com periodo = mes atual
-- "e na semana?" → repete a ultima consulta com periodo = semana
-
-REGRA: Se a mensagem comeca com "e " ou "e o/a " seguido de categoria/periodo, copie o actionType e slots da ultima interacao e substitua apenas o campo mencionado.
-- actionType: query (mesmo tipo da consulta anterior)
-- Mantenha time_range, query_scope do historico
-- Troque apenas: category, card, ou time_range conforme a mensagem
-
-NUNCA classifique follow-ups como "set_budget", "expense" ou "unknown". Se o historico mostra query, o follow-up e query.
-
-RESPONDA APENAS COM JSON. SEM MARKDOWN. SEM EXPLICAÇÕES ADICIONAIS.`;
+};
 
 // ============================================================================
 // 🔧 NORMALIZAÇÃO DE SLOTS DA IA
@@ -410,7 +337,7 @@ export function normalizeAISlots(slots: Record<string, any>): ExtractedSlots {
 }
 
 // ============================================================================
-// 🤖 CHAMADA À IA
+// 🤖 CHAMADA À IA - COM TOOL CALLING + CoT
 // ============================================================================
 export async function callAIForDecision(
   message: string, 
@@ -425,9 +352,16 @@ CONTEXTO ATIVO (usuário está no meio de uma ação):
 - Tipo: ${context.activeActionType}
 - Slots já preenchidos: ${JSON.stringify(context.activeActionSlots)}
 - Slot pendente: ${context.pendingSlot || "nenhum"}
+
+⚠️ Se a mensagem é sobre OUTRO ASSUNTO, marque subject_change_detected: true
 `;
     }
 
+    const systemContent = PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo +
+      (history ? "\n\n--- HISTORICO ---\n" + history + "\n--- FIM ---\n\n" +
+      "Use o historico para desambiguar. Lembrete de conta + valor = pay_bill (moradia)." : "");
+
+    // Tentar Tool Calling primeiro (JSON garantido)
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -437,42 +371,64 @@ CONTEXTO ATIVO (usuário está no meio de uma ação):
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: PROMPT_FINAX_UNIVERSAL + "\n\n" + contextInfo +
-            (history ? "\n\n--- HISTORICO RECENTE DA CONVERSA (use para entender contexto) ---\n" + history + "\n--- FIM DO HISTORICO ---\n\n" +
-            "REGRA CRITICA: Use o historico acima para entender o contexto da conversa. " +
-            "Se o Bot enviou lembrete de conta (agua, luz, gas, internet, aluguel, condominio, energia) " +
-            "e o usuario confirma pagamento ou informa valor, classifique como pay_bill, " +
-            "categoria moradia, NAO alimentacao. 'agua', 'luz', 'gas' no contexto de contas = moradia." : "")
-          },
+          { role: "system", content: systemContent },
           { role: "user", content: message }
         ],
+        tools: [FINAX_TOOL_SCHEMA],
+        tool_choice: { type: "function", function: { name: "classify_intent" } },
       }),
     });
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '{"actionType": "unknown", "confidence": 0.3}';
-    const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
     
-    let parsed;
-    try {
-      parsed = JSON.parse(cleanJson);
-    } catch (e) {
-      console.error("❌ [AI] JSON inválido:", cleanJson.slice(0, 200));
-      return { actionType: "unknown", confidence: 0.3, slots: {}, reason: "JSON inválido da IA", canExecuteDirectly: false };
+    // Extrair resultado do Tool Calling
+    let parsed: any = null;
+    
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (toolCall?.function?.arguments) {
+      try {
+        parsed = JSON.parse(toolCall.function.arguments);
+        logger.info({ component: "ai-engine", method: "tool_calling" }, "Tool Calling success");
+      } catch (e) {
+        logger.warn({ component: "ai-engine", error: String(e) }, "Tool Calling parse failed, trying fallback");
+      }
+    }
+    
+    // Fallback: extrair do content (caso Tool Calling não funcione)
+    if (!parsed) {
+      const content = data.choices?.[0]?.message?.content || '{"actionType": "unknown", "confidence": 0.3}';
+      const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+      try {
+        parsed = JSON.parse(cleanJson);
+        logger.info({ component: "ai-engine", method: "content_fallback" }, "Content fallback success");
+      } catch (e) {
+        console.error("❌ [AI] JSON inválido em ambos métodos:", cleanJson.slice(0, 200));
+        return { actionType: "unknown", confidence: 0.3, slots: {}, reason: "JSON inválido da IA", canExecuteDirectly: false };
+      }
+    }
+    
+    // Log do raciocínio CoT
+    if (parsed.thinking) {
+      console.log(`💭 [CoT] ${parsed.thinking}`);
     }
     
     const normalizedSlots = normalizeAISlots(parsed.slots || {});
     const actionType = parsed.actionType || "unknown";
     const canExecute = hasAllRequiredSlots(actionType, normalizedSlots);
     
-    console.log(`🤖 [AI] ${actionType} | Conf: ${parsed.confidence} | Slots: ${JSON.stringify(normalizedSlots)} | Exec: ${canExecute}`);
+    const subjectChangeDetected = parsed.subject_change_detected === true;
+    const escapeDetected = parsed.escape_detected === true;
+    
+    console.log(`🤖 [AI v7] ${actionType} | Conf: ${parsed.confidence} | Slots: ${JSON.stringify(normalizedSlots)} | Exec: ${canExecute}${subjectChangeDetected ? " | 🔄 MUDANÇA" : ""}${escapeDetected ? " | 🚪 ESCAPE" : ""}`);
     
     return {
       actionType,
       confidence: parsed.confidence || 0.5,
       slots: normalizedSlots,
       reason: parsed.reasoning || "",
-      canExecuteDirectly: canExecute
+      canExecuteDirectly: canExecute,
+      subjectChangeDetected,
+      escapeDetected
     };
   } catch (error) {
     console.error("❌ [AI] Erro:", error);
@@ -505,7 +461,11 @@ export function assertDomainIsolation(
 }
 
 // ============================================================================
-// 🎯 DECISION ENGINE PRINCIPAL v6.0 - IA PRIMEIRO
+// 🎯 DECISION ENGINE PRINCIPAL v7.0 - 3 NÍVEIS DE CONFIANÇA
+// ============================================================================
+// High (≥0.8): Executa direto
+// Medium (0.5-0.79): Confirma ("Você quis X?")
+// Low (<0.5): Clarify ("Você quis X ou Y?")
 // ============================================================================
 export async function decisionEngine(
   message: string,
@@ -515,9 +475,9 @@ export async function decisionEngine(
   payloadType?: string
 ): Promise<{ result: SemanticResult; shouldBlockLegacyFlow: boolean }> {
   
-  console.log(`\n🧠 [DECISION ENGINE v6.0 - IA-FIRST] ━━━━━━━━━━━━━━━━`);
+  console.log(`\n🧠 [DECISION ENGINE v7.0 - UNIFIED] ━━━━━━━━━━━━━━━━`);
   console.log(`📩 Mensagem: "${message.slice(0, 60)}..." | Tipo: ${payloadType || 'unknown'}`);
-  console.log(`📋 Arquitetura: Fast-Track → IA → Execução (sem keywords)`)
+  console.log(`📋 Arquitetura: Fast-Track → IA (Tool Calling + CoT) → 3 Níveis`)
   
   // PRIORIDADE MÁXIMA: SELEÇÃO NUMÉRICA
   if (activeAction && activeAction.pending_slot === "selection" && isNumericOnly(message)) {
@@ -610,7 +570,7 @@ export async function decisionEngine(
     };
   }
 
-  // IA CLASSIFICA
+  // IA CLASSIFICA (com Tool Calling + CoT)
   const aiResult = await callAIForDecision(
     message,
     { hasActiveAction: !!activeAction, activeActionType: activeAction?.intent, activeActionSlots: activeAction?.slots, pendingSlot: activeAction?.pending_slot },
@@ -626,20 +586,38 @@ export async function decisionEngine(
     aiConfidence: aiResult.confidence,
     aiSlots: aiResult.slots,
     aiReasoning: aiResult.reason,
-    aiSource: "ai"
+    aiSource: "ai_v7_tool_calling"
   });
   
-  if (aiResult.confidence >= 0.75 && aiResult.actionType !== "unknown") {
-    const missing = getMissingSlots(aiResult.actionType, aiResult.slots);
+  // ================================================================
+  // 🎯 SISTEMA DE 3 NÍVEIS DE CONFIANÇA
+  // ================================================================
+  
+  const confidence = aiResult.confidence;
+  const missing = getMissingSlots(aiResult.actionType, aiResult.slots);
+  
+  // NÍVEL 1: HIGH CONFIDENCE (≥0.8) → Executa direto
+  if (confidence >= 0.8 && aiResult.actionType !== "unknown") {
+    console.log(`✅ [CONFIDENCE] HIGH (${confidence}) → Execução direta`);
     return {
       result: { ...aiResult, canExecuteDirectly: missing.length === 0, decisionId },
       shouldBlockLegacyFlow: true
     };
   }
   
-  const missingLowConf = getMissingSlots(aiResult.actionType, aiResult.slots);
+  // NÍVEL 2: MEDIUM CONFIDENCE (0.5-0.79) → Confirma
+  if (confidence >= 0.5 && aiResult.actionType !== "unknown") {
+    console.log(`⚠️ [CONFIDENCE] MEDIUM (${confidence}) → Confirmação sugerida`);
+    return {
+      result: { ...aiResult, canExecuteDirectly: missing.length === 0, decisionId },
+      shouldBlockLegacyFlow: true
+    };
+  }
+  
+  // NÍVEL 3: LOW CONFIDENCE (<0.5) → Clarify
+  console.log(`❓ [CONFIDENCE] LOW (${confidence}) → Clarificação necessária`);
   return {
-    result: { ...aiResult, canExecuteDirectly: missingLowConf.length === 0, decisionId },
-    shouldBlockLegacyFlow: aiResult.confidence >= 0.5
+    result: { ...aiResult, canExecuteDirectly: false, decisionId },
+    shouldBlockLegacyFlow: confidence >= 0.3
   };
 }

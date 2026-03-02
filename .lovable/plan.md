@@ -28,7 +28,7 @@
 ### Alta Prioridade
 | Item | Complexidade | Estimativa |
 |------|-------------|-----------|
-| Melhorar prompt IA (Tool Calling + CoT + redução) | Alta | 1-2 sessões |
+| ~~Melhorar prompt IA (Tool Calling + CoT + unificação)~~ | ~~Alta~~ | ✅ v7.0 |
 
 ### Média Prioridade
 | Item | Complexidade | Estimativa |
