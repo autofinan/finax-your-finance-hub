@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import finaxLogo from "@/assets/finax-logo-transparent.png";
+import { CheckoutModal } from "@/components/checkout/CheckoutModal";
 
 // ═══════════════════════════════════════════════════════════════
 // FINAX LANDING PAGE — Single File, Fintech Premium Brasileira
@@ -8,7 +9,7 @@ import finaxLogo from "@/assets/finax-logo-transparent.png";
 // ═══════════════════════════════════════════════════════════════
 
 const WA_LINK = `https://wa.me/556581034588?text=${encodeURIComponent("Quero começar meu trial grátis no Finax")}`;
-const SITE_URL = "https://finaxassistente.lovable.app";
+const SITE_URL = "https://finaxai.vercel.app";
 
 const B = {
   bg: "#070B12", bg2: "#0C1220", surface: "#111827", card: "#151E2E",
@@ -226,9 +227,12 @@ export default function Landing() {
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
   const [heroRef, heroVisible] = useReveal(0.1);
   const navigate = useNavigate();
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [checkoutPlan, setCheckoutPlan] = useState<'basico' | 'pro'>('pro');
 
   const go = () => window.open(WA_LINK, "_blank");
   const goAuth = (plan?: string) => navigate(plan ? `/auth?plan=${plan}` : "/auth");
+  const goCheckout = (plan: 'basico' | 'pro') => { setCheckoutPlan(plan); setCheckoutOpen(true); };
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 
   // Section refs
@@ -560,7 +564,7 @@ export default function Landing() {
               <button onClick={go} className="btn-wa" style={{ width: "100%", justifyContent: "center", marginTop: 24, padding: "13px", fontSize: 14 }}>
                 <span>💬</span> Testar grátis pelo WhatsApp
               </button>
-              <button onClick={() => goAuth("basico")} className="btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 10, padding: "11px", fontSize: 13 }}>Assinar direto → R$ 19,90/mês</button>
+              <button onClick={() => goCheckout("basico")} className="btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 10, padding: "11px", fontSize: 13 }}>Assinar direto → R$ 19,90/mês</button>
             </div>
             {/* PRO */}
             <div style={{ background: `linear-gradient(160deg, ${B.card}, #08111f)`, border: `2px solid ${B.cyan}45`, borderRadius: 24, padding: 36, position: "relative", boxShadow: `0 0 60px ${B.cyan}10, 0 20px 60px rgba(0,0,0,.3)` }}>
@@ -581,7 +585,7 @@ export default function Landing() {
               <button className="btn-primary" onClick={go} style={{ width: "100%", justifyContent: "center", marginTop: 24, padding: "15px" }}>
                 <span style={{ fontSize: 18 }}>💬</span> Começar Trial Pro Grátis
               </button>
-              <button onClick={() => goAuth("pro")} className="btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 10, padding: "11px", fontSize: 13 }}>Assinar direto → R$ 29,90/mês</button>
+              <button onClick={() => goCheckout("pro")} className="btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 10, padding: "11px", fontSize: 13 }}>Assinar direto → R$ 29,90/mês</button>
             </div>
           </div>
           <div style={{ textAlign: "center", marginTop: 28, display: "flex", justifyContent: "center", gap: 32, flexWrap: "wrap" }}>
@@ -685,6 +689,7 @@ export default function Landing() {
           </div>
         </div>
       </footer>
+      <CheckoutModal open={checkoutOpen} onOpenChange={setCheckoutOpen} plan={checkoutPlan} />
     </div>
   );
 }

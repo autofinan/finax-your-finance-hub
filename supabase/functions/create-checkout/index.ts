@@ -74,8 +74,8 @@ serve(async (req) => {
           quantity: 1,
         },
       ],
-      success_url: successUrl || "https://finaxassistente.lovable.app/dashboard?success=true",
-      cancel_url: cancelUrl || "https://finaxassistente.lovable.app/dashboard?canceled=true",
+      success_url: successUrl || "https://finaxai.vercel.app/dashboard?success=true",
+      cancel_url: cancelUrl || "https://finaxai.vercel.app/?canceled=true",
       metadata: {
         plan: plan,
         phone: phone || "",
