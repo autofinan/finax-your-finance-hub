@@ -19,7 +19,7 @@ export interface AIDecisionInput {
   aiConfidence: number;
   aiSlots: Record<string, unknown>;
   aiReasoning?: string;
-  aiSource?: "ai" | "deterministic" | "contextual";
+  aiSource?: "ai" | "deterministic" | "contextual" | "ai_v7_tool_calling";
 }
 
 /**

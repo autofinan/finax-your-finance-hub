@@ -215,7 +215,7 @@ async function processarJob(job: any): Promise<void> {
         // ================================================================
         // 🔗 CHECKOUT LINKS - Gerar URLs reais do Stripe
         // ================================================================
-        const SITE_URL = "https://finaxassistente.lovable.app";
+        const SITE_URL = "https://finaxai.vercel.app";
         
         async function generateCheckoutUrl(planType: "basico" | "pro", phone: string): Promise<string> {
           try {
@@ -456,10 +456,18 @@ async function processarJob(job: any): Promise<void> {
         const urlBasico = await generateCheckoutUrl("basico", payload.phoneNumber);
         const urlPro = await generateCheckoutUrl("pro", payload.phoneNumber);
         
-        await sendMessage(payload.phoneNumber, 
-          `⏳ Oi ${primeiroNome}! Seu período de teste terminou.${trialSummary}\n━━━━━━━━━━━━━━━━━━\n\nQuer continuar evoluindo?\n\n📱 *Básico* — R$ 19,90/mês\nControle completo, relatórios e organização.\n👉 ${urlBasico}\n\n⭐ *Pro* — R$ 29,90/mês\nSimulador de quitação + insights que aceleram sua liberdade.\n👉 ${urlPro}\n\n━━━━━━━━━━━━━━━━━━\n\nResponda:\n1️⃣ Assinar Básico\n2️⃣ Assinar Pro\n3️⃣ Ver site\n\nOu envie seu código de ativação!`, 
-          payload.messageSource
-        );
+        // Mensagem persuasiva e personalizada
+        let mainMessage = "";
+        
+        if (trialSummary) {
+          // Usuário USOU o Finax → mensagem de continuidade
+          mainMessage = `⏳ *${primeiroNome}, seu trial acabou.*\n\nMas olha o que você já conquistou comigo:${trialSummary}\n🔥 *Tudo isso em apenas 14 dias.*\nImagina o que acontece em 3 meses?\n\n━━━━━━━━━━━━━━━━━━\n\n📱 *Básico* — R$ 19,90/mês\nContinue organizando suas finanças.\n👉 ${urlBasico}\n\n⭐ *Pro* — R$ 29,90/mês _(mais popular)_\nTudo do Básico + IA que acelera sua liberdade.\n👉 ${urlPro}\n\n🌐 Mais detalhes: ${SITE_URL}\n\n━━━━━━━━━━━━━━━━━━\n\nResponda *1*, *2* ou *3* — ou envie seu código de ativação!`;
+        } else {
+          // Usuário NÃO usou → mensagem de segunda chance
+          mainMessage = `⏳ *${primeiroNome}, seu trial acabou.*\n\nVocê ainda não experimentou tudo que o Finax pode fazer por você.\n\n💡 *Sabia que quem usa o Finax economiza em média 20% nos primeiros 30 dias?*\n\n━━━━━━━━━━━━━━━━━━\n\n📱 *Básico* — R$ 19,90/mês\nComece a organizar hoje.\n👉 ${urlBasico}\n\n⭐ *Pro* — R$ 29,90/mês _(mais popular)_\nControle total + insights de IA.\n👉 ${urlPro}\n\n🌐 Mais detalhes: ${SITE_URL}\n\n━━━━━━━━━━━━━━━━━━\n\nResponda *1*, *2* ou *3* — ou envie seu código!`;
+        }
+        
+        await sendMessage(payload.phoneNumber, mainMessage, payload.messageSource);
         
         await supabase.from("historico_conversas").insert({
           phone_number: payload.phoneNumber,
@@ -903,7 +911,7 @@ async function processarJob(job: any): Promise<void> {
       // ⭐ UPGRADE PRO - Gating button response
       // ====================================================================
       if (payload.buttonReplyId === "upgrade_pro") {
-        const SITE_URL = "https://finaxassistente.lovable.app";
+        const SITE_URL = "https://finaxai.vercel.app";
         try {
           const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
           const priceId = Deno.env.get("STRIPE_PRICE_PRO");
@@ -929,7 +937,7 @@ async function processarJob(job: any): Promise<void> {
           }
         } catch (err) {
           console.error(`[UPGRADE] Error:`, err);
-          await sendMessage(payload.phoneNumber, `⭐ Acesse https://finaxassistente.lovable.app para assinar o Pro!`, payload.messageSource);
+          await sendMessage(payload.phoneNumber, `⭐ Acesse https://finaxai.vercel.app para assinar o Pro!`, payload.messageSource);
         }
         return;
       }

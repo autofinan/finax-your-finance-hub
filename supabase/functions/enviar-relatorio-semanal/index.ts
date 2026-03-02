@@ -436,16 +436,18 @@ serve(async (req) => {
           // Salvar anomalias detectadas para análise futura
           if (anomalies.length > 0 && isPro) {
             for (const anomaly of anomalies) {
-              await supabase.from("spending_alerts").insert({
-                user_id: usuario.id,
-                alert_type: anomaly.type,
-                message: anomaly.message,
-                severity: anomaly.severity,
-                metadata: anomaly.data,
-                source: "weekly_consultant",
-                status: "sent",
-                sent_at: new Date().toISOString(),
-              }).catch(() => {}); // Non-critical
+              try {
+                await supabase.from("spending_alerts").insert({
+                  user_id: usuario.id,
+                  alert_type: anomaly.type,
+                  message: anomaly.message,
+                  severity: anomaly.severity,
+                  metadata: anomaly.data,
+                  source: "weekly_consultant",
+                  status: "sent",
+                  sent_at: new Date().toISOString(),
+                });
+              } catch (_) { /* Non-critical */ }
             }
           }
         } else {
