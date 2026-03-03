@@ -63,6 +63,7 @@ import { listCardsForUser, updateCardLimit, queryCardLimits, queryCardExpenses, 
 import { getActiveContext, createUserContext, closeUserContext, linkTransactionToContext } from "./intents/context-handler.ts";
 import { generateChatResponse } from "./intents/chat-handler.ts";
 import { listTransactionsForCancel, cancelTransaction, getLastTransaction, updateTransactionPaymentMethod } from "./intents/cancel-handler.ts";
+import { finaxSalesResponse, shortenURL } from "./sales/seller.ts";
 
 // DecisionOutput type used by processarJob
 interface DecisionOutput {
@@ -311,13 +312,15 @@ async function processarJob(job: any): Promise<void> {
         if (numericChoice) {
           const choice = numericChoice[0];
           if (choice === "1" || wantsBasico) {
-            const url = await generateCheckoutUrl("basico", payload.phoneNumber);
+            const rawUrl = await generateCheckoutUrl("basico", payload.phoneNumber);
+            const url = await shortenURL(rawUrl, userId, "choice_basico");
             await sendMessage(payload.phoneNumber,
               `📱 *Plano Básico* — R$ 19,90/mês\n\nRegistro ilimitado, orçamentos, relatórios e controle completo.\n\n👉 Assine aqui: ${url}`,
               payload.messageSource
             );
           } else if (choice === "2" || wantsPro) {
-            const url = await generateCheckoutUrl("pro", payload.phoneNumber);
+            const rawUrl = await generateCheckoutUrl("pro", payload.phoneNumber);
+            const url = await shortenURL(rawUrl, userId, "choice_pro");
             await sendMessage(payload.phoneNumber,
               `⭐ *Plano Pro* — R$ 29,90/mês\n\nTudo do Básico + simulador de quitação, insights preditivos, cartões ilimitados e suporte prioritário.\n\n👉 Assine aqui: ${url}`,
               payload.messageSource
@@ -337,7 +340,8 @@ async function processarJob(job: any): Promise<void> {
         
         // Pediu plano específico diretamente
         if (wantsBasico) {
-          const url = await generateCheckoutUrl("basico", payload.phoneNumber);
+          const rawUrl = await generateCheckoutUrl("basico", payload.phoneNumber);
+          const url = await shortenURL(rawUrl, userId, "direct_basico");
           await sendMessage(payload.phoneNumber,
             `Perfeito! 👌\n\n📱 *Básico* — R$ 19,90/mês\nRegistro ilimitado, relatórios e controle completo.\n\n👉 Assine aqui: ${url}`,
             payload.messageSource
@@ -350,7 +354,8 @@ async function processarJob(job: any): Promise<void> {
         }
         
         if (wantsPro) {
-          const url = await generateCheckoutUrl("pro", payload.phoneNumber);
+          const rawUrl = await generateCheckoutUrl("pro", payload.phoneNumber);
+          const url = await shortenURL(rawUrl, userId, "direct_pro");
           await sendMessage(payload.phoneNumber,
             `Excelente escolha! 🚀\n\n⭐ *Pro* — R$ 29,90/mês\nTudo do Básico + simulador, insights com IA e cartões ilimitados.\n\n👉 Assine aqui: ${url}`,
             payload.messageSource
@@ -373,8 +378,10 @@ async function processarJob(job: any): Promise<void> {
         
         // Pediu link genérico ou tem intenção de compra
         if (hasPurchaseIntent) {
-          const urlBasico = await generateCheckoutUrl("basico", payload.phoneNumber);
-          const urlPro = await generateCheckoutUrl("pro", payload.phoneNumber);
+          const rawBasico = await generateCheckoutUrl("basico", payload.phoneNumber);
+          const rawPro = await generateCheckoutUrl("pro", payload.phoneNumber);
+          const urlBasico = await shortenURL(rawBasico, userId, "purchase_intent_basico");
+          const urlPro = await shortenURL(rawPro, userId, "purchase_intent_pro");
           await sendMessage(payload.phoneNumber,
             `Perfeito! 👌\n\nEscolha seu plano:\n\n📱 *Básico* — R$ 19,90/mês\n👉 ${urlBasico}\n\n⭐ *Pro* — R$ 29,90/mês\n👉 ${urlPro}\n\n🌐 Mais detalhes: ${SITE_URL}`,
             payload.messageSource
@@ -387,93 +394,27 @@ async function processarJob(job: any): Promise<void> {
         }
         
         // ================================================================
-        // 💬 MENSAGEM PADRÃO DE TRIAL EXPIRADO (com trial summary)
+        // 🤖 VENDEDOR IA — Responde qualquer mensagem de forma persuasiva
         // ================================================================
+        const rawBasico = await generateCheckoutUrl("basico", payload.phoneNumber);
+        const rawPro = await generateCheckoutUrl("pro", payload.phoneNumber);
+        const urlBasico = await shortenURL(rawBasico, userId, "seller_basico");
+        const urlPro = await shortenURL(rawPro, userId, "seller_pro");
         
-        // Buscar dados do trial para summary personalizado (ENHANCED)
-        let trialSummary = "";
-        try {
-          // Transações totais
-          const { count: gastosCount } = await supabase
-            .from("transacoes")
-            .select("*", { count: "exact", head: true })
-            .eq("usuario_id", userId);
-          
-          // Cartões cadastrados
-          const { count: cartoesCount } = await supabase
-            .from("cartoes_credito")
-            .select("*", { count: "exact", head: true })
-            .eq("usuario_id", userId);
-          
-          // Metas criadas
-          const { count: metasCount } = await supabase
-            .from("orcamentos")
-            .select("*", { count: "exact", head: true })
-            .eq("usuario_id", userId)
-            .eq("ativo", true);
-          
-          // Dívidas registradas
-          const { count: dividasCount } = await supabase
-            .from("dividas")
-            .select("*", { count: "exact", head: true })
-            .eq("usuario_id", userId)
-            .eq("ativa", true);
-          
-          // Total de entradas e saídas
-          const { data: totais } = await supabase
-            .from("transacoes")
-            .select("valor, tipo, expense_type")
-            .eq("usuario_id", userId)
-            .neq("status", "cancelada");
-          
-          const totalEntradas = totais?.filter(t => t.tipo === "entrada").reduce((s, t) => s + Math.abs(t.valor || 0), 0) || 0;
-          const totalSaidas = totais?.filter(t => t.tipo === "saida").reduce((s, t) => s + Math.abs(t.valor || 0), 0) || 0;
-          const valorAjustavel = totais?.filter(t => ["flexivel", "lazer_social", "impulso"].includes(t.expense_type || "")).reduce((s, t) => s + Math.abs(t.valor || 0), 0) || 0;
-          
-          // Recorrentes
-          const { count: recorrentesCount } = await supabase
-            .from("gastos_recorrentes")
-            .select("*", { count: "exact", head: true })
-            .eq("usuario_id", userId)
-            .eq("ativo", true);
-          
-          if (gastosCount && gastosCount > 0) {
-            trialSummary = `\n📋 *Seu resumo do trial:*\n`;
-            trialSummary += `• 🧾 *${gastosCount} transações* registradas`;
-            if (totalEntradas > 0) trialSummary += `\n• 💰 R$ ${totalEntradas.toFixed(0)} em entradas`;
-            if (totalSaidas > 0) trialSummary += `\n• 💸 R$ ${totalSaidas.toFixed(0)} em saídas`;
-            if (cartoesCount && cartoesCount > 0) trialSummary += `\n• 💳 ${cartoesCount} cartão(ões) organizados`;
-            if (metasCount && metasCount > 0) trialSummary += `\n• 🎯 ${metasCount} orçamento(s) criados`;
-            if (dividasCount && dividasCount > 0) trialSummary += `\n• 📊 ${dividasCount} dívida(s) mapeadas`;
-            if (recorrentesCount && recorrentesCount > 0) trialSummary += `\n• 🔄 ${recorrentesCount} gasto(s) recorrentes`;
-            if (valorAjustavel > 0) trialSummary += `\n• ✂️ *R$ ${valorAjustavel.toFixed(0)}* em gastos ajustáveis identificados`;
-            trialSummary += "\n";
-          }
-        } catch (e) {
-          console.log(`[TRIAL] Erro ao buscar summary:`, e);
-        }
+        const sellerResponse = await finaxSalesResponse(
+          userId,
+          payload.messageText || "quero saber sobre os planos",
+          urlBasico,
+          urlPro
+        );
         
-        const urlBasico = await generateCheckoutUrl("basico", payload.phoneNumber);
-        const urlPro = await generateCheckoutUrl("pro", payload.phoneNumber);
-        
-        // Mensagem persuasiva e personalizada
-        let mainMessage = "";
-        
-        if (trialSummary) {
-          // Usuário USOU o Finax → mensagem de continuidade
-          mainMessage = `⏳ *${primeiroNome}, seu trial acabou.*\n\nMas olha o que você já conquistou comigo:${trialSummary}\n🔥 *Tudo isso em apenas 14 dias.*\nImagina o que acontece em 3 meses?\n\n━━━━━━━━━━━━━━━━━━\n\n📱 *Básico* — R$ 19,90/mês\nContinue organizando suas finanças.\n👉 ${urlBasico}\n\n⭐ *Pro* — R$ 29,90/mês _(mais popular)_\nTudo do Básico + IA que acelera sua liberdade.\n👉 ${urlPro}\n\n🌐 Mais detalhes: ${SITE_URL}\n\n━━━━━━━━━━━━━━━━━━\n\nResponda *1*, *2* ou *3* — ou envie seu código de ativação!`;
-        } else {
-          // Usuário NÃO usou → mensagem de segunda chance
-          mainMessage = `⏳ *${primeiroNome}, seu trial acabou.*\n\nVocê ainda não experimentou tudo que o Finax pode fazer por você.\n\n💡 *Sabia que quem usa o Finax economiza em média 20% nos primeiros 30 dias?*\n\n━━━━━━━━━━━━━━━━━━\n\n📱 *Básico* — R$ 19,90/mês\nComece a organizar hoje.\n👉 ${urlBasico}\n\n⭐ *Pro* — R$ 29,90/mês _(mais popular)_\nControle total + insights de IA.\n👉 ${urlPro}\n\n🌐 Mais detalhes: ${SITE_URL}\n\n━━━━━━━━━━━━━━━━━━\n\nResponda *1*, *2* ou *3* — ou envie seu código!`;
-        }
-        
-        await sendMessage(payload.phoneNumber, mainMessage, payload.messageSource);
+        await sendMessage(payload.phoneNumber, sellerResponse, payload.messageSource);
         
         await supabase.from("historico_conversas").insert({
           phone_number: payload.phoneNumber,
           user_id: userId,
           user_message: payload.messageText || "[MÍDIA]",
-          ai_response: "[TRIAL EXPIRADO - VENDEDOR]",
+          ai_response: sellerResponse.substring(0, 200),
           tipo: "bloqueio_trial"
         });
         return;
