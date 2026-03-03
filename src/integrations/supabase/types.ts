@@ -2777,6 +2777,68 @@ export type Database = {
           },
         ]
       }
+      short_links: {
+        Row: {
+          campaign: string | null
+          clicks: number | null
+          created_at: string | null
+          expires_at: string | null
+          id: string
+          long_url: string
+          short_code: string
+          user_id: string | null
+        }
+        Insert: {
+          campaign?: string | null
+          clicks?: number | null
+          created_at?: string | null
+          expires_at?: string | null
+          id?: string
+          long_url: string
+          short_code: string
+          user_id?: string | null
+        }
+        Update: {
+          campaign?: string | null
+          clicks?: number | null
+          created_at?: string | null
+          expires_at?: string | null
+          id?: string
+          long_url?: string
+          short_code?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "short_links_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "short_links_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "short_links_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "short_links_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       spending_alerts: {
         Row: {
           alert_type: string

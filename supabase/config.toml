@@ -38,3 +38,9 @@ verify_jwt = false
 
 [functions.processar-recorrentes]
 verify_jwt = false
+
+[functions.redirect]
+verify_jwt = false
+
+[functions.daily-sales]
+verify_jwt = false
