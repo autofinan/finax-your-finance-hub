@@ -89,25 +89,25 @@ export interface OnboardingState {
 // ============================================================================
 
 export async function startOnboarding(userId: string, phone: string): Promise<void> {
-  // Detectar plano do usuário
-  const { data: subscription } = await supabase
-    .from("subscriptions")
-    .select("plan_type, trial_active")
-    .eq("user_id", userId)
+  // Detectar plano do usuário diretamente da tabela usuarios
+  const { data: usuario } = await supabase
+    .from("usuarios")
+    .select("plano, trial_fim")
+    .eq("id", userId)
     .single();
   
-  let planType = "basic";
-  if (subscription?.trial_active) {
-    planType = "trial";
-  } else if (subscription?.plan_type === "pro") {
-    planType = "pro";
-  }
+  const plano = usuario?.plano || "trial";
   
   await supabase.from("user_onboarding").insert({
     user_id: userId,
     current_step: "welcome",
-    plan_type: planType
   });
+  
+  // ✅ Atualizar status do onboarding na tabela usuarios
+  await supabase.from("usuarios").update({
+    onboarding_status: "iniciado",
+    onboarding_step: "welcome"
+  }).eq("id", userId);
   
   // ========================================================================
   // MENSAGEM 1: Boas-vindas humanizadas
@@ -124,7 +124,7 @@ export async function startOnboarding(userId: string, phone: string): Promise<vo
   // MENSAGEM 2: Oferecer apresentação
   // ========================================================================
   
-  const trialMessage = planType === "trial" 
+  const trialMessage = plano === "trial" 
     ? `\n\n(você está no trial de 14 dias Pro — tudo liberado! 🎉)` 
     : "";
   
@@ -152,7 +152,14 @@ export async function handleOnboardingStep(
   
   if (!onboarding) return false;
   
-  const planType = onboarding.plan_type || "basic";
+  // ✅ Buscar plano real do usuário (não de onboarding.plan_type que não existe)
+  const { data: usuario } = await supabase
+    .from("usuarios")
+    .select("plano")
+    .eq("id", userId)
+    .single();
+  
+  const planType = usuario?.plano === "pro" ? "pro" : (usuario?.plano === "basico" ? "basic" : "trial");
   
   // ========================================================================
   // STEP 1: ESCOLHA (welcome)
@@ -184,6 +191,7 @@ export async function handleOnboardingStep(
       await supabase.from("user_onboarding").update({
         current_step: "showcase_1"
       }).eq("user_id", userId);
+      await supabase.from("usuarios").update({ onboarding_step: "showcase_1" }).eq("id", userId);
       
       await sendMessage(phone,
         `Beleza! São só 3 coisas principais:\n\n1️⃣ Registrar (gastos e entradas)\n2️⃣ Consultar (ver pra onde vai)\n3️⃣ Controlar (orçamentos e metas)\n\nVamos lá 👇`,
@@ -329,6 +337,13 @@ export async function handleOnboardingStep(
   if (onboarding.current_step === "first_name") {
     const firstName = message.trim().split(" ")[0];
     
+    // ✅ FIX: Atualizar nome REAL do usuário na tabela usuarios (não o nome do contato WhatsApp)
+    await supabase.from("usuarios").update({
+      nome: firstName,
+      onboarding_status: "concluido",
+      onboarding_step: "finalizado"
+    }).eq("id", userId);
+    
     await supabase.from("user_onboarding").update({
       first_name: firstName,
       current_step: "ready"
@@ -341,14 +356,14 @@ export async function handleOnboardingStep(
       preferencias: { 
         first_name: firstName,
         onboarding_completed: true,
-        features_shown: [] // Para ajuda contextual
+        features_shown: []
       },
       insights: {}
     }, { onConflict: "usuario_id" });
     
     console.log(`👤 [ONBOARDING] ${firstName} completou - Plano: ${planType}`);
     
-    // MENSAGEM FINAL: Certificeira
+    // MENSAGEM FINAL
     await sendMessage(phone,
       `Pronto, ${firstName}! 🚀\n\nVocê tá dentro.\n\nAgora pode:\n• Mandar gastos → "gastei 50 uber"\n• Perguntar → "resumo" / "quanto gastei"\n• Definir metas → "quero juntar 5000"\n\nSe tiver dúvida, só mandar "ajuda".\n\nBora! Manda algo pra testar 👇`,
       "whatsapp"
