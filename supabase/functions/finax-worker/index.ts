@@ -4082,8 +4082,28 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         
         case "category":
           console.log(`📊 [QUERY] Roteando para: CATEGORY`);
-          const catResult = await getExpensesByCategory(userId);
-          await sendMessage(payload.phoneNumber, catResult, payload.messageSource);
+          const { getExpensesByCategoryData: getCatData } = await import("./intents/query.ts");
+          const catDataResult = await getCatData(userId);
+          
+          if (catDataResult.categories.length === 0) {
+            await sendMessage(payload.phoneNumber, "Sem gastos este mês 🎉", payload.messageSource);
+            return;
+          }
+          
+          const catListMsg = catDataResult.categories.map(c => `${c.emoji} ${c.name}: R$ ${c.total.toFixed(2)}`).join("\n");
+          const catFullMsg = `📊 *Gastos por Categoria*\n\n${catListMsg}\n\n💸 Total: *R$ ${catDataResult.grandTotal.toFixed(2)}*`;
+          
+          // Show drilldown buttons for top categories
+          const topCategories = catDataResult.categories.slice(0, 3);
+          if (topCategories.length > 0) {
+            const drillButtons = topCategories.map(c => ({
+              id: `view_all_expenses_month_${c.name}`,
+              title: `${c.emoji} ${c.name}`.slice(0, 20)
+            }));
+            await sendButtons(payload.phoneNumber, catFullMsg, drillButtons, payload.messageSource);
+          } else {
+            await sendMessage(payload.phoneNumber, catFullMsg, payload.messageSource);
+          }
           return;
         
         case "recurring":
@@ -4402,14 +4422,34 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         }
       }
       
-      // Gastos por CATEGORIA
+      // Gastos por CATEGORIA (com botões de drilldown por categoria)
       if (normalized.includes("categoria") || normalized.includes("categorias") ||
           (normalized.includes("gasto") && normalized.includes("por")) ||
-          normalized.includes("breakdown") || normalized.includes("detalha")) {
+          normalized.includes("breakdown") || normalized.includes("detalhado") ||
+          (normalized.includes("detalha") && !KNOWN_CATEGORIES.some(c => normalized.includes(c.normalize("NFD").replace(/[\u0300-\u036f]/g, ""))))) {
         console.log(`📊 [QUERY] Gastos por categoria detectado (fallback)`);
-        const { getExpensesByCategory: getCat } = await import("./intents/query.ts");
-        const result = await getCat(userId);
-        await sendMessage(payload.phoneNumber, result, payload.messageSource);
+        const { getExpensesByCategoryData } = await import("./intents/query.ts");
+        const catData = await getExpensesByCategoryData(userId);
+        
+        if (catData.categories.length === 0) {
+          await sendMessage(payload.phoneNumber, "Sem gastos este mês 🎉", payload.messageSource);
+          return;
+        }
+        
+        const catList = catData.categories.map(c => `${c.emoji} ${c.name}: R$ ${c.total.toFixed(2)}`).join("\n");
+        const catMsg = `📊 *Gastos por Categoria*\n\n${catList}\n\n💸 Total: *R$ ${catData.grandTotal.toFixed(2)}*`;
+        
+        // Botões de drilldown por categoria (até 3 botões)
+        const topCats = catData.categories.slice(0, 3);
+        if (topCats.length > 0) {
+          const catButtons = topCats.map(c => ({
+            id: `view_all_expenses_month_${c.name}`,
+            title: `${c.emoji} ${c.name}`.slice(0, 20)
+          }));
+          await sendButtons(payload.phoneNumber, catMsg, catButtons, payload.messageSource);
+        } else {
+          await sendMessage(payload.phoneNumber, catMsg, payload.messageSource);
+        }
         return;
       }
       
@@ -4445,9 +4485,33 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         }
       }
       
-      // Fallback: resumo mensal
-      const summary = await getMonthlySummary(userId);
-      await sendMessage(payload.phoneNumber, summary, payload.messageSource);
+      // Fallback: resumo mensal COM botões interativos
+      const { executeDynamicQuery } = await import("./utils/dynamic-query.ts");
+      const fallbackResult = await executeDynamicQuery({
+        userId,
+        query_scope: "expenses",
+        time_range: "month"
+      });
+      
+      if (fallbackResult.totalItems > 0) {
+        const fallbackButtons: Array<{ id: string; title: string }> = [];
+        if (fallbackResult.hasMore) {
+          fallbackButtons.push({ id: `view_all_expenses_month_all`, title: "📋 Ver todos" });
+        }
+        fallbackButtons.push({ id: `view_by_category_month`, title: "📊 Por categoria" });
+        
+        await sendButtons(payload.phoneNumber, fallbackResult.message, fallbackButtons, payload.messageSource);
+      } else {
+        const summaryFallback = await getMonthlySummary(userId);
+        await sendMessage(payload.phoneNumber, summaryFallback, payload.messageSource);
+      }
+      
+      await updateConversationContext(userId, {
+        currentTopic: "expenses",
+        lastIntent: "query",
+        lastTimeRange: "month",
+        lastQueryScope: "expenses"
+      });
       return;
     }
     

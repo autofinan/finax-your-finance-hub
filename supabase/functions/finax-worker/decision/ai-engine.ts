@@ -144,8 +144,17 @@ Slots: amount, category (opcional)
 Exemplos: "Orçamento" → set_budget (0.95), "Meu limite mensal é 3000"
 
 ### query - Consultar informações
-Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões"
-Slots: query_scope (summary|cards|expenses|income|pending|recurring|category|budgets|debts), time_range (today|week|month), category
+Indicadores: "quanto", "resumo", "saldo", "total", "meus", "quais", "cartões", "ver gastos", "como estão", "detalhe", "detalhado", "meus gastos", "gastos do mês", "me mostra"
+Slots: query_scope (summary|cards|expenses|income|pending|recurring|category|budgets|debts|installments|goals|invoice_detail|invoice_future|weekly_report), time_range (today|yesterday|week|month|last_week|last_month), category
+REGRAS IMPORTANTES:
+- "ver gastos" / "meus gastos" / "como estão meus gastos" / "me mostra gastos" → query_scope: "expenses"
+- "detalhe [categoria]" / "detalha outros" / "mais sobre alimentação" → query_scope: "expenses", category: "[categoria]"
+- "detalhado" / "quero detalhado" / "por categoria" → query_scope: "category"
+- "saude e alimentação" (múltiplas categorias) → query_scope: "expenses" (retornar TODAS, o sistema filtra)
+- "relatório semanal" → query_scope: "weekly_report"
+- "fatura" → query_scope: "invoice_detail"
+- "meus parcelamentos" → query_scope: "installments"
+- "minhas metas" → query_scope: "goals"
 
 ### query_alerts - Ver alertas
 Indicadores: "alertas", "avisos"
