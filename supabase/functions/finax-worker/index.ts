@@ -198,6 +198,11 @@ async function processarJob(job: any): Promise<void> {
     const { data: usuario } = await supabase.from("usuarios").select("*").eq("id", userId).single();
     const nomeUsuario = usuario?.nome || "amigo(a)";
     
+    // ✅ Atualizar ultima_interacao e interacoes_hoje
+    if (usuario) {
+      await supabase.rpc("fn_atualizar_interacao", { p_usuario_id: userId });
+    }
+    
     // ========================================================================
     // 🔒 BLOQUEIO COGNITIVO: VERIFICAR PLANO DO USUÁRIO
     // ========================================================================
