@@ -3588,7 +3588,7 @@ export type Database = {
           label: string | null
           start_date: string | null
           status: string | null
-          time_remaining: unknown
+          time_remaining: string | null
           total_spent: number | null
           transaction_count: number | null
           updated_at: string | null
