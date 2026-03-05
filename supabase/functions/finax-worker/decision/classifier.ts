@@ -75,6 +75,16 @@ const CANCEL_TERMS = [
 ];
 
 // ============================================================================
+// 💳 PADRÕES DE ADICIONAR CARTÃO (classificação determinística)
+// ============================================================================
+
+const ADD_CARD_PATTERNS = [
+  /(?:adicionar|registrar|cadastrar|criar|novo)\s+cart[aã]o\s+(\w+)(?:\s+(?:limite|lim)\s+(\d+[.,]?\d*))?/i,
+  /(?:meu\s+)?cart[aã]o\s+[eé]\s+(?:o\s+)?(\w+)(?:\s+(?:limite|lim)\s+(\d+[.,]?\d*))?/i,
+  /cart[aã]o\s+(\w+)\s+(?:limite|lim)\s+(\d+[.,]?\d*)/i,
+];
+
+// ============================================================================
 // 🚫 TERMOS QUE NUNCA SÃO GASTOS (proteger contra duplicata falsa)
 // ============================================================================
 
@@ -85,7 +95,9 @@ const NON_EXPENSE_PREFIXES = [
   "resumo", "saldo", "historico", "histórico", "extrato",
   "vou viajar", "viagem", "contexto", "evento", "vou estar",
   "bom dia", "boa tarde", "boa noite", "oi", "ola", "olá", "tudo bem",
-  "ajuda", "help", "tutorial"
+  "ajuda", "help", "tutorial",
+  "adicionar cartao", "adicionar cartão", "registrar cartao", "registrar cartão",
+  "cadastrar cartao", "cadastrar cartão", "novo cartao", "novo cartão",
 ];
 
 // ============================================================================
@@ -95,6 +107,30 @@ const NON_EXPENSE_PREFIXES = [
 export function fastTrackExtract(message: string): FastTrackResult {
   const original = message.trim();
   const normalized = normalizeText(message);
+  
+  // ========================================================================
+  // CASO 0: ADICIONAR CARTÃO (classificação determinística - não precisa IA)
+  // ========================================================================
+  for (const pattern of ADD_CARD_PATTERNS) {
+    const match = original.match(pattern);
+    if (match) {
+      const cardName = match[1];
+      const limit = match[2] ? parseFloat(match[2].replace(",", ".")) : undefined;
+      const slots: ExtractedSlots = { card_name: cardName };
+      if (limit) slots.limit = limit;
+      
+      console.log(`⚡ [FAST-TRACK] Adicionar cartão detectado: ${cardName}${limit ? ` limite ${limit}` : ''}`);
+      
+      return {
+        hasStructure: true,
+        slots,
+        needsAI: false,
+        suggestedAction: "add_card" as ActionType,
+        confidence: 0.98,
+        reason: `Adicionar cartão: ${cardName}`
+      };
+    }
+  }
   
   // ========================================================================
   // PROTEÇÃO: Verificar se começa com termos que NUNCA são gastos

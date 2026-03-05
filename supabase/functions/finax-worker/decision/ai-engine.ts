@@ -587,23 +587,34 @@ export async function decisionEngine(
   );
   
   // ================================================================
-  // ✅ CRITICAL FIX: Merge fast-track slots com AI slots
-  // Fast-track extrai amount/description/payment_method estruturalmente
-  // AI foca em classificação (actionType) e pode retornar slots vazios
-  // Solução: fast-track slots como base, AI slots como override
+  // ✅ CRITICAL FIX v2: Merge fast-track slots com AI slots
+  // REGRA: Fast-track slots são SEMPRE a base. AI slots SOMENTE
+  // sobrescrevem se têm valor REAL (não vazio/null/undefined).
+  // Isso previne que a IA perca dados estruturais do fast-track.
   // ================================================================
-  const mergedSlots: Record<string, any> = { ...deterministicResult.slots, ...aiResult.slots };
-  // Remover slots vazios/undefined que a AI possa ter sobrescrito
-  Object.keys(mergedSlots).forEach(k => {
-    if (mergedSlots[k] === undefined || mergedSlots[k] === null || mergedSlots[k] === '') {
-      // Se o fast-track tinha valor, manter
-      if (deterministicResult.slots[k] !== undefined && deterministicResult.slots[k] !== null) {
-        mergedSlots[k] = deterministicResult.slots[k];
-      } else {
-        delete mergedSlots[k];
-      }
+  const mergedSlots: Record<string, any> = {};
+  
+  // 1. Copiar TODOS os slots do fast-track como base
+  const ftSlots = deterministicResult.slots || {};
+  for (const key of Object.keys(ftSlots)) {
+    if (ftSlots[key] !== undefined && ftSlots[key] !== null && ftSlots[key] !== '') {
+      mergedSlots[key] = ftSlots[key];
     }
-  });
+  }
+  
+  // 2. Sobrescrever SOMENTE com slots da IA que têm valor real
+  const aiSlots = aiResult.slots || {};
+  for (const key of Object.keys(aiSlots)) {
+    if (aiSlots[key] !== undefined && aiSlots[key] !== null && aiSlots[key] !== '') {
+      mergedSlots[key] = aiSlots[key];
+    }
+  }
+  
+  // 3. Garantir que slots numéricos do fast-track não foram perdidos
+  if (ftSlots.amount && !mergedSlots.amount) mergedSlots.amount = ftSlots.amount;
+  if (ftSlots.description && !mergedSlots.description) mergedSlots.description = ftSlots.description;
+  if (ftSlots.payment_method && !mergedSlots.payment_method) mergedSlots.payment_method = ftSlots.payment_method;
+  if (ftSlots.card && !mergedSlots.card) mergedSlots.card = ftSlots.card;
   
   // Normalizar os slots merged
   const finalSlots = normalizeAISlots(mergedSlots);
@@ -611,7 +622,7 @@ export async function decisionEngine(
   // Atualizar aiResult com slots merged para logging correto
   const mergedAiResult = { ...aiResult, slots: finalSlots };
   
-  console.log(`🔗 [MERGE] Fast-track: ${JSON.stringify(deterministicResult.slots)} + AI: ${JSON.stringify(aiResult.slots)} → Final: ${JSON.stringify(finalSlots)}`);
+  console.log(`🔗 [MERGE] Fast-track: ${JSON.stringify(ftSlots)} + AI: ${JSON.stringify(aiSlots)} → Final: ${JSON.stringify(finalSlots)}`);
   
   const decisionId = await saveAIDecision({
     userId,
