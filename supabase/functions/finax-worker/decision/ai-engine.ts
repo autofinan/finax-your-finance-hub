@@ -586,15 +586,42 @@ export async function decisionEngine(
     history
   );
   
+  // ================================================================
+  // ✅ CRITICAL FIX: Merge fast-track slots com AI slots
+  // Fast-track extrai amount/description/payment_method estruturalmente
+  // AI foca em classificação (actionType) e pode retornar slots vazios
+  // Solução: fast-track slots como base, AI slots como override
+  // ================================================================
+  const mergedSlots: Record<string, any> = { ...deterministicResult.slots, ...aiResult.slots };
+  // Remover slots vazios/undefined que a AI possa ter sobrescrito
+  Object.keys(mergedSlots).forEach(k => {
+    if (mergedSlots[k] === undefined || mergedSlots[k] === null || mergedSlots[k] === '') {
+      // Se o fast-track tinha valor, manter
+      if (deterministicResult.slots[k] !== undefined && deterministicResult.slots[k] !== null) {
+        mergedSlots[k] = deterministicResult.slots[k];
+      } else {
+        delete mergedSlots[k];
+      }
+    }
+  });
+  
+  // Normalizar os slots merged
+  const finalSlots = normalizeAISlots(mergedSlots);
+  
+  // Atualizar aiResult com slots merged para logging correto
+  const mergedAiResult = { ...aiResult, slots: finalSlots };
+  
+  console.log(`🔗 [MERGE] Fast-track: ${JSON.stringify(deterministicResult.slots)} + AI: ${JSON.stringify(aiResult.slots)} → Final: ${JSON.stringify(finalSlots)}`);
+  
   const decisionId = await saveAIDecision({
     userId,
     messageId: `msg_${Date.now()}`,
     message,
     messageType: "text",
-    aiClassification: aiResult.actionType,
-    aiConfidence: aiResult.confidence,
-    aiSlots: aiResult.slots,
-    aiReasoning: aiResult.reason,
+    aiClassification: mergedAiResult.actionType,
+    aiConfidence: mergedAiResult.confidence,
+    aiSlots: mergedAiResult.slots,
+    aiReasoning: mergedAiResult.reason,
     aiSource: "ai_v7_tool_calling"
   });
   
@@ -602,8 +629,8 @@ export async function decisionEngine(
   // 🎯 SISTEMA DE 3 NÍVEIS DE CONFIANÇA
   // ================================================================
   
-  const confidence = aiResult.confidence;
-  const missing = getMissingSlots(aiResult.actionType, aiResult.slots);
+  const confidence = mergedAiResult.confidence;
+  const missing = getMissingSlots(mergedAiResult.actionType, mergedAiResult.slots);
   
   // NÍVEL 1: HIGH CONFIDENCE (≥0.8) → Executa direto
   if (confidence >= 0.8 && aiResult.actionType !== "unknown") {
