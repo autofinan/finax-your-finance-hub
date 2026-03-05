@@ -633,19 +633,19 @@ export async function decisionEngine(
   const missing = getMissingSlots(mergedAiResult.actionType, mergedAiResult.slots);
   
   // NÍVEL 1: HIGH CONFIDENCE (≥0.8) → Executa direto
-  if (confidence >= 0.8 && aiResult.actionType !== "unknown") {
+  if (confidence >= 0.8 && mergedAiResult.actionType !== "unknown") {
     console.log(`✅ [CONFIDENCE] HIGH (${confidence}) → Execução direta`);
     return {
-      result: { ...aiResult, canExecuteDirectly: missing.length === 0, decisionId },
+      result: { ...mergedAiResult, canExecuteDirectly: missing.length === 0, decisionId },
       shouldBlockLegacyFlow: true
     };
   }
   
   // NÍVEL 2: MEDIUM CONFIDENCE (0.5-0.79) → Confirma
-  if (confidence >= 0.5 && aiResult.actionType !== "unknown") {
+  if (confidence >= 0.5 && mergedAiResult.actionType !== "unknown") {
     console.log(`⚠️ [CONFIDENCE] MEDIUM (${confidence}) → Confirmação sugerida`);
     return {
-      result: { ...aiResult, canExecuteDirectly: missing.length === 0, decisionId },
+      result: { ...mergedAiResult, canExecuteDirectly: missing.length === 0, decisionId },
       shouldBlockLegacyFlow: true
     };
   }
@@ -653,7 +653,7 @@ export async function decisionEngine(
   // NÍVEL 3: LOW CONFIDENCE (<0.5) → Clarify
   console.log(`❓ [CONFIDENCE] LOW (${confidence}) → Clarificação necessária`);
   return {
-    result: { ...aiResult, canExecuteDirectly: false, decisionId },
+    result: { ...mergedAiResult, canExecuteDirectly: false, decisionId },
     shouldBlockLegacyFlow: confidence >= 0.3
   };
 }
