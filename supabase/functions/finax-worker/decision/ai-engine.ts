@@ -622,7 +622,7 @@ export async function decisionEngine(
   // Atualizar aiResult com slots merged para logging correto
   const mergedAiResult = { ...aiResult, slots: finalSlots };
   
-  console.log(`🔗 [MERGE] Fast-track: ${JSON.stringify(ftSlots)} + AI: ${JSON.stringify(aiSlots)} → Final: ${JSON.stringify(finalSlots)}`);
+  console.log(`🔗 [MERGE] FT: ${JSON.stringify(ftSlots)} | AI: ${JSON.stringify(aiSlots)} | FINAL: ${JSON.stringify(finalSlots)}`);
   
   const decisionId = await saveAIDecision({
     userId,

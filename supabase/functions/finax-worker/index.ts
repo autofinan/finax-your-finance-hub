@@ -2798,6 +2798,29 @@ async function processarJob(job: any): Promise<void> {
     if (decision.actionType === "expense") {
       const slots = decision.slots;
       
+      // ✅ SAFETY GUARD: Log slots recebidos para diagnóstico
+      console.log(`💸 [EXPENSE-HANDLER] Slots recebidos: ${JSON.stringify(slots)}`);
+      
+      // ✅ SAFETY: Se slots vieram vazios mas o texto original tem número, re-extrair
+      if (!slots.amount && conteudoProcessado) {
+        const numMatch = conteudoProcessado.match(/(\d+[.,]?\d*)/);
+        if (numMatch) {
+          const extractedAmount = parseFloat(numMatch[1].replace(",", "."));
+          if (!isNaN(extractedAmount) && extractedAmount > 0) {
+            slots.amount = extractedAmount;
+            console.log(`🔧 [SAFETY] Re-extraído amount do texto: ${extractedAmount}`);
+          }
+        }
+        // Re-extrair descrição se vazia
+        if (!slots.description) {
+          const textWithoutNumbers = conteudoProcessado.replace(/\d+[.,]?\d*/g, "").replace(/\s*(reais?|real)\s*/gi, "").trim();
+          if (textWithoutNumbers.length >= 2) {
+            slots.description = textWithoutNumbers.charAt(0).toUpperCase() + textWithoutNumbers.slice(1);
+            console.log(`🔧 [SAFETY] Re-extraída description do texto: ${slots.description}`);
+          }
+        }
+      }
+      
       // ========================================================================
       // 📅 ADICIONAR DATA RELATIVA AOS SLOTS (se detectada)
       // CORREÇÃO: Usar getBrasiliaISO() para evitar conversão UTC (+3h)
