@@ -34,7 +34,7 @@ export interface ActiveAction {
 // ============================================================================
 // ⏱️ TTL CONFIGURÁVEL PARA ACTIONS (60 minutos)
 // ============================================================================
-export const ACTION_TTL_MINUTES = 60;
+export const ACTION_TTL_MINUTES = 15;
 
 // ============================================================================
 // 🔍 BUSCAR ACTION ATIVA
