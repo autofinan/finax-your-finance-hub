@@ -341,16 +341,27 @@ function extractPaymentAndCard(text: string): { payment_method?: PaymentMethod; 
 function cleanDescription(text: string): string {
   let cleaned = text;
   
-  // Remover termos de pagamento
+  // Remover APENAS termos de pagamento e bancos (NÃO preposições comuns)
+  // Preposições são parte natural de descrições como "café da manhã", "almoço no trabalho"
   const removeTerms = [
     "pix", "débito", "debito", "crédito", "credito", "cartão", "cartao",
     "dinheiro", "cash", "espécie", "especie",
-    "no", "na", "de", "do", "da", "com", "em", "para", "pra",
     ...KNOWN_BANKS
   ];
   
+  // Remover preposições SOMENTE se estão no FINAL e seguidas de banco/pagamento
+  // Ex: "uber no nubank" → remover "no nubank", manter "café da manhã"
+  for (const bank of KNOWN_BANKS) {
+    cleaned = cleaned.replace(new RegExp(`\\s+(?:no|na|do|da|pelo|via)\\s+${bank}`, "gi"), "");
+    cleaned = cleaned.replace(new RegExp(`\\b${bank}\\b`, "gi"), "");
+  }
+  
   for (const term of removeTerms) {
-    cleaned = cleaned.replace(new RegExp(`\\b${term}\\b`, "gi"), "");
+    if (!KNOWN_BANKS.includes(term)) {
+      // Remover termos de pagamento somente como palavras isoladas no final ou início
+      cleaned = cleaned.replace(new RegExp(`\\s+(?:no|na|via|pelo)?\\s*\\b${term}\\b\\s*$`, "gi"), "");
+      cleaned = cleaned.replace(new RegExp(`^\\b${term}\\b\\s+`, "gi"), "");
+    }
   }
   
   // Limpar espaços extras
