@@ -93,6 +93,13 @@ export async function createAction(
   pendingSlot?: string | null,
   messageId?: string | null
 ): Promise<ActiveAction> {
+  // ✅ SAFETY: Fechar actions antigas antes de criar nova (evita stale actions)
+  await supabase
+    .from("actions")
+    .update({ status: "superseded" })
+    .eq("user_id", userId)
+    .in("status", ["collecting", "awaiting_input", "pending_selection", "awaiting_confirmation"]);
+  
   const actionHash = `action_${userId.slice(0, 8)}_${Date.now()}`;
   const expiresAt = new Date(Date.now() + ACTION_TTL_MINUTES * 60 * 1000).toISOString();
   
