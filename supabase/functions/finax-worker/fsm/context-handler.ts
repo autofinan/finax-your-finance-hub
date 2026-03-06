@@ -108,6 +108,19 @@ function isSubjectChange(normalized: string, currentIntent: string): boolean {
 }
 
 // ============================================================================
+// 💳 EXTRAIR FORMA DE PAGAMENTO DO TEXTO (para correções mid-flow)
+// ============================================================================
+
+function extractPaymentFromText(normalized: string): string | null {
+  if (normalized.includes("pix")) return "pix";
+  if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
+  if (normalized.includes("dinheiro") || normalized.includes("cash")) return "dinheiro";
+  if (normalized.includes("credito") || normalized.includes("crédito") || 
+      normalized.includes("cartao") || normalized.includes("cartão")) return "credito";
+  return null;
+}
+
+// ============================================================================
 // 🔢 RETRY TRACKER (in-memory por action)
 // ============================================================================
 
@@ -321,6 +334,48 @@ function fillPendingSlot(
   // 🔢 CASO ESPECIAL: Seleção de cartão por número
   // ========================================================================
   if (pendingSlot === "card") {
+    // ========================================================================
+    // 🔧 FIX CRÍTICO: Se o usuário mencionou pagamento NÃO-crédito,
+    // sobrescrever payment_method e pular seleção de cartão
+    // Ex: "Comprei no Pix" enquanto esperava seleção de cartão
+    // ========================================================================
+    const paymentOverride = extractPaymentFromText(normalized);
+    if (paymentOverride && paymentOverride !== "credito") {
+      console.log(`🔧 [FSM] Usuário corrigiu pagamento para "${paymentOverride}" durante seleção de cartão`);
+      resetRetry(activeAction.id);
+      
+      const updatedSlots: ExtractedSlots = {
+        ...activeAction.slots,
+        payment_method: paymentOverride,
+      };
+      // Remover slots de cartão inválidos
+      delete updatedSlots.card;
+      delete updatedSlots.card_id;
+      delete updatedSlots.card_options;
+      delete updatedSlots._inferred_payment_from_pattern;
+      
+      // Verificar se todos os slots obrigatórios estão preenchidos
+      const requirements = SLOT_REQUIREMENTS["expense"];
+      const missingSlots: string[] = [];
+      if (requirements) {
+        for (const required of requirements.required) {
+          const value = updatedSlots[required];
+          if (!value || (required === "payment_method" && ["unknown", "outro"].includes(String(value).toLowerCase()))) {
+            missingSlots.push(required);
+          }
+        }
+      }
+      
+      return {
+        handled: true,
+        shouldContinue: false,
+        filledSlot: "payment_method",
+        slotValue: paymentOverride,
+        updatedSlots,
+        readyToExecute: missingSlots.length === 0,
+      };
+    }
+    
     const numMatch = rawMessage.trim().match(/^(\d+)$/);
     
     if (numMatch) {
