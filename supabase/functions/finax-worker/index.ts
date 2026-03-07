@@ -4912,14 +4912,35 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       console.log(`💬 [CHAT] Permitido → explícito: ${hasExplicitIntent}, confiança: ${decision.confidence.toFixed(2)}`);
       console.log(`💬 [CHAT] Ativando modo consultor para: "${conteudoProcessado.slice(0, 50)}..."`);
       
-      // Buscar contexto financeiro do usuário
-      const summary = await getMonthlySummary(userId);
+      // Buscar contexto financeiro COMPLETO (com categorias) para o chat
+      let chatSummary = await getMonthlySummary(userId);
+      
+      // Enriquecer com breakdown por categoria
+      try {
+        const { data: relatorioData } = await supabase.rpc("fn_relatorio_mensal", { p_usuario_id: userId });
+        if (relatorioData && relatorioData.categorias && relatorioData.categorias.length > 0) {
+          const catBreakdown = relatorioData.categorias.map((c: any) => 
+            `${c.categoria}: R$ ${Number(c.total).toFixed(2)} (${c.percentual}%)`
+          ).join(", ");
+          chatSummary += `\n\n📊 Categorias do mês: ${catBreakdown}`;
+          
+          if (relatorioData.maiores_gastos && relatorioData.maiores_gastos.length > 0) {
+            const topGastos = relatorioData.maiores_gastos.slice(0, 3).map((g: any) => 
+              `${g.descricao}: R$ ${Number(g.valor).toFixed(2)}`
+            ).join(", ");
+            chatSummary += `\nMaiores gastos: ${topGastos}`;
+          }
+        }
+      } catch (err) {
+        console.error(`⚠️ [CHAT] Erro ao buscar relatório (não-bloqueante):`, err);
+      }
+      
       const activeCtx = await getActiveContext(userId);
       
-      // Chamar IA com contexto para resposta conversacional
+      // Chamar IA com contexto COMPLETO para resposta conversacional
       const chatResponse = await generateChatResponse(
         conteudoProcessado, 
-        summary,
+        chatSummary,
         activeCtx?.label || null,
         nomeUsuario
       );

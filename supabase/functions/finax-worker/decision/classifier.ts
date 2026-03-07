@@ -136,9 +136,10 @@ export function fastTrackExtract(message: string): FastTrackResult {
   
   // ========================================================================
   // PROTEÇÃO: Verificar se começa com termos que NUNCA são gastos
+  // Usar startsWith APENAS para evitar falsos positivos
   // ========================================================================
   for (const prefix of NON_EXPENSE_PREFIXES) {
-    if (normalized.startsWith(prefix) || normalized.includes(prefix)) {
+    if (normalized.startsWith(prefix)) {
       return {
         hasStructure: false,
         slots: {},
