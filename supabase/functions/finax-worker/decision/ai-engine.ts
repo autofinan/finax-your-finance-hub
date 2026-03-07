@@ -88,6 +88,34 @@ OBRIGATÓRIO: Use o campo "thinking" para raciocinar passo a passo ANTES de deci
 Formato: "1. Usuário disse X → 2. Isso indica Y → 3. Conclusão: Z"
 NUNCA pule o raciocínio. Seja BREVE (1-2 linhas).
 
+## 🏷️ REGRA CRÍTICA DE SLOTS
+
+### description (OBRIGATÓRIO para expense/income)
+- DEVE ser um RÓTULO CURTO (1-4 palavras) do que foi comprado/recebido.
+- NÃO copie a frase inteira do usuário.
+- Extraia APENAS o substantivo principal.
+- Exemplos:
+  - "Cara, hoje cedo eu fui tomar café da manhã e gastei" → description: "Café da manhã"
+  - "Fui no shopping e comprei uma casquinha" → description: "Casquinha"
+  - "Meu Uber de ida e volta" → description: "Uber"
+  - "Esqueci de registar um gasto de ontem, foi meu Uber" → description: "Uber"
+  - "Me mandaram 200 do freela" → description: "Freela"
+  - "Recebi meu salário" → description: "Salário"
+  - "Pingou 50 aqui" → description: "" (não há item claro)
+
+### payment_method (OBRIGATÓRIO para expense)
+- Se o usuário mencionar forma de pagamento na mensagem, SEMPRE extrair.
+- "paguei 5 no débito" → payment_method: "debito"
+- "30 reais pix" → payment_method: "pix"
+- "comprei no cartão" → payment_method: "credito"
+- Se NÃO mencionar, NÃO inventar. Deixar vazio.
+
+### amount (OBRIGATÓRIO)
+- SEMPRE extrair o valor numérico da mensagem.
+- "Me mandaram 200" → amount: 200
+- "Gastei 30 reais" → amount: 30
+- "Pingou 50 aqui" → amount: 50
+
 ## 📚 TIPOS DE INTENÇÃO
 
 ### expense - Gasto pontual
@@ -98,9 +126,10 @@ Exemplos: "Mercado 180", "Uber 30 pix", "Dentista 360 débito"
 
 ### income - Entrada de dinheiro
 Dinheiro CHEGANDO.
-Indicadores: "recebi", "caiu", "entrou", "ganhei"
+Indicadores: "recebi", "caiu", "entrou", "ganhei", "me mandaram", "pingou", "depositaram"
 Slots: amount, source, description
-Exemplos: "Recebi 1500", "Caiu 200 de freela"
+Exemplos: "Recebi 1500", "Caiu 200 de freela", "Me mandaram 200", "Pingou 50 aqui"
+⚠️ REGRA: "me mandaram", "pingou", "depositaram" + valor = SEMPRE income!
 
 ### installment - Compra parcelada ⚠️ PRIORIDADE sobre expense se tiver "Nx"
 Slots: amount (TOTAL), installments, description, card
@@ -166,8 +195,13 @@ Slots: cancel_target, target_name
 ### skip - Pular/Não responder ⚠️ PRIORIDADE MÁXIMA se detectar escape
 Indicadores: "não sei", "nenhuma", "nenhum", "depois", "pula", "deixa pra lá"
 
+### edit - Correção rápida
+Indicadores: "era", "errei", "corrige", "desculpa", "na verdade foi"
+Slots: payment_method, description
+⚠️ REGRA: "errei, foi no pix" ou "desculpa, era débito" = SEMPRE edit, NUNCA expense!
+
 ### chat - Conversa/conselho financeiro
-Exemplos: "Tô gastando muito?", "Como economizar?"
+Exemplos: "Tô gastando muito?", "Como economizar?", "O que é CDI?"
 NUNCA retorne unknown para perguntas - use chat!
 
 ### set_context - Período especial (viagem/evento)
@@ -175,9 +209,6 @@ Slots: label, start_date, end_date, action (start|end)
 
 ### control - Saudações e controle
 "Oi", "Bom dia", "Ajuda", "Vamos", "Bora", "Ok", "Tchau"
-
-### edit - Correção rápida
-Indicadores: "era", "errei", "corrige"
 
 ### debt - Registrar dívida
 Indicadores: "registrar dívida", "tenho dívida", "empréstimo", "financiamento"
@@ -197,14 +228,16 @@ Indicadores: "liberdade financeira", "quando vou quitar", "dias de liberdade"
 ## ⚖️ PRIORIDADES
 
 1. skip/cancel > qualquer (se escape)
-2. set_budget/goal/debt > expense (se palavras-chave claras)
-3. installment > expense (se "Nx")
-4. recurring > expense (se periodicidade)
-5. bill > recurring (se utilidades)
-6. add_card > card_event (se "registrar/adicionar")
-7. goal > income (se "guardei/juntei/poupei")
-8. purchase > chat (se pergunta + valor)
-9. chat > unknown (SEMPRE)
+2. edit > expense (se palavras de correção: "errei", "desculpa", "era no", "foi no" + método)
+3. set_budget/goal/debt > expense (se palavras-chave claras)
+4. installment > expense (se "Nx")
+5. recurring > expense (se periodicidade)
+6. bill > recurring (se utilidades)
+7. add_card > card_event (se "registrar/adicionar")
+8. goal > income (se "guardei/juntei/poupei")
+9. income > expense (se "me mandaram/pingou/depositaram/recebi")
+10. purchase > chat (se pergunta + valor)
+11. chat > unknown (SEMPRE)
 
 ## 🚨 SLOTS: INGLÊS APENAS!
 amount, description, payment_method (pix|debito|credito|dinheiro), card, source, installments, bill_name, due_day, closing_day, query_scope, time_range, cancel_target, target_name, label, deadline, periodicity, day_of_month, nome, saldo_devedor, tipo, taxa_juros, valor_minimo

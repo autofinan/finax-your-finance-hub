@@ -2445,9 +2445,17 @@ async function processarJob(job: any): Promise<void> {
     // If user says something like "paguei em pix" and last transaction was
     // registered with unknown/outro payment → reclassify as edit
     // ========================================================================
-    if (decision.actionType === "expense" || decision.actionType === "unknown" || decision.actionType === "chat") {
+    // ========================================================================
+    // 🔄 INTERCEPTOR AMPLIADO: Correção de pagamento OU edit explícito
+    // ========================================================================
+    // Detecta 2 cenários:
+    // A) Mensagem com método de pagamento + última transação tinha "outro/unknown"
+    // B) Mensagem com palavras de correção ("errei", "desculpa", "era no", "foi no")
+    //    + método de pagamento → corrigir INDEPENDENTE do método anterior
+    // ========================================================================
+    {
+      const norm = normalizeText(conteudoProcessado);
       const paymentMentioned = (() => {
-        const norm = normalizeText(conteudoProcessado);
         if (norm.includes("pix")) return "pix";
         if (norm.includes("debito") || norm.includes("débito")) return "debito";
         if (norm.includes("credito") || norm.includes("crédito")) return "credito";
@@ -2455,11 +2463,40 @@ async function processarJob(job: any): Promise<void> {
         return null;
       })();
       
+      const CORRECTION_WORDS = ["errei", "desculpa", "desculpe", "era no", "era na", "era de", "foi no", "foi na", "foi de", "foi em", "na verdade", "corrigi", "corrige"];
+      const hasCorrection = CORRECTION_WORDS.some(w => norm.includes(w));
+      
       if (paymentMentioned) {
-        // Check if last transaction has unknown/outro payment (within 5 min for corrections)
         const lastTx = await getLastTransaction(userId, 5);
-        if (lastTx && (lastTx.forma_pagamento === "outro" || lastTx.forma_pagamento === "unknown" || !lastTx.forma_pagamento)) {
-          console.log(`🔄 [INTERCEPTOR] Corrigindo pagamento da última transação: ${lastTx.id} → ${paymentMentioned}`);
+        
+        // Cenário A: método era "outro/unknown" → corrigir
+        // Cenário B: palavras de correção + método → corrigir independente do método anterior
+        const shouldCorrect = lastTx && (
+          lastTx.forma_pagamento === "outro" || lastTx.forma_pagamento === "unknown" || !lastTx.forma_pagamento ||
+          (hasCorrection && lastTx.forma_pagamento !== paymentMentioned)
+        );
+        
+        if (shouldCorrect && lastTx) {
+          console.log(`🔄 [INTERCEPTOR] Corrigindo pagamento da última transação: ${lastTx.id} → ${paymentMentioned} (correction: ${hasCorrection})`);
+          const result = await updateTransactionPaymentMethod(lastTx.id, paymentMentioned);
+          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+          
+          await supabase.from("historico_conversas").insert({
+            phone_number: payload.phoneNumber,
+            user_id: userId,
+            user_message: conteudoProcessado,
+            ai_response: result.message,
+            tipo: "edit"
+          });
+          return;
+        }
+      }
+      
+      // Cenário C: "edit" classificado pela IA com método
+      if (decision.actionType === "edit" && paymentMentioned) {
+        const lastTx = await getLastTransaction(userId, 10);
+        if (lastTx) {
+          console.log(`🔄 [EDIT] IA classificou como edit → corrigindo: ${lastTx.id} → ${paymentMentioned}`);
           const result = await updateTransactionPaymentMethod(lastTx.id, paymentMentioned);
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
           
@@ -4875,14 +4912,35 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       console.log(`💬 [CHAT] Permitido → explícito: ${hasExplicitIntent}, confiança: ${decision.confidence.toFixed(2)}`);
       console.log(`💬 [CHAT] Ativando modo consultor para: "${conteudoProcessado.slice(0, 50)}..."`);
       
-      // Buscar contexto financeiro do usuário
-      const summary = await getMonthlySummary(userId);
+      // Buscar contexto financeiro COMPLETO (com categorias) para o chat
+      let chatSummary = await getMonthlySummary(userId);
+      
+      // Enriquecer com breakdown por categoria
+      try {
+        const { data: relatorioData } = await supabase.rpc("fn_relatorio_mensal", { p_usuario_id: userId });
+        if (relatorioData && relatorioData.categorias && relatorioData.categorias.length > 0) {
+          const catBreakdown = relatorioData.categorias.map((c: any) => 
+            `${c.categoria}: R$ ${Number(c.total).toFixed(2)} (${c.percentual}%)`
+          ).join(", ");
+          chatSummary += `\n\n📊 Categorias do mês: ${catBreakdown}`;
+          
+          if (relatorioData.maiores_gastos && relatorioData.maiores_gastos.length > 0) {
+            const topGastos = relatorioData.maiores_gastos.slice(0, 3).map((g: any) => 
+              `${g.descricao}: R$ ${Number(g.valor).toFixed(2)}`
+            ).join(", ");
+            chatSummary += `\nMaiores gastos: ${topGastos}`;
+          }
+        }
+      } catch (err) {
+        console.error(`⚠️ [CHAT] Erro ao buscar relatório (não-bloqueante):`, err);
+      }
+      
       const activeCtx = await getActiveContext(userId);
       
-      // Chamar IA com contexto para resposta conversacional
+      // Chamar IA com contexto COMPLETO para resposta conversacional
       const chatResponse = await generateChatResponse(
         conteudoProcessado, 
-        summary,
+        chatSummary,
         activeCtx?.label || null,
         nomeUsuario
       );
