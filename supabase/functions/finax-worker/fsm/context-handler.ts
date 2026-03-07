@@ -197,46 +197,6 @@ export async function handleActiveContext(
   }
   
   // ========================================================================
-  // 3.5 SUBJECT-CHANGE DETECTION FOR PENDING SLOTS (chat leak prevention)
-  // ========================================================================
-  // If user sends a long, non-numeric message while a slot is pending,
-  // it's likely a different intent (e.g. chat question), not a slot answer.
-  // Clear the stale action and let the message flow through to classification.
-  // ========================================================================
-  if (activeAction.pending_slot) {
-    const pendingSlot = activeAction.pending_slot;
-    const hasNumbers = /\d/.test(normalizedMessage);
-    const wordCount = normalizedMessage.split(/\s+/).filter(w => w.length > 1).length;
-    
-    // For amount/value slots: if no numbers AND message is long, it's not an amount
-    if ((pendingSlot === "amount" || pendingSlot === "value" || pendingSlot === "limit") && 
-        !hasNumbers && wordCount > 3) {
-      console.log(`🔄 [FSM] Mensagem longa sem número durante slot "${pendingSlot}" → mudança de assunto`);
-      resetRetry(activeAction.id);
-      return {
-        handled: false,
-        shouldContinue: true,
-        shouldCancel: true,
-        action: "subject_change_chat",
-        message: undefined
-      };
-    }
-    
-    // For payment_method: if message is long and doesn't contain any payment keyword
-    if (pendingSlot === "payment_method" && wordCount > 5 && !extractPaymentFromText(normalizedMessage)) {
-      console.log(`🔄 [FSM] Mensagem longa sem método de pagamento → mudança de assunto`);
-      resetRetry(activeAction.id);
-      return {
-        handled: false,
-        shouldContinue: true,
-        shouldCancel: true,
-        action: "subject_change_chat",
-        message: undefined
-      };
-    }
-  }
-  
-  // ========================================================================
   // 4. STATUS: COLLECTING → preencher slot pendente
   // ========================================================================
   if (activeAction.pending_slot) {

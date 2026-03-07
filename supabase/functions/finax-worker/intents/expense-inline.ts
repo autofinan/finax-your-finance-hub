@@ -76,89 +76,6 @@ interface ExtractedSlots {
 // 💸 REGISTRAR GASTO (versão inline completa do index.ts)
 // ============================================================================
 
-// ============================================================================
-// 🧹 LIMPAR DESCRIÇÃO VERBOSA DA IA
-// ============================================================================
-// Transforma frases longas em rótulos curtos
-// "Cara, hoje cedo eu fui tomar café da manhã e gastei" → "Café da manhã"
-// ============================================================================
-
-const FILLER_WORDS = new Set([
-  "cara", "olha", "entao", "então", "tipo", "assim", "ne", "né", "hj", "hoje",
-  "cedo", "agora", "ontem", "anteontem", "la", "lá", "aqui", "ali",
-  "eu", "fui", "fiz", "tava", "estava", "tive", "dei", "deu",
-  "gastei", "paguei", "comprei", "peguei", "custou", "desembolsei",
-  "registrar", "registra", "anotar", "anota", "lanca", "lançar",
-  "um", "uma", "uns", "umas", "o", "a", "os", "as",
-  "esse", "essa", "este", "esta", "aquele", "aquela",
-  "gasto", "despesa", "valor", "coisa",
-  "por", "com", "sem", "mais", "menos",
-  "meu", "minha", "nosso", "nossa",
-  "muito", "pouco", "bem", "mal",
-  "so", "só", "ja", "já", "ainda",
-  "esqueci", "desculpa", "errei",
-]);
-
-// Verbos/expressões conversacionais que devem ser removidas por completo
-const FILLER_PHRASES = [
-  /\b(?:fui|fomos)\s+(?:tomar|comer|beber|fazer|comprar|pegar|pagar)\s+/gi,
-  /\b(?:eu|a gente|nós)\s+(?:gastei|gastamos|paguei|pagamos|comprei|compramos)\s+/gi,
-  /\b(?:e\s+)?gastei\b/gi,
-  /\b(?:e\s+)?paguei\b/gi,
-  /\bregistrar?\s+(?:um\s+)?gasto\s+(?:de\s+)?/gi,
-  /\bde\s+(?:ontem|hoje|agora)\b/gi,
-  /\bhoje\s+cedo\b/gi,
-  /\besqueci\s+de\s+registrar?\b/gi,
-];
-
-export function cleanDescriptionFromAI(rawDesc: string): string {
-  if (!rawDesc || rawDesc.length < 2) return rawDesc;
-  
-  let cleaned = rawDesc;
-  
-  // 1. Remover frases filler por padrão de regex
-  for (const phrase of FILLER_PHRASES) {
-    cleaned = cleaned.replace(phrase, " ");
-  }
-  
-  // 2. Remover palavras filler individuais do início e fim
-  let words = cleaned.split(/\s+/).filter(w => w.length > 0);
-  
-  // Remover filler words do início
-  while (words.length > 0 && FILLER_WORDS.has(words[0].toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""))) {
-    words.shift();
-  }
-  
-  // Remover filler words do fim
-  while (words.length > 0 && FILLER_WORDS.has(words[words.length - 1].toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""))) {
-    words.pop();
-  }
-  
-  cleaned = words.join(" ").trim();
-  
-  // 3. Remover valores monetários residuais
-  cleaned = cleaned.replace(/r?\$?\s*\d+[.,]?\d*/gi, "").trim();
-  
-  // 4. Remover preposições soltas no início/fim após limpeza
-  cleaned = cleaned.replace(/^(?:de|do|da|no|na|em|por|pro|pra|para)\s+/i, "");
-  cleaned = cleaned.replace(/\s+(?:de|do|da|no|na|em|por)$/i, "");
-  
-  // 5. Limpar espaços
-  cleaned = cleaned.replace(/\s+/g, " ").trim();
-  
-  // 6. Capitalizar
-  if (cleaned.length > 1) {
-    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-  }
-  
-  // 7. Cap em 50 chars
-  if (cleaned.length > 50) {
-    cleaned = cleaned.substring(0, 50).trim();
-  }
-  
-  return cleaned || rawDesc;
-}
-
 export async function registerExpenseInline(
   userId: string, 
   slots: ExtractedSlots, 
@@ -167,8 +84,7 @@ export async function registerExpenseInline(
   closeActionFn?: (actionId: string, entityId?: string) => Promise<void>
 ): Promise<{ success: boolean; message: string; isDuplicate?: boolean }> {
   const valor = slots.amount!;
-  // 🧹 Limpar descrição verbosa ANTES de categorizar
-  const descricao = cleanDescriptionFromAI(slots.description || "");
+  const descricao = slots.description || "";
   
   // 🧠 CATEGORIZAÇÃO IA-FIRST COM AUTOAPRENDIZADO
   const categoryResult = await categorizeDescription(descricao, slots.category);
