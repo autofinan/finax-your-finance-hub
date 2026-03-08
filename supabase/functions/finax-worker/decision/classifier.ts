@@ -89,8 +89,12 @@ const ADD_CARD_PATTERNS = [
 // ============================================================================
 
 const NON_EXPENSE_PREFIXES = [
-  "me mande", "me envia", "manda", "envia", "quero ver", "quero saber",
-  "relatorio", "relatório", "me mande o relatorio", "me manda o relatorio",
+  "me mande o", "me mande um", "me mande meu",
+  "me envia o", "me envia um", "me envia meu",
+  "manda o", "manda um", "manda meu",
+  "envia o", "envia um",
+  "quero ver", "quero saber",
+  "relatorio", "relatório", "me manda o relatorio",
   "qual", "quais", "quanto", "como", "quando", "porque", "por que",
   "resumo", "saldo", "historico", "histórico", "extrato",
   "vou viajar", "viagem", "contexto", "evento", "vou estar",
@@ -135,15 +139,20 @@ export function fastTrackExtract(message: string): FastTrackResult {
   // ========================================================================
   // PROTEÇÃO: Verificar se começa com termos que NUNCA são gastos
   // ========================================================================
-  for (const prefix of NON_EXPENSE_PREFIXES) {
-    if (normalized.startsWith(prefix) || normalized.includes(prefix)) {
-      return {
-        hasStructure: false,
-        slots: {},
-        needsAI: true,
-        confidence: 0.0,
-        reason: `Termo não-gasto detectado: "${prefix}" → delegando para IA`
-      };
+  // EXCEÇÃO: Se contém "mandaram/pingou/depositaram" + número → permitir (é income)
+  const isLikelyIncome = /(?:mandaram|pingou|depositaram|transferiram|caiu)\b/.test(normalized) && /\d/.test(normalized);
+  
+  if (!isLikelyIncome) {
+    for (const prefix of NON_EXPENSE_PREFIXES) {
+      if (normalized.startsWith(prefix) || normalized.includes(prefix)) {
+        return {
+          hasStructure: false,
+          slots: {},
+          needsAI: true,
+          confidence: 0.0,
+          reason: `Termo não-gasto detectado: "${prefix}" → delegando para IA`
+        };
+      }
     }
   }
   

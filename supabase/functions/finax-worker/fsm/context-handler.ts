@@ -189,6 +189,39 @@ export async function handleActiveContext(
   }
   
   // ========================================================================
+  // 2.5 DETECTAR CONVERSA/CHAT QUANDO SLOT PENDENTE (Bug #7)
+  // Se o usuário manda mensagem longa sem números e sem relação com o slot,
+  // liberar o contexto e processar como nova mensagem (chat/query)
+  // ========================================================================
+  if (activeAction.pending_slot) {
+    const words = normalizedMessage.split(/\s+/).filter(w => w.length > 1);
+    const hasNumbers = /\d/.test(normalizedMessage);
+    const pendingSlotType = activeAction.pending_slot;
+    
+    // Se esperando número (amount/value) mas recebeu texto longo sem números
+    const isWaitingForNumber = ["amount", "value", "limit", "estimated_value"].includes(pendingSlotType);
+    const isLikelyChatMessage = words.length >= 5 && !hasNumbers;
+    
+    // Verificar se parece conversa/conselho (verbos de chat)
+    const chatIndicators = ["cara", "to", "tou", "estou", "gastando", "muito", "demais",
+      "como", "dica", "ajuda", "preciso", "quero", "conselho", "economizar",
+      "o que", "por que", "porque", "sera", "posso", "devo", "vale"];
+    const hasChatIndicator = chatIndicators.some(w => normalizedMessage.includes(w));
+    
+    if (isWaitingForNumber && isLikelyChatMessage && hasChatIndicator) {
+      console.log(`🔀 [FSM] Conversa detectada durante slot "${pendingSlotType}" → liberando contexto`);
+      resetRetry(activeAction.id);
+      return {
+        handled: false,
+        shouldContinue: true,
+        shouldCancel: true,
+        action: "subject_change_chat",
+        message: undefined
+      };
+    }
+  }
+  
+  // ========================================================================
   // 3. STATUS: AWAITING_CONFIRMATION → processar sim/não
   // ========================================================================
   if (activeAction.status === "awaiting_confirmation") {

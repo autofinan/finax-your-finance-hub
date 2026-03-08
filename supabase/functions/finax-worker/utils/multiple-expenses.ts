@@ -10,171 +10,206 @@ export interface DetectedExpense {
   confidence: number;
 }
 
+// ============================================================================
+// 🧹 LIMPAR DESCRIÇÃO DE MULTI-GASTO
+// ============================================================================
+
+const DESCRIPTION_NOISE = [
+  "comprei", "paguei", "gastei", "custou", "saiu", "deu", "foi",
+  "peguei", "tomei", "comi", "bebi",
+  "uma", "um", "uns", "umas", "a", "o", "as", "os",
+  "do", "da", "dos", "das", "no", "na", "nos", "nas",
+  "de", "por", "meu", "minha", "meus", "minhas",
+  "eu", "e", "que", "pra", "para", "com",
+  "r$", "reais", "real", "conto",
+];
+
+function cleanMultiDescription(text: string): string {
+  let cleaned = text.toLowerCase().trim();
+  
+  // Remover cada palavra de ruído APENAS como palavras inteiras
+  for (const word of DESCRIPTION_NOISE) {
+    cleaned = cleaned.replace(new RegExp(`\\b${word}\\b`, "gi"), " ");
+  }
+  
+  // Remover números residuais
+  cleaned = cleaned.replace(/\d+[.,]?\d*/g, " ");
+  
+  // Limpar espaços
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  
+  // Capitalizar
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  
+  return cleaned;
+}
+
+// ============================================================================
+// 🔍 ESTRATÉGIA PRINCIPAL: Extrair pares (descrição, valor) de texto natural
+// ============================================================================
+
 /**
  * Detecta múltiplos gastos em uma única mensagem
  * 
  * Exemplos:
- * - "X de 20, Y de 15 e Z de 18" → 3 gastos
- * - "20 café, 15 almoço, 18 uber" → 3 gastos
- * - "gastei 20 no café e 15 no almoço" → 2 gastos
- * - "X 20\nY 15\nZ 18" → 3 gastos
- * 
- * IMPORTANTE: NÃO separar por vírgula quando seguida de dígitos (8,54 é um valor, não dois)
- * 
- * @param message - Texto da mensagem do usuário
- * @returns Array de gastos detectados (vazio se apenas 1 ou nenhum)
+ * - "casquinha 5, cinema 25, pipoca 30, coca 10, uber 20"
+ * - "comprei casquinha por 5, entrada do cinema 25, pipoca 30"
+ * - Áudio: "fui no shopping comprei uma casquinha por r$ 5 a entrada do cinema paguei r$ 25..."
  */
 export function detectMultipleExpenses(message: string): DetectedExpense[] {
+  const original = message.trim();
+  
+  // ========================================================================
+  // ESTRATÉGIA 1: Padrões valor+descrição intercalados no texto natural
+  // Captura: "[contexto] item [por/paguei/R$] valor [item valor...]"
+  // ========================================================================
+  
   const expenses: DetectedExpense[] = [];
-  const original = message;
-  const normalized = original.toLowerCase();
   
-  // ========================================================================
-  // ESTRATÉGIA 1: Separar por delimitadores
-  // IMPORTANTE: Vírgula SÓ separa se NÃO for decimal (não tem dígito logo depois)
-  // ========================================================================
-  // Regex: vírgula seguida de espaço OU quebra de linha OU " e " (conjunção)
-  const separators = /,(?!\d)|\n|\s+e\s+/gi;
-  const parts = original.split(separators).filter(p => p.trim().length > 0);
+  // Padrão A: "item por/paguei R$ valor" ou "item R$ valor" ou "item valor reais"
+  // Captura segmentos entre valores monetários
+  const valuePattern = /(?:r\$\s*|por\s+(?:r\$\s*)?|paguei\s+(?:r\$\s*)?|custou\s+(?:r\$\s*)?|deu\s+(?:r\$\s*)?|saiu\s+(?:r\$\s*)?)(\d+(?:[.,]\d{1,2})?)/gi;
   
-  // Se só tem 1 parte, não há múltiplos
-  if (parts.length <= 1) {
-    // Tentar estratégia 2: múltiplos valores na mesma frase
-    const allValues = original.match(/\d+[.,]?\d*/g);
-    if (!allValues || allValues.length <= 1) {
-      return []; // Apenas 1 valor = não é múltiplo
+  const valueMatches: Array<{ amount: number; index: number; fullMatchEnd: number }> = [];
+  let match;
+  
+  while ((match = valuePattern.exec(original)) !== null) {
+    const amount = parseBrazilianAmount(match[1]);
+    if (amount !== null && amount > 0 && amount < 100000) {
+      valueMatches.push({
+        amount,
+        index: match.index,
+        fullMatchEnd: match.index + match[0].length
+      });
     }
   }
   
-  // ========================================================================
-  // ESTRATÉGIA 2: Extrair pares (descrição + valor) de cada parte
-  // ========================================================================
-  for (const part of parts) {
-    const trimmed = part.trim();
-    if (trimmed.length < 2) continue;
-    
-    // Padrões para extrair valor
-    const valuePatterns = [
-      /r\$\s*([\d.,]+)/i,                           // R$ 20
-      /(\d+[.,]?\d*)\s*(?:reais?|conto|pila)/i,    // 20 reais
-      /([\d.,]+)\s*$/,                              // termina com número
-      /(?:de|por|:)\s*([\d.,]+)/i,                 // de 20, por 20
-      /^([\d.,]+)\s+/,                              // começa com número
-    ];
-    
-    let amount: number | null = null;
-    let matchedValue = "";
-    
-    for (const pattern of valuePatterns) {
-      const match = trimmed.match(pattern);
-      if (match && match[1]) {
-        // USAR parseBrazilianAmount para lidar com vírgula decimal
-        const parsed = parseBrazilianAmount(match[1]);
-        if (parsed !== null && parsed > 0 && parsed < 100000) {
-          amount = parsed;
-          matchedValue = match[0];
-          break;
-        }
+  // Se encontrou 2+ valores, extrair descrições entre eles
+  if (valueMatches.length >= 2) {
+    for (let i = 0; i < valueMatches.length; i++) {
+      let descStart: number;
+      let descEnd: number;
+      
+      if (i === 0) {
+        descStart = 0;
+        descEnd = valueMatches[i].index;
+      } else {
+        descStart = valueMatches[i - 1].fullMatchEnd;
+        descEnd = valueMatches[i].index;
       }
-    }
-    
-    if (amount === null) continue;
-    
-    // Extrair descrição (remover o valor e palavras de ligação)
-    let description = trimmed
-      .replace(matchedValue, "")
-      .replace(/\b(r\$|reais?|conto|pila|de|por|no|na|em|um|uma|o|a|com|para|pra)\b/gi, "")
-      .replace(/\d+[.,]?\d*/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    
-    // Capitalizar primeira letra
-    if (description.length > 1) {
-      description = description.charAt(0).toUpperCase() + description.slice(1);
-    }
-    
-    // Só adicionar se tiver descrição razoável
-    if (description.length > 1 && description.length < 50) {
-      expenses.push({
-        amount,
-        description,
-        confidence: 0.8
-      });
-    } else if (description.length === 0) {
-      // Sem descrição, usar placeholder
-      expenses.push({
-        amount,
-        description: `Gasto de R$ ${amount.toFixed(2)}`,
-        confidence: 0.6
-      });
-    }
-  }
-  
-  // ========================================================================
-  // ESTRATÉGIA 3: Fallback para padrões específicos
-  // ========================================================================
-  if (expenses.length <= 1) {
-    // Padrão: "20 café 15 almoço 18 uber" (valores intercalados)
-    const intercalatedPattern = /(\d+[.,]?\d*)\s+([a-záéíóúãõâêîôûç]+(?:\s+[a-záéíóúãõâêîôûç]+)?)/gi;
-    let match;
-    const fallbackExpenses: DetectedExpense[] = [];
-    
-    while ((match = intercalatedPattern.exec(original)) !== null) {
-      const amount = parseBrazilianAmount(match[1]);
-      const description = match[2].trim();
       
-      if (amount === null) continue;
+      let rawDesc = original.substring(descStart, descEnd).trim();
+      const cleanedDesc = cleanMultiDescription(rawDesc);
       
-      if (amount > 0 && amount < 100000 && description.length > 1) {
-        fallbackExpenses.push({
-          amount,
-          description: description.charAt(0).toUpperCase() + description.slice(1),
-          confidence: 0.7
+      if (cleanedDesc.length >= 2 && cleanedDesc.length < 50) {
+        expenses.push({
+          amount: valueMatches[i].amount,
+          description: cleanedDesc,
+          confidence: 0.85
+        });
+      } else if (cleanedDesc.length < 2) {
+        // Sem descrição válida → usar placeholder
+        expenses.push({
+          amount: valueMatches[i].amount,
+          description: `Gasto R$ ${valueMatches[i].amount.toFixed(2)}`,
+          confidence: 0.6
         });
       }
     }
     
-    if (fallbackExpenses.length > 1) {
-      return fallbackExpenses;
+    if (expenses.length >= 2) {
+      return deduplicateExpenses(expenses);
     }
+  }
+  
+  // ========================================================================
+  // ESTRATÉGIA 2: Separar por delimitadores (vírgula, "e", quebra de linha)
+  // ========================================================================
+  const separators = /,(?!\d)|\n|\s+e\s+/gi;
+  const parts = original.split(separators).filter(p => p.trim().length > 2);
+  
+  if (parts.length >= 2) {
+    const partExpenses: DetectedExpense[] = [];
     
-    // Padrão: "café 20 almoço 15 uber 18" (descrição antes do valor)
-    const reversedPattern = /([a-záéíóúãõâêîôûç]+(?:\s+[a-záéíóúãõâêîôûç]+)?)\s+(\d+[.,]?\d*)/gi;
-    const reversedExpenses: DetectedExpense[] = [];
-    
-    while ((match = reversedPattern.exec(original)) !== null) {
-      const description = match[1].trim();
-      const amount = parseBrazilianAmount(match[2]);
+    for (const part of parts) {
+      const trimmed = part.trim();
+      
+      // Extrair valor do segmento
+      const valPatterns = [
+        /(?:r\$\s*)([\d.,]+)/i,
+        /(\d+[.,]?\d*)\s*(?:reais?|conto)/i,
+        /(?:por|paguei|custou|deu)\s+(?:r\$\s*)?([\d.,]+)/i,
+        /([\d.,]+)\s*$/,
+        /^([\d.,]+)\s+/,
+      ];
+      
+      let amount: number | null = null;
+      let matchedStr = "";
+      
+      for (const pat of valPatterns) {
+        const m = trimmed.match(pat);
+        if (m) {
+          const val = m[1] || m[2];
+          if (val) {
+            const parsed = parseBrazilianAmount(val);
+            if (parsed !== null && parsed > 0 && parsed < 100000) {
+              amount = parsed;
+              matchedStr = m[0];
+              break;
+            }
+          }
+        }
+      }
       
       if (amount === null) continue;
       
-      if (amount > 0 && amount < 100000 && description.length > 1) {
-        // Filtrar palavras que não são descrições válidas
-        const invalidWords = ["de", "por", "no", "na", "em", "um", "uma", "gastei", "comprei", "paguei"];
-        if (!invalidWords.includes(description.toLowerCase())) {
-          reversedExpenses.push({
-            amount,
-            description: description.charAt(0).toUpperCase() + description.slice(1),
-            confidence: 0.7
-          });
-        }
+      // Extrair descrição removendo o valor
+      let rawDesc = trimmed.replace(matchedStr, " ");
+      const cleaned = cleanMultiDescription(rawDesc);
+      
+      if (cleaned.length >= 2) {
+        partExpenses.push({ amount, description: cleaned, confidence: 0.8 });
+      } else {
+        partExpenses.push({ amount, description: `Gasto R$ ${amount.toFixed(2)}`, confidence: 0.6 });
       }
     }
     
-    if (reversedExpenses.length > 1) {
-      return reversedExpenses;
+    if (partExpenses.length >= 2) {
+      return deduplicateExpenses(partExpenses);
     }
   }
   
   // ========================================================================
-  // VALIDAÇÃO FINAL
+  // ESTRATÉGIA 3: Padrão intercalado "desc valor desc valor"
   // ========================================================================
-  // Só retornar se tiver MAIS de 1 gasto detectado
-  if (expenses.length <= 1) {
-    return [];
+  const intercalatedPattern = /([a-záàâãéèêíïóôõöúçñ\s]{2,30}?)\s+(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/gi;
+  const fallbackExpenses: DetectedExpense[] = [];
+  
+  while ((match = intercalatedPattern.exec(original)) !== null) {
+    const amount = parseBrazilianAmount(match[2]);
+    if (amount === null || amount <= 0 || amount >= 100000) continue;
+    
+    const cleaned = cleanMultiDescription(match[1]);
+    if (cleaned.length >= 2) {
+      fallbackExpenses.push({ amount, description: cleaned, confidence: 0.7 });
+    }
   }
   
-  // Remover duplicatas (mesmo valor + descrição similar)
+  if (fallbackExpenses.length >= 2) {
+    return deduplicateExpenses(fallbackExpenses);
+  }
+  
+  // Não é múltiplo
+  return [];
+}
+
+// ============================================================================
+// 🔁 DEDUPLICAR
+// ============================================================================
+
+function deduplicateExpenses(expenses: DetectedExpense[]): DetectedExpense[] {
   const unique = expenses.reduce((acc, curr) => {
     const exists = acc.some(e => 
       e.amount === curr.amount && 
@@ -184,8 +219,9 @@ export function detectMultipleExpenses(message: string): DetectedExpense[] {
     return acc;
   }, [] as DetectedExpense[]);
   
-  console.log(`💸 [MULTI] Detectados ${unique.length} gastos:`, unique.map(e => `${e.description}=${e.amount}`).join(", "));
+  if (unique.length <= 1) return [];
   
+  console.log(`💸 [MULTI] Detectados ${unique.length} gastos:`, unique.map(e => `${e.description}=${e.amount}`).join(", "));
   return unique;
 }
 

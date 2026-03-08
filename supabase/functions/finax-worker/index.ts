@@ -2445,9 +2445,12 @@ async function processarJob(job: any): Promise<void> {
     // If user says something like "paguei em pix" and last transaction was
     // registered with unknown/outro payment → reclassify as edit
     // ========================================================================
-    if (decision.actionType === "expense" || decision.actionType === "unknown" || decision.actionType === "chat") {
+    // ========================================================================
+    // 🔄 INTERCEPTOR EXPANDIDO: Correção de pagamento OU palavras de correção
+    // ========================================================================
+    {
+      const norm = normalizeText(conteudoProcessado);
       const paymentMentioned = (() => {
-        const norm = normalizeText(conteudoProcessado);
         if (norm.includes("pix")) return "pix";
         if (norm.includes("debito") || norm.includes("débito")) return "debito";
         if (norm.includes("credito") || norm.includes("crédito")) return "credito";
@@ -2455,11 +2458,19 @@ async function processarJob(job: any): Promise<void> {
         return null;
       })();
       
+      // Detectar palavras de correção
+      const correctionWords = ["errei", "desculpa", "era no", "era na", "foi no", "foi na", "nao foi", "não foi", "errado", "corrige", "corrigir"];
+      const hasCorrectionWord = correctionWords.some(w => norm.includes(w));
+      
       if (paymentMentioned) {
-        // Check if last transaction has unknown/outro payment (within 5 min for corrections)
         const lastTx = await getLastTransaction(userId, 5);
-        if (lastTx && (lastTx.forma_pagamento === "outro" || lastTx.forma_pagamento === "unknown" || !lastTx.forma_pagamento)) {
-          console.log(`🔄 [INTERCEPTOR] Corrigindo pagamento da última transação: ${lastTx.id} → ${paymentMentioned}`);
+        if (lastTx && (
+          // Caso original: payment era unknown/outro
+          lastTx.forma_pagamento === "outro" || lastTx.forma_pagamento === "unknown" || !lastTx.forma_pagamento ||
+          // Caso novo: usuário falou palavra de correção + método de pagamento
+          (hasCorrectionWord && lastTx.forma_pagamento !== paymentMentioned)
+        )) {
+          console.log(`🔄 [INTERCEPTOR] Corrigindo pagamento da última transação: ${lastTx.id} → ${paymentMentioned} (correção: ${hasCorrectionWord})`);
           const result = await updateTransactionPaymentMethod(lastTx.id, paymentMentioned);
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
           
@@ -4875,9 +4886,39 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       console.log(`💬 [CHAT] Permitido → explícito: ${hasExplicitIntent}, confiança: ${decision.confidence.toFixed(2)}`);
       console.log(`💬 [CHAT] Ativando modo consultor para: "${conteudoProcessado.slice(0, 50)}..."`);
       
-      // Buscar contexto financeiro do usuário
-      const summary = await getMonthlySummary(userId);
+      // Buscar contexto financeiro do usuário COM CATEGORIAS (Bug #8)
+      let summary = await getMonthlySummary(userId);
       const activeCtx = await getActiveContext(userId);
+      
+      // Enriquecer summary com breakdown por categoria
+      try {
+        const inicioMesChat = new Date();
+        inicioMesChat.setDate(1);
+        inicioMesChat.setHours(0, 0, 0, 0);
+        
+        const { data: catBreakdown } = await supabase
+          .from("transacoes")
+          .select("categoria, valor")
+          .eq("usuario_id", userId)
+          .eq("tipo", "saida")
+          .eq("status", "confirmada")
+          .gte("data", inicioMesChat.toISOString());
+        
+        if (catBreakdown && catBreakdown.length > 0) {
+          const byCategory: Record<string, number> = {};
+          for (const t of catBreakdown) {
+            const cat = t.categoria || "outros";
+            byCategory[cat] = (byCategory[cat] || 0) + Number(t.valor);
+          }
+          const catList = Object.entries(byCategory)
+            .sort((a, b) => b[1] - a[1])
+            .map(([cat, total]) => `${cat}: R$ ${total.toFixed(2)}`)
+            .join(", ");
+          summary += `\n\nDetalhamento por categoria: ${catList}`;
+        }
+      } catch (catErr) {
+        console.error("⚠️ [CHAT] Erro ao buscar categorias (não-bloqueante):", catErr);
+      }
       
       // Chamar IA com contexto para resposta conversacional
       const chatResponse = await generateChatResponse(
