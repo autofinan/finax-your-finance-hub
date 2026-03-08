@@ -89,8 +89,12 @@ const ADD_CARD_PATTERNS = [
 // ============================================================================
 
 const NON_EXPENSE_PREFIXES = [
-  "me mande", "me envia", "manda", "envia", "quero ver", "quero saber",
-  "relatorio", "relatório", "me mande o relatorio", "me manda o relatorio",
+  "me mande o", "me mande um", "me mande meu",
+  "me envia o", "me envia um", "me envia meu",
+  "manda o", "manda um", "manda meu",
+  "envia o", "envia um",
+  "quero ver", "quero saber",
+  "relatorio", "relatório", "me manda o relatorio",
   "qual", "quais", "quanto", "como", "quando", "porque", "por que",
   "resumo", "saldo", "historico", "histórico", "extrato",
   "vou viajar", "viagem", "contexto", "evento", "vou estar",
