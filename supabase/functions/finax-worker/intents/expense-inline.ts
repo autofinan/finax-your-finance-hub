@@ -73,6 +73,78 @@ interface ExtractedSlots {
 }
 
 // ============================================================================
+// 🧹 LIMPEZA INTELIGENTE DE DESCRIÇÃO (Bug #1)
+// ============================================================================
+
+function cleanDescriptionSmart(text: string): string {
+  if (!text) return "";
+  
+  let cleaned = text.trim();
+  
+  // Se já é curta (1-4 palavras), apenas capitalizar
+  const wordCount = cleaned.split(/\s+/).length;
+  if (wordCount <= 4) {
+    // Remover apenas verbos e termos de pagamento óbvios
+    cleaned = cleaned
+      .replace(/\b(gastei|paguei|comprei|custou|saiu|foi|deu)\b/gi, "")
+      .replace(/\b(r\$|reais?|conto)\b/gi, "")
+      .replace(/\d+[.,]?\d*/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    
+    if (cleaned.length > 0) {
+      return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    }
+    return "";
+  }
+  
+  // Para textos longos: extrair apenas o substantivo principal
+  // Remover verbos e conversação
+  const removePatterns = [
+    /\b(cara|mano|irmao|irma|entao|tipo|bom|olha|ai)\b/gi,
+    /\b(hoje|ontem|amanha|cedo|tarde|noite|agora|depois|antes)\b/gi,
+    /\b(eu|meu|minha|fui|tava|estava|estou|to|tou)\b/gi,
+    /\b(gastei|paguei|comprei|custou|fui|saiu|foi|deu|peguei)\b/gi,
+    /\b(recarreguei|coloquei|carreguei|tomei|comi|bebi)\b/gi,
+    /\b(esqueci|registrar|anotar|registar|lancar)\b/gi,
+    /\b(um|uma|uns|umas|esse|essa|aquele|aquela)\b/gi,
+    /\b(r\$|reais?|conto|pila)\b/gi,
+    /\b(no|na|do|da|pelo|pela|via|com|para|pra|por|em|de|que|e)\b/gi,
+    /\d+[.,]?\d*/g,
+    /\b(pix|debito|débito|credito|crédito|dinheiro|cartao|cartão)\b/gi,
+  ];
+  
+  for (const pattern of removePatterns) {
+    cleaned = cleaned.replace(pattern, " ");
+  }
+  
+  // Limpar espaços
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  
+  // Se ficou muito curto ou vazio, tentar abordagem alternativa:
+  // Pegar substantivos entre verbos e valores
+  if (cleaned.length < 2) {
+    // Fallback: pegar a parte do texto entre "tomar/comprar/pagar" e "gastei/paguei/R$"
+    const fallbackMatch = text.match(/(?:tomar|comprar|pagar|comer|beber)\s+(.+?)(?:\s+(?:gastei|paguei|custou|e|por|r\$|\d))/i);
+    if (fallbackMatch) {
+      cleaned = fallbackMatch[1].trim();
+    }
+  }
+  
+  // Limitar a 50 caracteres
+  if (cleaned.length > 50) {
+    cleaned = cleaned.substring(0, 50).trim();
+  }
+  
+  // Capitalizar
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  
+  return cleaned || "";
+}
+
+// ============================================================================
 // 💸 REGISTRAR GASTO (versão inline completa do index.ts)
 // ============================================================================
 
@@ -84,7 +156,10 @@ export async function registerExpenseInline(
   closeActionFn?: (actionId: string, entityId?: string) => Promise<void>
 ): Promise<{ success: boolean; message: string; isDuplicate?: boolean }> {
   const valor = slots.amount!;
-  const descricao = slots.description || "";
+  let descricao = slots.description || "";
+  
+  // 🧹 LIMPAR DESCRIÇÃO: extrair apenas o item/serviço
+  descricao = cleanDescriptionSmart(descricao);
   
   // 🧠 CATEGORIZAÇÃO IA-FIRST COM AUTOAPRENDIZADO
   const categoryResult = await categorizeDescription(descricao, slots.category);
