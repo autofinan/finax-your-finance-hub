@@ -2445,9 +2445,12 @@ async function processarJob(job: any): Promise<void> {
     // If user says something like "paguei em pix" and last transaction was
     // registered with unknown/outro payment → reclassify as edit
     // ========================================================================
-    if (decision.actionType === "expense" || decision.actionType === "unknown" || decision.actionType === "chat") {
+    // ========================================================================
+    // 🔄 INTERCEPTOR EXPANDIDO: Correção de pagamento OU palavras de correção
+    // ========================================================================
+    {
+      const norm = normalizeText(conteudoProcessado);
       const paymentMentioned = (() => {
-        const norm = normalizeText(conteudoProcessado);
         if (norm.includes("pix")) return "pix";
         if (norm.includes("debito") || norm.includes("débito")) return "debito";
         if (norm.includes("credito") || norm.includes("crédito")) return "credito";
@@ -2455,11 +2458,19 @@ async function processarJob(job: any): Promise<void> {
         return null;
       })();
       
+      // Detectar palavras de correção
+      const correctionWords = ["errei", "desculpa", "era no", "era na", "foi no", "foi na", "nao foi", "não foi", "errado", "corrige", "corrigir"];
+      const hasCorrectionWord = correctionWords.some(w => norm.includes(w));
+      
       if (paymentMentioned) {
-        // Check if last transaction has unknown/outro payment (within 5 min for corrections)
         const lastTx = await getLastTransaction(userId, 5);
-        if (lastTx && (lastTx.forma_pagamento === "outro" || lastTx.forma_pagamento === "unknown" || !lastTx.forma_pagamento)) {
-          console.log(`🔄 [INTERCEPTOR] Corrigindo pagamento da última transação: ${lastTx.id} → ${paymentMentioned}`);
+        if (lastTx && (
+          // Caso original: payment era unknown/outro
+          lastTx.forma_pagamento === "outro" || lastTx.forma_pagamento === "unknown" || !lastTx.forma_pagamento ||
+          // Caso novo: usuário falou palavra de correção + método de pagamento
+          (hasCorrectionWord && lastTx.forma_pagamento !== paymentMentioned)
+        )) {
+          console.log(`🔄 [INTERCEPTOR] Corrigindo pagamento da última transação: ${lastTx.id} → ${paymentMentioned} (correção: ${hasCorrectionWord})`);
           const result = await updateTransactionPaymentMethod(lastTx.id, paymentMentioned);
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
           
