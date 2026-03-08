@@ -96,6 +96,22 @@ Indicadores: "gastei", "paguei", "comprei", "custou"
 Slots: amount, payment_method, description, category, card
 Exemplos: "Mercado 180", "Uber 30 pix", "Dentista 360 débito"
 
+**REGRA DE DESCRIÇÃO (CRÍTICA):**
+O slot \`description\` DEVE conter APENAS o item/local/serviço comprado (1-4 palavras).
+- ✅ Correto: "café da manhã", "uber", "mercado", "netflix", "casquinha", "pipoca"
+- ❌ Errado: "Cara hoje cedo fui tomar café da manhã e gastei"
+- ❌ Errado: "Eu paguei no mercado ontem"
+- ❌ Errado: "Esqueci de registar um gasto de ontem, foi meu Uber paguei no débito"
+**Como extrair:** Identificar o SUBSTANTIVO principal (o que foi comprado/pago). Remover verbos, conversação, contexto temporal.
+Exemplos: "Cara fui tomar café da manhã e gastei 20" → "café da manhã" | "paguei meu uber" → "uber" | "comprei roupa na loja" → "roupa"
+
+**REGRA DE PAYMENT_METHOD (CRÍTICA):**
+Se o usuário mencionou forma de pagamento na mensagem, SEMPRE extrair para \`payment_method\`.
+- "paguei 5 no débito" → payment_method: "debito"
+- "gastei 30 no pix" → payment_method: "pix"
+- "comprei no crédito" → payment_method: "credito"
+NUNCA deixar payment_method vazio se o usuário informou.
+
 ### income - Entrada de dinheiro
 Dinheiro CHEGANDO.
 Indicadores: "recebi", "caiu", "entrou", "ganhei"
