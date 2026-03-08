@@ -139,15 +139,20 @@ export function fastTrackExtract(message: string): FastTrackResult {
   // ========================================================================
   // PROTEÇÃO: Verificar se começa com termos que NUNCA são gastos
   // ========================================================================
-  for (const prefix of NON_EXPENSE_PREFIXES) {
-    if (normalized.startsWith(prefix) || normalized.includes(prefix)) {
-      return {
-        hasStructure: false,
-        slots: {},
-        needsAI: true,
-        confidence: 0.0,
-        reason: `Termo não-gasto detectado: "${prefix}" → delegando para IA`
-      };
+  // EXCEÇÃO: Se contém "mandaram/pingou/depositaram" + número → permitir (é income)
+  const isLikelyIncome = /(?:mandaram|pingou|depositaram|transferiram|caiu)\b/.test(normalized) && /\d/.test(normalized);
+  
+  if (!isLikelyIncome) {
+    for (const prefix of NON_EXPENSE_PREFIXES) {
+      if (normalized.startsWith(prefix) || normalized.includes(prefix)) {
+        return {
+          hasStructure: false,
+          slots: {},
+          needsAI: true,
+          confidence: 0.0,
+          reason: `Termo não-gasto detectado: "${prefix}" → delegando para IA`
+        };
+      }
     }
   }
   

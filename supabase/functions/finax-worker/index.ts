@@ -4886,9 +4886,39 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       console.log(`💬 [CHAT] Permitido → explícito: ${hasExplicitIntent}, confiança: ${decision.confidence.toFixed(2)}`);
       console.log(`💬 [CHAT] Ativando modo consultor para: "${conteudoProcessado.slice(0, 50)}..."`);
       
-      // Buscar contexto financeiro do usuário
-      const summary = await getMonthlySummary(userId);
+      // Buscar contexto financeiro do usuário COM CATEGORIAS (Bug #8)
+      let summary = await getMonthlySummary(userId);
       const activeCtx = await getActiveContext(userId);
+      
+      // Enriquecer summary com breakdown por categoria
+      try {
+        const inicioMesChat = new Date();
+        inicioMesChat.setDate(1);
+        inicioMesChat.setHours(0, 0, 0, 0);
+        
+        const { data: catBreakdown } = await supabase
+          .from("transacoes")
+          .select("categoria, valor")
+          .eq("usuario_id", userId)
+          .eq("tipo", "saida")
+          .eq("status", "confirmada")
+          .gte("data", inicioMesChat.toISOString());
+        
+        if (catBreakdown && catBreakdown.length > 0) {
+          const byCategory: Record<string, number> = {};
+          for (const t of catBreakdown) {
+            const cat = t.categoria || "outros";
+            byCategory[cat] = (byCategory[cat] || 0) + Number(t.valor);
+          }
+          const catList = Object.entries(byCategory)
+            .sort((a, b) => b[1] - a[1])
+            .map(([cat, total]) => `${cat}: R$ ${total.toFixed(2)}`)
+            .join(", ");
+          summary += `\n\nDetalhamento por categoria: ${catList}`;
+        }
+      } catch (catErr) {
+        console.error("⚠️ [CHAT] Erro ao buscar categorias (não-bloqueante):", catErr);
+      }
       
       // Chamar IA com contexto para resposta conversacional
       const chatResponse = await generateChatResponse(

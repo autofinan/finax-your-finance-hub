@@ -114,9 +114,10 @@ NUNCA deixar payment_method vazio se o usuário informou.
 
 ### income - Entrada de dinheiro
 Dinheiro CHEGANDO.
-Indicadores: "recebi", "caiu", "entrou", "ganhei"
+Indicadores: "recebi", "caiu", "entrou", "ganhei", "mandaram", "me mandaram", "pingou", "depositaram", "transferiram"
 Slots: amount, source, description
-Exemplos: "Recebi 1500", "Caiu 200 de freela"
+Exemplos: "Recebi 1500", "Caiu 200 de freela", "Me mandaram 200", "Pingou 50 aqui"
+⚠️ REGRA: "me mandaram X", "pingou X", "caiu X" = SEMPRE income com amount=X
 
 ### installment - Compra parcelada ⚠️ PRIORIDADE sobre expense se tiver "Nx"
 Slots: amount (TOTAL), installments, description, card
