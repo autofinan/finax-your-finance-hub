@@ -86,7 +86,8 @@ export async function queryCardExpenses(userId: string): Promise<string> {
     .eq("tipo", "saida")
     .eq("forma_pagamento", "credito")
     .gte("data", inicioMes.toISOString())
-    .eq("status", "confirmada");
+    .eq("status", "confirmada")
+    .limit(10000);
   
   if (!gastos || gastos.length === 0) {
     return "Nenhum gasto no crédito este mês 💳";
