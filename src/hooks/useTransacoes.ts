@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Transacao } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
@@ -19,7 +19,7 @@ export function useTransacoes(usuarioIdProp?: string) {
   // Priorizar prop, depois o resolvido via auth
   const usuarioId = usuarioIdProp || resolvedUsuarioId;
 
-  const fetchTransacoes = async (pageNum = 0, append = false) => {
+  const fetchTransacoes = useCallback(async (pageNum = 0, append = false) => {
     if (loadingUsuarioId) return; // Aguardar resolver usuario_id
     
     try {
@@ -60,7 +60,7 @@ export function useTransacoes(usuarioIdProp?: string) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [usuarioId, loadingUsuarioId, toast]);
 
   const loadMore = () => {
     if (!hasMore || loading) return;
@@ -162,7 +162,52 @@ export function useTransacoes(usuarioIdProp?: string) {
     if (!loadingUsuarioId) {
       fetchTransacoes();
     }
-  }, [usuarioId, loadingUsuarioId]);
+  }, [fetchTransacoes, loadingUsuarioId]);
+
+  // ✅ REALTIME: Atualizar transações quando houver mudanças
+  useEffect(() => {
+    if (!usuarioId) return;
+
+    const channel = supabase
+      .channel('transacoes-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'transacoes',
+          filter: `usuario_id=eq.${usuarioId}`,
+        },
+        (payload) => {
+          // Adicionar nova transação ao topo se não foi adicionada manualmente
+          const newTrans = payload.new as Transacao;
+          setTransacoes((prev) => {
+            if (prev.some((t) => t.id === newTrans.id)) return prev;
+            return [newTrans, ...prev];
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'transacoes',
+          filter: `usuario_id=eq.${usuarioId}`,
+        },
+        (payload) => {
+          const deletedId = payload.old?.id;
+          if (deletedId) {
+            setTransacoes((prev) => prev.filter((t) => t.id !== deletedId));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [usuarioId]);
 
   return {
     transacoes,

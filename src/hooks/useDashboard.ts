@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { DashboardUsuario, ResumoMensal } from '@/types/finance';
 import { useToast } from '@/hooks/use-toast';
@@ -9,7 +9,7 @@ export function useDashboard(usuarioId?: string) {
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = useCallback(async () => {
     try {
       setLoading(true);
 
@@ -62,11 +62,37 @@ export function useDashboard(usuarioId?: string) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [usuarioId, toast]);
 
   useEffect(() => {
     fetchDashboard();
-  }, [usuarioId]);
+  }, [fetchDashboard]);
+
+  // ✅ REALTIME: Atualizar dashboard quando transações mudam
+  useEffect(() => {
+    if (!usuarioId) return;
+
+    const channel = supabase
+      .channel('dashboard-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'transacoes',
+          filter: `usuario_id=eq.${usuarioId}`,
+        },
+        () => {
+          // Refetch dashboard quando houver mudanças
+          fetchDashboard();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [usuarioId, fetchDashboard]);
 
   return {
     dashboard,

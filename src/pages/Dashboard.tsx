@@ -234,6 +234,7 @@ const Dashboard = () => {
             {/* Right Column - 1/3 */}
             <div className="space-y-6">
               <FreedomCard usuarioId={usuarioId || undefined} />
+              <ProgressoAcumuladoCard usuarioId={usuarioId || undefined} />
               <PlanoCard />
               <BudgetCard />
               <QuickActions onAddTransaction={() => setFormOpen(true)} />
