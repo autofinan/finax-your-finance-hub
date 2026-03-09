@@ -96,6 +96,21 @@ const Metas = () => {
     setCategory('');
   };
 
+  const handleCreateFreq = async () => {
+    if (!freqNome || !freqCategoria || !freqLimite) return;
+    await criarMetaFrequencia({
+      nome: freqNome,
+      categoria: freqCategoria,
+      limite_mensal: parseInt(freqLimite),
+      palavras_chave: freqPalavras.split(',').map(p => p.trim()).filter(Boolean),
+    });
+    setIsCreateFreqOpen(false);
+    setFreqNome('');
+    setFreqCategoria('');
+    setFreqLimite('');
+    setFreqPalavras('');
+  };
+
   const handleAddProgress = async () => {
     if (!selectedMeta || !progressValue) return;
     
