@@ -132,19 +132,23 @@ export default function Dividas() {
 
   return (
     <AppLayout>
-      <div className="space-y-6">
+      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 p-6 lg:p-8">
+        <div className="relative z-10 max-w-[1800px] mx-auto space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-black text-foreground">Dívidas</h1>
-            <p className="text-sm text-muted-foreground">Gerencie suas dívidas e acelere sua liberdade financeira</p>
+            <p className="text-slate-500 font-medium mb-1">Gestão de dívidas</p>
+            <h1 className="text-4xl font-bold text-white">Dívidas <span className="text-indigo-400">📉</span></h1>
+            <p className="text-sm text-slate-400 mt-1">Gerencie suas dívidas e acelere sua liberdade financeira</p>
           </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button><Plus className="w-4 h-4 mr-2" />Nova Dívida</Button>
+              <button className="flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-blue-500 px-6 py-3 rounded-xl font-bold text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all hover:scale-[1.02]">
+                <Plus className="w-5 h-5" />Nova Dívida
+              </button>
             </DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Registrar Dívida</DialogTitle></DialogHeader>
+            <DialogContent className="bg-slate-900 border-slate-700">
+              <DialogHeader><DialogTitle className="text-white">Registrar Dívida</DialogTitle></DialogHeader>
               <DividaForm onSubmit={handleAdd} tipos={TIPOS_DIVIDA} />
             </DialogContent>
           </Dialog>
