@@ -178,19 +178,17 @@ export default function Dividas() {
               </div>
             </div>
           </div>
-          <Card className="bg-card border-border">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-3 rounded-xl bg-primary/10">
-                  <AlertTriangle className="w-6 h-6 text-primary" />
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Dívidas Ativas</p>
-                  <p className="text-xl font-black text-primary">{dividasAtivas.length}</p>
-                </div>
+          <div className="bg-slate-900/40 backdrop-blur-xl border border-indigo-500/20 rounded-2xl p-4 hover:border-indigo-500/40 transition-all">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-indigo-500/10">
+                <AlertTriangle className="w-5 h-5 text-indigo-400" />
               </div>
-            </CardContent>
-          </Card>
+              <div>
+                <p className="text-xs text-slate-500 uppercase tracking-wide">Dívidas Ativas</p>
+                <p className="text-xl font-bold text-indigo-400">{dividasAtivas.length}</p>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Simulador de Quitação */}
