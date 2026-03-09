@@ -33,7 +33,6 @@ const Metas = () => {
   const { getLimit } = usePlanoStatus();
   const maxGoals = getLimit('maxGoals') ?? 999;
   const {
-    metas,
     loading,
     criarMeta,
     adicionarProgresso,
