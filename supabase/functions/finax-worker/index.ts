@@ -194,6 +194,23 @@ async function processarJob(job: any): Promise<void> {
   console.log(`💬 [WORKER] Msg: "${payload.messageText?.slice(0, 50)}${payload.messageText?.length > 50 ? '...' : ''}"`);
   
   try {
+    // ========================================================================
+    // 🧹 FIX #1: TTL CLEANUP — Cancelar actions expiradas ANTES de processar
+    // ========================================================================
+    try {
+      const { count } = await supabase
+        .from("actions")
+        .update({ status: "expired" })
+        .lt("expires_at", new Date().toISOString())
+        .in("status", ["collecting", "awaiting_input", "pending_selection"]);
+      
+      if (count && count > 0) {
+        console.log(`🧹 [TTL_CLEANUP] ${count} action(s) expirada(s) canceladas`);
+      }
+    } catch (ttlErr) {
+      console.warn(`🧹 [TTL_CLEANUP] Erro (não-bloqueante):`, ttlErr);
+    }
+    
     // Buscar usuário
     const { data: usuario } = await supabase.from("usuarios").select("*").eq("id", userId).single();
     const nomeUsuario = usuario?.nome || "amigo(a)";
