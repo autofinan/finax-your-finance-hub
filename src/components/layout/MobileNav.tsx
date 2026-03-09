@@ -5,6 +5,7 @@ import {
   CreditCard,
   Target,
   Menu,
+  BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -13,6 +14,7 @@ const navItems = [
   { to: '/transacoes', icon: ArrowUpDown, label: 'Transações' },
   { to: '/cartoes', icon: CreditCard, label: 'Cartões' },
   { to: '/metas', icon: Target, label: 'Metas' },
+  { to: '/projecoes', icon: BarChart3, label: 'Projeções' },
 ];
 
 interface MobileNavProps {
@@ -22,14 +24,14 @@ interface MobileNavProps {
 export function MobileNav({ onMenuClick }: MobileNavProps) {
   return (
     <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-white/10 pb-[env(safe-area-inset-bottom)]">
-      <div className="flex justify-around items-center h-16 px-2">
+      <div className="flex justify-around items-center h-16 px-1">
         {navItems.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             className={({ isActive }) =>
               cn(
-                'flex flex-col items-center justify-center gap-1 py-2 px-3 rounded-xl transition-all duration-200 min-w-[60px]',
+                'flex flex-col items-center justify-center gap-0.5 py-2 px-2 rounded-xl transition-all duration-200 min-w-[52px]',
                 isActive
                   ? 'text-primary'
                   : 'text-muted-foreground'
@@ -46,7 +48,7 @@ export function MobileNav({ onMenuClick }: MobileNavProps) {
                 >
                   <item.icon className="w-5 h-5" />
                 </div>
-                <span className="text-[10px] font-medium">{item.label}</span>
+                <span className="text-[9px] font-medium truncate max-w-[48px]">{item.label}</span>
               </>
             )}
           </NavLink>
@@ -55,12 +57,12 @@ export function MobileNav({ onMenuClick }: MobileNavProps) {
         {/* Menu Button */}
         <button
           onClick={onMenuClick}
-          className="flex flex-col items-center justify-center gap-1 py-2 px-3 rounded-xl transition-all duration-200 min-w-[60px] text-muted-foreground hover:text-primary"
+          className="flex flex-col items-center justify-center gap-0.5 py-2 px-2 rounded-xl transition-all duration-200 min-w-[52px] text-muted-foreground hover:text-primary"
         >
           <div className="p-1.5 rounded-lg transition-all duration-200">
             <Menu className="w-5 h-5" />
           </div>
-          <span className="text-[10px] font-medium">Menu</span>
+          <span className="text-[9px] font-medium">Menu</span>
         </button>
       </div>
     </nav>
