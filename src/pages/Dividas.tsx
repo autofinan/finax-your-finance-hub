@@ -42,39 +42,39 @@ function DividaForm({ onSubmit, initial, tipos }: {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="text-sm font-medium text-muted-foreground">Tipo</label>
+        <label className="text-sm font-medium text-slate-300">Tipo</label>
         <Select value={form.tipo} onValueChange={(v) => setForm(p => ({ ...p, tipo: v }))}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {tipos.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+          <SelectTrigger className="bg-slate-800 border-slate-700 text-white"><SelectValue /></SelectTrigger>
+          <SelectContent className="bg-slate-900 border-slate-700">
+            {tipos.map(t => <SelectItem key={t.value} value={t.value} className="text-white">{t.label}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
       <div>
-        <label className="text-sm font-medium text-muted-foreground">Nome</label>
-        <Input value={form.nome} onChange={e => setForm(p => ({ ...p, nome: e.target.value }))} placeholder="Ex: Nubank, Empréstimo Banco X" required />
+        <label className="text-sm font-medium text-slate-300">Nome</label>
+        <Input value={form.nome} onChange={e => setForm(p => ({ ...p, nome: e.target.value }))} placeholder="Ex: Nubank, Empréstimo Banco X" required className="bg-slate-800 border-slate-700 text-white" />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-sm font-medium text-muted-foreground">Saldo Devedor (R$)</label>
-          <Input type="number" step="0.01" value={form.saldo_devedor} onChange={e => setForm(p => ({ ...p, saldo_devedor: e.target.value }))} required />
+          <label className="text-sm font-medium text-slate-300">Saldo Devedor (R$)</label>
+          <Input type="number" step="0.01" value={form.saldo_devedor} onChange={e => setForm(p => ({ ...p, saldo_devedor: e.target.value }))} required className="bg-slate-800 border-slate-700 text-white" />
         </div>
         <div>
-          <label className="text-sm font-medium text-muted-foreground">Juros Mensal (%)</label>
-          <Input type="number" step="0.01" value={form.taxa_juros} onChange={e => setForm(p => ({ ...p, taxa_juros: e.target.value }))} placeholder="Ex: 2.5" />
+          <label className="text-sm font-medium text-slate-300">Juros Mensal (%)</label>
+          <Input type="number" step="0.01" value={form.taxa_juros} onChange={e => setForm(p => ({ ...p, taxa_juros: e.target.value }))} placeholder="Ex: 2.5" className="bg-slate-800 border-slate-700 text-white" />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-sm font-medium text-muted-foreground">Pagamento Mínimo (R$)</label>
-          <Input type="number" step="0.01" value={form.valor_minimo} onChange={e => setForm(p => ({ ...p, valor_minimo: e.target.value }))} />
+          <label className="text-sm font-medium text-slate-300">Pagamento Mínimo (R$)</label>
+          <Input type="number" step="0.01" value={form.valor_minimo} onChange={e => setForm(p => ({ ...p, valor_minimo: e.target.value }))} className="bg-slate-800 border-slate-700 text-white" />
         </div>
         <div>
-          <label className="text-sm font-medium text-muted-foreground">Vencimento</label>
-          <Input type="date" value={form.data_vencimento} onChange={e => setForm(p => ({ ...p, data_vencimento: e.target.value }))} />
+          <label className="text-sm font-medium text-slate-300">Vencimento</label>
+          <Input type="date" value={form.data_vencimento} onChange={e => setForm(p => ({ ...p, data_vencimento: e.target.value }))} className="bg-slate-800 border-slate-700 text-white" />
         </div>
       </div>
-      <Button type="submit" className="w-full">{initial ? 'Atualizar' : 'Registrar Dívida'}</Button>
+      <Button type="submit" className="w-full bg-gradient-to-r from-indigo-500 to-blue-500 hover:opacity-90">{initial ? 'Atualizar' : 'Registrar Dívida'}</Button>
     </form>
   );
 }
