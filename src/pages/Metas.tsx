@@ -380,8 +380,9 @@ const Metas = () => {
 
           {/* Tabs */}
           <Tabs defaultValue="ativas" className="w-full">
-            <TabsList className="grid w-full grid-cols-2 bg-muted/50 border border-border">
+            <TabsList className="grid w-full grid-cols-3 bg-muted/50 border border-border">
               <TabsTrigger value="ativas">Ativas ({metasAtivas.length})</TabsTrigger>
+              <TabsTrigger value="frequencia">Frequência ({metasFrequencia.length})</TabsTrigger>
               <TabsTrigger value="concluidas">Concluídas ({metasConcluidas.length})</TabsTrigger>
             </TabsList>
             
@@ -414,6 +415,136 @@ const Metas = () => {
                   {metasAtivas.map((meta, index) => (
                     <MetaCard key={meta.id} meta={meta} index={index} />
                   ))}
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Metas de Frequência */}
+            <TabsContent value="frequencia" className="mt-6 space-y-6">
+              {/* Criar Meta Frequência */}
+              <Dialog open={isCreateFreqOpen} onOpenChange={setIsCreateFreqOpen}>
+                <DialogTrigger asChild>
+                  <Button className="gap-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:opacity-90">
+                    <Plus className="w-4 h-4" />
+                    Nova Meta de Frequência
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-card border-border">
+                  <DialogHeader>
+                    <DialogTitle className="text-foreground">Criar Meta de Frequência</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-foreground">Nome</Label>
+                      <Input 
+                        value={freqNome}
+                        onChange={(e) => setFreqNome(e.target.value)}
+                        placeholder="Ex: Limite de Delivery"
+                        className="bg-muted border-border text-foreground"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-foreground">Categoria</Label>
+                      <Input 
+                        value={freqCategoria}
+                        onChange={(e) => setFreqCategoria(e.target.value)}
+                        placeholder="Ex: alimentacao"
+                        className="bg-muted border-border text-foreground"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-foreground">Limite Mensal</Label>
+                      <Input 
+                        type="number"
+                        value={freqLimite}
+                        onChange={(e) => setFreqLimite(e.target.value)}
+                        placeholder="Ex: 8"
+                        className="bg-muted border-border text-foreground"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-foreground">Palavras-chave (opcional)</Label>
+                      <Input 
+                        value={freqPalavras}
+                        onChange={(e) => setFreqPalavras(e.target.value)}
+                        placeholder="ifood, rappi, delivery (separadas por vírgula)"
+                        className="bg-muted border-border text-foreground"
+                      />
+                    </div>
+                    <Button onClick={handleCreateFreq} className="w-full bg-gradient-to-r from-amber-500 to-orange-500">
+                      Criar Meta
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+
+              {/* Lista de Metas de Frequência */}
+              {loadingFreq ? (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {[1, 2].map((i) => (
+                    <Card key={i} className="bg-card/50 border-border animate-pulse">
+                      <CardContent className="h-40" />
+                    </Card>
+                  ))}
+                </div>
+              ) : metasFrequencia.length === 0 ? (
+                <Card className="bg-card/50 border-border">
+                  <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                    <Repeat className="w-16 h-16 text-muted-foreground mb-4" />
+                    <h3 className="text-xl font-semibold text-foreground mb-2">Nenhuma meta de frequência</h3>
+                    <p className="text-muted-foreground max-w-md">
+                      Crie metas como "máximo 8 deliveries por mês" para controlar comportamentos repetitivos
+                    </p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {metasFrequencia.map((meta, index) => {
+                    const percent = Math.min(100, ((meta.frequencia_atual || 0) / meta.limite_mensal) * 100);
+                    const isOver = (meta.frequencia_atual || 0) >= meta.limite_mensal;
+                    return (
+                      <motion.div key={meta.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.1 }}>
+                        <Card className={`bg-card/50 border-border hover:shadow-lg transition-all ${isOver ? 'border-destructive/50' : ''}`}>
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="text-foreground text-base flex items-center gap-2">
+                                <Repeat className="w-4 h-4 text-amber-400" />
+                                {meta.nome}
+                              </CardTitle>
+                              <Button size="icon" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => deletarMetaFrequencia(meta.id)}>
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                            <Badge variant="outline" className="w-fit text-xs">{meta.categoria}</Badge>
+                          </CardHeader>
+                          <CardContent className="space-y-3">
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-muted-foreground">Este mês</span>
+                                <span className={`font-bold ${isOver ? 'text-destructive' : 'text-foreground'}`}>
+                                  {meta.frequencia_atual || 0} / {meta.limite_mensal}
+                                </span>
+                              </div>
+                              <Progress value={percent} className={`h-2 ${isOver ? '[&>div]:bg-destructive' : '[&>div]:bg-amber-500'}`} />
+                            </div>
+                            {isOver && (
+                              <div className="flex items-center gap-2 text-sm text-destructive">
+                                <AlertTriangle className="w-4 h-4" />
+                                <span>Limite ultrapassado!</span>
+                              </div>
+                            )}
+                            {meta.palavras_chave && meta.palavras_chave.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {meta.palavras_chave.slice(0, 3).map((p, i) => (
+                                  <Badge key={i} variant="secondary" className="text-xs">{p}</Badge>
+                                ))}
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    );
+                  })}
                 </div>
               )}
             </TabsContent>
