@@ -4436,7 +4436,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             .eq("tipo", "saida")
             .gte("data", inicioMes3.toISOString())
             .eq("status", "confirmada")
-            .order("data", { ascending: false });
+            .order("data", { ascending: false })
+            .limit(1000);
           
           if (!gastos || gastos.length === 0) {
             await sendMessage(payload.phoneNumber, 
