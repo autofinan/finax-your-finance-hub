@@ -4886,7 +4886,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           `💸 *Gastos:*\n` +
           `• "café 5 pix"\n` +
           `• "uber 15 crédito"\n` +
-          `• "mercado 200 débito"\n\n` +
+          `• "mercado 200 dinheiro"\n\n` +
           `💰 *Receitas:*\n` +
           `• "recebi 3000 pix"\n` +
           `• "salário 5000"\n\n` +
