@@ -127,7 +127,7 @@ async function shortenURL(longURL: string, userId?: string, campaign?: string): 
 
 async function getUserStats(userId: string) {
   const [transResult, dividasResult, metasResult, recResult] = await Promise.all([
-    supabase.from("transacoes").select("valor, tipo, expense_type").eq("usuario_id", userId).neq("status", "cancelada"),
+    supabase.from("transacoes").select("valor, tipo, expense_type").eq("usuario_id", userId).neq("status", "cancelada").limit(10000),
     supabase.from("dividas").select("id", { count: "exact", head: true }).eq("usuario_id", userId).eq("ativa", true),
     supabase.from("orcamentos").select("id", { count: "exact", head: true }).eq("usuario_id", userId).eq("ativo", true),
     supabase.from("gastos_recorrentes").select("id", { count: "exact", head: true }).eq("usuario_id", userId).eq("ativo", true),

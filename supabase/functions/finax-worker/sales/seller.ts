@@ -44,7 +44,7 @@ async function getUserSalesData(userId: string): Promise<UserSalesData | null> {
 
   // Fetch all stats in parallel
   const [transResult, cartoesResult, metasResult, dividasResult, recorrentesResult] = await Promise.all([
-    supabase.from("transacoes").select("valor, tipo, expense_type, created_at").eq("usuario_id", userId).neq("status", "cancelada"),
+    supabase.from("transacoes").select("valor, tipo, expense_type, created_at").eq("usuario_id", userId).neq("status", "cancelada").limit(10000),
     supabase.from("cartoes_credito").select("id", { count: "exact", head: true }).eq("usuario_id", userId),
     supabase.from("orcamentos").select("id", { count: "exact", head: true }).eq("usuario_id", userId).eq("ativo", true),
     supabase.from("dividas").select("id", { count: "exact", head: true }).eq("usuario_id", userId).eq("ativa", true),

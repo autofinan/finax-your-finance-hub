@@ -409,7 +409,8 @@ export async function getMonthlySummaryInline(userId: string): Promise<string> {
     .select("valor, tipo")
     .eq("usuario_id", userId)
     .gte("data", inicioMes.toISOString())
-    .eq("status", "confirmada");
+    .eq("status", "confirmada")
+    .limit(10000);
 
   let totalEntradas = 0, totalSaidas = 0;
   transacoes?.forEach((t) => {
