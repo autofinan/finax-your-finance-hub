@@ -2741,7 +2741,7 @@ async function processarJob(job: any): Promise<void> {
         `📝 *Corrigir:* R$ ${lastTx.valor?.toFixed(2)} - ${lastTx.descricao || lastTx.categoria}\n\nQual a forma correta?`,
         [
           { id: "edit_pix", title: "📱 Pix" },
-          { id: "edit_debito", title: "💳 Débito" },
+          { id: "edit_dinheiro", title: "💵 Dinheiro" },
           { id: "edit_credito", title: "💳 Crédito" }
         ],
         payload.messageSource
