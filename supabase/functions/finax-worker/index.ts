@@ -2491,7 +2491,7 @@ async function processarJob(job: any): Promise<void> {
       const norm = normalizeText(conteudoProcessado);
       const paymentMentioned = (() => {
         if (norm.includes("pix")) return "pix";
-        if (norm.includes("debito") || norm.includes("débito")) return "debito";
+        if (norm.includes("debito") || norm.includes("débito")) return "dinheiro";
         if (norm.includes("credito") || norm.includes("crédito")) return "credito";
         if (norm.includes("dinheiro")) return "dinheiro";
         return null;
