@@ -4097,7 +4097,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             .eq("tipo", "entrada")
             .gte("data", inicioMes.toISOString())
             .eq("status", "confirmada")
-            .order("data", { ascending: false });
+            .order("data", { ascending: false })
+            .limit(1000);
           
           if (!entradas || entradas.length === 0) {
             await sendMessage(payload.phoneNumber, "💰 Nenhuma entrada registrada este mês.\n\n_Manda \"recebi 1500\" pra registrar!_", payload.messageSource);
