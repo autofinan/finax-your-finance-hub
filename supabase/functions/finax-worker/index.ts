@@ -979,7 +979,8 @@ async function processarJob(job: any): Promise<void> {
           .eq("tipo", scope === "income" ? "entrada" : "saida")
           .gte("data", viewStartOfMonth.toISOString())
           .eq("status", "confirmada")
-          .order("data", { ascending: false });
+          .order("data", { ascending: false })
+          .limit(1000);
         
         if (viewCategory) {
           viewQuery = viewQuery.eq("categoria", viewCategory);
