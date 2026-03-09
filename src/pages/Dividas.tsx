@@ -156,19 +156,17 @@ export default function Dividas() {
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="bg-card border-border">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-3 rounded-xl bg-destructive/10">
-                  <TrendingDown className="w-6 h-6 text-destructive" />
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Saldo Total Devedor</p>
-                  <p className="text-xl font-black text-destructive">{formatCurrency(saldoTotal)}</p>
-                </div>
+          <div className="bg-slate-900/40 backdrop-blur-xl border border-red-500/20 rounded-2xl p-4 hover:border-red-500/40 transition-all">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-red-500/10">
+                <TrendingDown className="w-5 h-5 text-red-400" />
               </div>
-            </CardContent>
-          </Card>
+              <div>
+                <p className="text-xs text-slate-500 uppercase tracking-wide">Saldo Total Devedor</p>
+                <p className="text-xl font-bold text-red-400">{formatCurrency(saldoTotal)}</p>
+              </div>
+            </div>
+          </div>
           <Card className="bg-card border-border">
             <CardContent className="pt-6">
               <div className="flex items-center gap-3">
