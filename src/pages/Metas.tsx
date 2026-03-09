@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { useMetas, Meta } from '@/hooks/useMetas';
-import { useMetasFrequencia, MetaFrequencia } from '@/hooks/useMetasFrequencia';
+import { useMetasFrequencia } from '@/hooks/useMetasFrequencia';
 import { usePlanoStatus } from '@/hooks/usePlanoStatus';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
