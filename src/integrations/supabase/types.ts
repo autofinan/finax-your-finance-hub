@@ -1912,6 +1912,71 @@ export type Database = {
           },
         ]
       }
+      metas_frequencia: {
+        Row: {
+          ativa: boolean | null
+          categoria: string
+          created_at: string | null
+          id: string
+          limite_mensal: number
+          nome: string
+          palavras_chave: string[] | null
+          updated_at: string | null
+          usuario_id: string
+        }
+        Insert: {
+          ativa?: boolean | null
+          categoria: string
+          created_at?: string | null
+          id?: string
+          limite_mensal: number
+          nome: string
+          palavras_chave?: string[] | null
+          updated_at?: string | null
+          usuario_id: string
+        }
+        Update: {
+          ativa?: boolean | null
+          categoria?: string
+          created_at?: string | null
+          id?: string
+          limite_mensal?: number
+          nome?: string
+          palavras_chave?: string[] | null
+          updated_at?: string | null
+          usuario_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "metas_frequencia_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "queue_status"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "metas_frequencia_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "usuarios"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "metas_frequencia_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_dashboard_usuario"
+            referencedColumns: ["usuario_id"]
+          },
+          {
+            foreignKeyName: "metas_frequencia_usuario_id_fkey"
+            columns: ["usuario_id"]
+            isOneToOne: false
+            referencedRelation: "vw_status_plano"
+            referencedColumns: ["usuario_id"]
+          },
+        ]
+      }
       orcamentos: {
         Row: {
           alerta_100_enviado: boolean | null

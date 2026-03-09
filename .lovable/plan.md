@@ -1,71 +1,55 @@
 
-# Análise do Plano Pendente - Finax
+# Plano Acelerador de Liberdade Financeira — Status Atualizado
 
-Analisando o estado atual do projeto Finax, identifiquei os itens pendentes do plano de aceleração e potenciais melhorias técnicas. Baseado no arquivo `.lovable/plan.md` e na arquitetura atual:
+## ✅ Concluído
 
-## 🔜 Itens Pendentes do Plano Acelerador
+| Item | Status |
+|------|--------|
+| Gating de features (web - FEATURE_MATRIX) | ✅ |
+| Precificação (R$19,90 / R$29,90) | ✅ |
+| Registro de dívidas | ✅ |
+| Classificação expense_type | ✅ |
+| Modo Vendedor (trial expirado) | ✅ |
+| Checkout Stripe (web + WhatsApp) | ✅ |
+| Códigos de ativação | ✅ |
+| UpgradeTeaser (web) | ✅ |
+| Landing Page (botão Entrar, compra direta, responsividade) | ✅ |
+| FSM humanizado (escape, subject change, retry limit) | ✅ |
+| Gating no WhatsApp (Básico vs Pro) | ✅ |
+| Trial End Summary (dados reais) | ✅ |
+| Simulador de Quitação (3 cenários - Web + WhatsApp) | ✅ |
+| Insights Preditivos (Freedom Days - Web + WhatsApp) | ✅ |
+| Consultor IA Semanal (relatório + padrões + anomalias) | ✅ |
+| Detector de Padrões (análise 4 semanas) | ✅ |
+| Radar de Anomalias (spike, tendência, fim de semana) | ✅ |
+| Melhorar prompt IA (Tool Calling + CoT + unificação) | ✅ v7.0 |
+| Ativação automática de plano (webhook Stripe + match telefone) | ✅ |
+| Encurtador de Links (short_links + redirect edge function) | ✅ |
+| Vendedor IA Especialista (finaxSalesResponse com Gemini) | ✅ |
+| Sequência de Vendas 4 Toques (daily-sales cron) | ✅ |
+| Migração URLs para finaxai.vercel.app | ✅ |
+
+## 🔜 Pendente (por prioridade)
 
 ### Alta Prioridade
-1. **Configurar pg_cron para daily-sales** (10 min)
-   - Ativar pg_cron + pg_net no Supabase
-   - Configurar job para rodar às 10h (horário de Brasília)
-   - Ativa sequência automática de 4 toques de vendas
-
-2. **Comprar domínio curto** (Externo)
-   - fin.ax ou finax.link para encurtador
-   - Melhorar conversão dos links de vendas
+| Item | Complexidade | Estimativa |
+|------|-------------|-----------|
+| Configurar cron job para daily-sales (pg_cron) | Baixa | 10 min |
+| Comprar domínio curto (fin.ax / finax.link) para encurtador | Externa | - |
 
 ### Média Prioridade
-3. **Projeções Financeiras** (1-2 sessões)
-   - Implementar projeções de 3, 6 e 12 meses
-   - Baseadas em padrões históricos de gastos
-   - Integração com Freedom Days
-
-4. **Sistema de Cupons/Descontos** (1 sessão)
-   - Quando decidido pela estratégia de vendas
-   - Integração com Stripe checkout
+| Item | Complexidade | Estimativa |
+|------|-------------|-----------|
+| Projeções Financeiras (3/6/12 meses) | Média | 1-2 sessões |
+| Sistema de cupons/descontos (quando decidido) | Média | 1 sessão |
 
 ### Baixa Prioridade
-5. **Metas de Frequência** (1 sessão)
-   - Novo tipo de meta: "máximo 8 deliveries/mês"
-   - Tracking de frequência comportamental
+| Item | Complexidade | Estimativa |
+|------|-------------|-----------|
+| Metas de Frequência (novo tipo de meta) | Baixa | 1 sessão |
+| Progresso Acumulado | Baixa | 1 sessão |
+| Relatórios diferenciados (Básico vs Pro) | Baixa | 1 sessão |
 
-6. **Progresso Acumulado** (1 sessão)
-   - Dashboard consolidado
-   - Total de juros evitados desde início
-   - Dias de liberdade antecipados
+## Próximo Passo Recomendado
 
-7. **Relatórios Diferenciados** (1 sessão)
-   - Funcionalidades específicas por plano
-   - Básico vs Pro diferenciação
-
-## 💡 Oportunidades de Melhoria Identificadas
-
-### Infraestrutura
-- **Logs Structure**: Padronizar estrutura de logs entre edge functions
-- **Error Handling**: Melhorar tratamento de erros no pipeline WhatsApp
-- **Performance**: Otimizar queries de relatórios com cache inteligente
-
-### UX/UI
-- **Onboarding**: Simplificar fluxo inicial de cadastro
-- **Mobile**: Otimizar experiência mobile na web app
-- **Feedback**: Sistema de feedback em tempo real para ações
-
-### AI/ML
-- **Categorização**: Melhorar precisão com base em histórico
-- **Predições**: Algoritmos mais sofisticados para insights
-- **Personalization**: Recomendações baseadas em perfil do usuário
-
-## 🎯 Recomendação de Priorização
-
-**Próximo Sprint Sugerido:**
-1. Configurar cron job (ativação imediata de vendas automáticas)
-2. Implementar Projeções Financeiras (alto valor para usuários Pro)
-3. Metas de Frequência (diferenciação competitiva)
-
-**Impacto vs Esforço:**
-- **Alto Impacto, Baixo Esforço**: Cron job daily-sales
-- **Alto Impacto, Médio Esforço**: Projeções Financeiras  
-- **Médio Impacto, Baixo Esforço**: Metas de Frequência
-
-O projeto já tem 85%+ das funcionalidades core implementadas. Os próximos passos focam em automação, insights avançados e diferenciação de valor entre planos.
+**Configurar cron job** — Ativar pg_cron + pg_net para rodar `daily-sales` todo dia às 10h (horário de Brasília). Isso ativa a sequência de 4 toques automática.
