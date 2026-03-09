@@ -1,92 +1,110 @@
 
-# Plano Acelerador de Liberdade Financeira — Status Atualizado
+# Plano: Ajustes de Padrões, Pagamento e Freedom Insight
 
-## ✅ Concluído
+## Resumo das Mudanças
 
-| Item | Status |
-|------|--------|
-| Gating de features (web - FEATURE_MATRIX) | ✅ |
-| Precificação (R$19,90 / R$29,90) | ✅ |
-| Registro de dívidas | ✅ |
-| Classificação expense_type | ✅ |
-| Modo Vendedor (trial expirado) | ✅ |
-| Checkout Stripe (web + WhatsApp) | ✅ |
-| Códigos de ativação | ✅ |
-| UpgradeTeaser (web) | ✅ |
-| Landing Page (botão Entrar, compra direta, responsividade) | ✅ |
-| FSM humanizado (escape, subject change, retry limit) | ✅ |
-| Gating no WhatsApp (Básico vs Pro) | ✅ |
-| Trial End Summary (dados reais) | ✅ |
-| Simulador de Quitação (3 cenários - Web + WhatsApp) | ✅ |
-| Insights Preditivos (Freedom Days - Web + WhatsApp) | ✅ |
-| Consultor IA Semanal (relatório + padrões + anomalias) | ✅ |
-| Detector de Padrões (análise 4 semanas) | ✅ |
-| Radar de Anomalias (spike, tendência, fim de semana) | ✅ |
-| Melhorar prompt IA (Tool Calling + CoT + unificação) | ✅ v7.0 |
-| Ativação automática de plano (webhook Stripe + match telefone) | ✅ |
-| Encurtador de Links (short_links + redirect edge function) | ✅ |
-| Vendedor IA Especialista (finaxSalesResponse com Gemini) | ✅ |
-| Sequência de Vendas 4 Toques (daily-sales cron) | ✅ |
-| Migração URLs para finaxai.vercel.app | ✅ |
-| Padronização visual UI (dark theme, glassmorphism) | ✅ |
-| **Auditoria Técnica: Índices DB** | ✅ 09/03 |
-| **Auditoria Técnica: .limit() em queries** | ✅ 09/03 |
-| **Auditoria Técnica: Validação expense** | ✅ 09/03 |
-| **Auditoria Técnica: A/B Test structure** | ✅ 09/03 |
-| **Auditoria Técnica: Transaction Factory** | ✅ 09/03 |
-| **Alertas Proativos (spending_alerts)** | ✅ 09/03 |
-| **Aprendizado com Correções (ai_corrections)** | ✅ 09/03 |
-| **Remoção tabela hipoteses_registro** | ✅ 09/03 |
+### 1. Padrão de Aprendizado - Só após 3x
+**Problema:** Hoje o sistema aprende padrão na primeira ocorrência (confidence 0.5).  
+**Solução:** Só criar padrão quando `usage_count >= 3` com mesmo produto + pagamento.
+
+**Arquivos:**
+- `supabase/functions/finax-worker/memory/patterns.ts`
+
+**Lógica:**
+```
+learnMerchantPattern():
+  Se NÃO existe padrão:
+    → Criar com confidence=0.3, usage_count=1 (NÃO APLICA ainda)
+  Se existe:
+    Se mesma categoria + mesmo pagamento:
+      → usage_count++, confidence += 0.15
+      → Só marca "ativo" quando usage_count >= 3 E confidence >= 0.7
+    Se divergente:
+      → Ignorar (não sobrescrever)
+```
+
+**Critério para aplicar:** `confidence >= 0.7` (já existe) + `usage_count >= 3` (novo)
 
 ---
 
-## 🔜 Pendente (por prioridade)
+### 2. Débito → Dinheiro (Botões e Display)
+**Problema:** "Pix" e "Débito" são praticamente iguais hoje. Usuário quer trocar "Débito" por "Dinheiro" nos botões.  
+**Regra:** Se usuário digitar "débito", aceitar mas salvar/exibir como "dinheiro".
 
-### 🔴 Alta Prioridade
+**Arquivos:**
+- `types.ts:181-185` - Trocar botão
+- `ui/slot-prompts.ts:94-98` - Trocar botão
+- `PAYMENT_ALIASES` - Mapear `débito → dinheiro`
 
-| Item | Complexidade | Impacto | Estimativa |
-|------|-------------|---------|-----------|
-| Configurar cron job daily-sales (pg_cron + pg_net) | Baixa | 🔥 Alto | 10 min |
-| Comprar domínio curto (fin.ax / finax.link) | Externa | Alto | — |
+**Mudança:**
+```typescript
+// ANTES
+buttons: [
+  { id: "pay_pix", title: "📱 Pix" },
+  { id: "pay_debito", title: "💳 Débito" },
+  { id: "pay_credito", title: "💳 Crédito" }
+]
 
-> **Cron job** = ativação imediata da sequência automática de 4 toques de vendas. Prioridade máxima.
+// DEPOIS
+buttons: [
+  { id: "pay_pix", title: "📱 Pix" },
+  { id: "pay_dinheiro", title: "💵 Dinheiro" },
+  { id: "pay_credito", title: "💳 Crédito" }
+]
+```
 
----
-
-### 🟡 Média Prioridade
-
-| Item | Complexidade | Impacto | Estimativa |
-|------|-------------|---------|-----------|
-| Projeções Financeiras (3/6/12 meses) | Média | Alto | 1-2 sessões |
-| Sistema de cupons/descontos (Stripe) | Média | Médio | 1 sessão |
-
----
-
-### 🟢 Baixa Prioridade
-
-| Item | Complexidade | Impacto | Estimativa |
-|------|-------------|---------|-----------|
-| Metas de Frequência (ex: máx. 8 deliveries/mês) | Baixa | Médio | 1 sessão |
-| Progresso Acumulado (juros evitados + dias antecipados) | Baixa | Médio | 1 sessão |
-| Relatórios diferenciados (Básico vs Pro) | Baixa | Baixo | 1 sessão |
-
----
-
-## 💡 Backlog Técnico
-
-| Categoria | Item |
-|-----------|------|
-| Infraestrutura | Padronizar estrutura de logs entre edge functions |
-| Infraestrutura | Melhorar error handling no pipeline WhatsApp |
-| Performance | Cache inteligente para queries de relatórios |
-| UX/Mobile | Otimizar experiência mobile na web app |
-| AI/ML | Melhorar precisão da categorização com histórico |
-| AI/ML | Recomendações personalizadas por perfil do usuário |
+**PAYMENT_ALIASES:**
+```typescript
+"débito": "dinheiro",  // ← Mapear débito → dinheiro
+"debito": "dinheiro",
+```
 
 ---
 
-## 🎯 Próximo Sprint Recomendado
+### 3. Freedom Insight - Só para Pro
+**Problema:** Mensagem "Esse gasto = +1 dia no caminho pra liberdade" aparece em TODOS os gastos, confusa.  
+**Solução:** Restringir ao plano Pro.
 
-1. **Configurar cron job** — ativa vendas automáticas imediatamente
-2. **Projeções Financeiras** — alto valor percebido para usuários Pro
-3. **Metas de Frequência** — diferenciação competitiva única
+**Arquivos:**
+- `intents/expense-inline.ts:382-386` - Verificar plano antes de chamar
+
+**Lógica:**
+```typescript
+// 🏁 FREEDOM MICRO-INSIGHT (PRO ONLY)
+const { data: usuario } = await supabase
+  .from("usuarios")
+  .select("plano, trial_fim")
+  .eq("id", userId)
+  .single();
+
+const isPro = usuario?.plano === "pro" || 
+  (usuario?.plano === "trial" && new Date(usuario.trial_fim) > new Date());
+
+if (isPro) {
+  const freedomInsight = await getFreedomMicroInsight(userId, valor);
+  if (freedomInsight) {
+    message += freedomInsight;
+  }
+}
+```
+
+---
+
+## Arquivos a Editar
+
+| Arquivo | Mudança |
+|---------|---------|
+| `memory/patterns.ts` | Só aplicar padrão após 3 usos |
+| `decision/types.ts` | Botão débito → dinheiro |
+| `ui/slot-prompts.ts` | Botão débito → dinheiro |
+| `intents/expense-inline.ts` | Freedom insight só Pro |
+
+---
+
+## Testes Sugeridos
+
+1. **Padrão 3x:** Registre "Açaí 10 pix" 3 vezes → só na 3ª deve aplicar padrão
+2. **Botões:** Ao registrar gasto, deve aparecer [Pix] [Dinheiro] [Crédito]
+3. **Débito → Dinheiro:** Envie "gastei 50 débito" → deve salvar como "dinheiro"
+4. **Freedom Pro:** Usuário Básico não vê "dias de liberdade", Pro vê
+
