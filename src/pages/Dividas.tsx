@@ -259,26 +259,29 @@ export default function Dividas() {
                         )}
                       </div>
                     </div>
-                      <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => handleToggleAtiva(d)} title={d.ativa ? 'Marcar como quitada' : 'Reativar'}>
-                          <CheckCircle className={`w-4 h-4 ${d.ativa ? 'text-muted-foreground' : 'text-emerald-400'}`} />
-                        </Button>
-                        <Dialog open={editingDivida?.id === d.id} onOpenChange={(open) => !open && setEditingDivida(null)}>
-                          <DialogTrigger asChild>
-                            <Button variant="ghost" size="icon" onClick={() => setEditingDivida(d)}>
-                              <Edit2 className="w-4 h-4" />
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent>
-                            <DialogHeader><DialogTitle>Editar Dívida</DialogTitle></DialogHeader>
-                            <DividaForm onSubmit={handleEdit} initial={d} tipos={TIPOS_DIVIDA} />
-                          </DialogContent>
-                        </Dialog>
-                        <Button variant="ghost" size="icon" onClick={() => deleteDivida.mutate(d.id)}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" size="icon" onClick={() => handleToggleAtiva(d)} title={d.ativa ? 'Marcar como quitada' : 'Reativar'}
+                        className="text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10">
+                        <CheckCircle className={`w-5 h-5 ${d.ativa ? '' : 'text-emerald-400'}`} />
+                      </Button>
+                      <Dialog open={editingDivida?.id === d.id} onOpenChange={(open) => !open && setEditingDivida(null)}>
+                        <DialogTrigger asChild>
+                          <Button variant="ghost" size="icon" onClick={() => setEditingDivida(d)}
+                            className="text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10">
+                            <Edit2 className="w-5 h-5" />
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="bg-slate-900 border-slate-700">
+                          <DialogHeader><DialogTitle className="text-white">Editar Dívida</DialogTitle></DialogHeader>
+                          <DividaForm onSubmit={handleEdit} initial={d} tipos={TIPOS_DIVIDA} />
+                        </DialogContent>
+                      </Dialog>
+                      <Button variant="ghost" size="icon" onClick={() => deleteDivida.mutate(d.id)}
+                        className="text-slate-500 hover:text-red-400 hover:bg-red-500/10">
+                        <Trash2 className="w-5 h-5" />
+                      </Button>
                     </div>
+                  </div>
                   </CardContent>
                 </Card>
               );
