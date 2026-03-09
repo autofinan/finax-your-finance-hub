@@ -1038,7 +1038,8 @@ async function processarJob(job: any): Promise<void> {
           .eq("usuario_id", userId)
           .eq("tipo", "saida")
           .gte("data", catStartDate.toISOString())
-          .eq("status", "confirmada");
+          .eq("status", "confirmada")
+          .limit(10000);
         
         if (!catTxs || catTxs.length === 0) {
           await sendMessage(payload.phoneNumber, "Nenhum gasto encontrado 🤷", payload.messageSource);
