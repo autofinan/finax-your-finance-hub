@@ -167,19 +167,17 @@ export default function Dividas() {
               </div>
             </div>
           </div>
-          <Card className="bg-card border-border">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-3 rounded-xl bg-amber-500/10">
-                  <DollarSign className="w-6 h-6 text-amber-400" />
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Mínimo Mensal</p>
-                  <p className="text-xl font-black text-amber-400">{formatCurrency(minimoTotal)}</p>
-                </div>
+          <div className="bg-slate-900/40 backdrop-blur-xl border border-amber-500/20 rounded-2xl p-4 hover:border-amber-500/40 transition-all">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/10">
+                <DollarSign className="w-5 h-5 text-amber-400" />
               </div>
-            </CardContent>
-          </Card>
+              <div>
+                <p className="text-xs text-slate-500 uppercase tracking-wide">Mínimo Mensal</p>
+                <p className="text-xl font-bold text-amber-400">{formatCurrency(minimoTotal)}</p>
+              </div>
+            </div>
+          </div>
           <Card className="bg-card border-border">
             <CardContent className="pt-6">
               <div className="flex items-center gap-3">
