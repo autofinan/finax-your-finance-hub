@@ -194,6 +194,23 @@ async function processarJob(job: any): Promise<void> {
   console.log(`💬 [WORKER] Msg: "${payload.messageText?.slice(0, 50)}${payload.messageText?.length > 50 ? '...' : ''}"`);
   
   try {
+    // ========================================================================
+    // 🧹 FIX #1: TTL CLEANUP — Cancelar actions expiradas ANTES de processar
+    // ========================================================================
+    try {
+      const { count } = await supabase
+        .from("actions")
+        .update({ status: "expired" })
+        .lt("expires_at", new Date().toISOString())
+        .in("status", ["collecting", "awaiting_input", "pending_selection"]);
+      
+      if (count && count > 0) {
+        console.log(`🧹 [TTL_CLEANUP] ${count} action(s) expirada(s) canceladas`);
+      }
+    } catch (ttlErr) {
+      console.warn(`🧹 [TTL_CLEANUP] Erro (não-bloqueante):`, ttlErr);
+    }
+    
     // Buscar usuário
     const { data: usuario } = await supabase.from("usuarios").select("*").eq("id", userId).single();
     const nomeUsuario = usuario?.nome || "amigo(a)";
@@ -1213,9 +1230,9 @@ async function processarJob(job: any): Promise<void> {
         
         const editAliases: Record<string, string> = {
           "edit_pix": "pix",
-          "edit_debito": "debito",
-          "edit_credito": "credito",
-          "edit_dinheiro": "dinheiro"
+          "edit_debito": "dinheiro",
+          "edit_dinheiro": "dinheiro",
+          "edit_credito": "credito"
         };
         const newMethod = editAliases[payload.buttonReplyId];
         
@@ -1571,7 +1588,7 @@ async function processarJob(job: any): Promise<void> {
       if (payload.buttonReplyId.startsWith("rec_pay_") && activeAction?.intent === "recurring") {
         const paymentAliases: Record<string, string> = {
           "rec_pay_pix": "pix",
-          "rec_pay_debito": "debito",
+          "rec_pay_debito": "dinheiro",
           "rec_pay_credito": "credito",
           "rec_pay_dinheiro": "dinheiro"
         };
@@ -2442,6 +2459,26 @@ async function processarJob(job: any): Promise<void> {
     });
     
     // ========================================================================
+    // 📝 FIX #4: LOG DE ERROS — Salvar decisões fracas para análise
+    // ========================================================================
+    if (decision.confidence < 0.5 || decision.actionType === "unknown") {
+      try {
+        await supabase.from("erros_interpretacao").insert({
+          user_id: userId,
+          evento_id: eventoId,
+          message: conteudoProcessado?.substring(0, 200) || "",
+          ai_classification: decision.actionType,
+          confidence: decision.confidence,
+          reason: decision.reasoning || "Low confidence",
+          erro: `${decision.actionType} @ ${decision.confidence}`
+        });
+        console.log(`📝 [ERRO_LOG] Interpretação fraca salva: "${decision.actionType}" (${decision.confidence})`);
+      } catch (logErr) {
+        console.warn(`📝 [ERRO_LOG] Falha ao salvar (não-bloqueante):`, logErr);
+      }
+    }
+    
+    // ========================================================================
     // 🔄 POST-CLASSIFICATION INTERCEPTOR: Payment method correction
     // ========================================================================
     // If user says something like "paguei em pix" and last transaction was
@@ -2454,7 +2491,7 @@ async function processarJob(job: any): Promise<void> {
       const norm = normalizeText(conteudoProcessado);
       const paymentMentioned = (() => {
         if (norm.includes("pix")) return "pix";
-        if (norm.includes("debito") || norm.includes("débito")) return "debito";
+        if (norm.includes("debito") || norm.includes("débito")) return "dinheiro";
         if (norm.includes("credito") || norm.includes("crédito")) return "credito";
         if (norm.includes("dinheiro")) return "dinheiro";
         return null;
@@ -2704,7 +2741,7 @@ async function processarJob(job: any): Promise<void> {
         `📝 *Corrigir:* R$ ${lastTx.valor?.toFixed(2)} - ${lastTx.descricao || lastTx.categoria}\n\nQual a forma correta?`,
         [
           { id: "edit_pix", title: "📱 Pix" },
-          { id: "edit_debito", title: "💳 Débito" },
+          { id: "edit_dinheiro", title: "💵 Dinheiro" },
           { id: "edit_credito", title: "💳 Crédito" }
         ],
         payload.messageSource
@@ -3295,9 +3332,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           `🔄 ${slots.description || "Recorrente"} - R$ ${slots.amount?.toFixed(2)}/mês\n\nComo você paga?`, 
           [
             { id: "rec_pay_pix", title: "📱 Pix" },
-            { id: "rec_pay_debito", title: "💳 Débito" },
-            { id: "rec_pay_credito", title: "💳 Crédito" },
-            { id: "rec_pay_dinheiro", title: "💵 Dinheiro" }
+            { id: "rec_pay_dinheiro", title: "💵 Dinheiro" },
+            { id: "rec_pay_credito", title: "💳 Crédito" }
           ], 
           payload.messageSource
         );
@@ -4700,7 +4736,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       if (pendingSlot === "payment_method") {
         const normalizedGuard = normalizeText(conteudoProcessado);
         if (normalizedGuard.includes("pix")) slotValue = "pix";
-        else if (normalizedGuard.includes("debito") || normalizedGuard.includes("débito")) slotValue = "debito";
+        else if (normalizedGuard.includes("debito") || normalizedGuard.includes("débito")) slotValue = "dinheiro";
         else if (normalizedGuard.includes("credito") || normalizedGuard.includes("crédito")) slotValue = "credito";
         else if (normalizedGuard.includes("dinheiro")) slotValue = "dinheiro";
       } else if (pendingSlot === "amount") {
@@ -4798,12 +4834,12 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         helpResponse = `💸 *Registrar gastos é simples!*\n\n` +
           `É só me dizer assim:\n\n` +
           `• "café 5 pix"\n` +
-          `• "almoço 30 débito"\n` +
+          `• "almoço 30 dinheiro"\n` +
           `• "uber 15 crédito"\n\n` +
           `Eu pergunto o que faltar!\n\n` +
           `Também dá pra mandar:\n` +
           `• "ontem jantar 80 cartão"\n` +
-          `• "dia 05/02 mercado 150 débito"\n\n` +
+          `• "dia 05/02 mercado 150 dinheiro"\n\n` +
           `Quer testar agora? 😊`;
       } else if (/\b(cartao|cartões|credito|limite)\b/i.test(conteudoProcessado)) {
         helpResponse = `💳 *Sobre cartões de crédito:*\n\n` +
@@ -4850,7 +4886,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           `💸 *Gastos:*\n` +
           `• "café 5 pix"\n` +
           `• "uber 15 crédito"\n` +
-          `• "mercado 200 débito"\n\n` +
+          `• "mercado 200 dinheiro"\n\n` +
           `💰 *Receitas:*\n` +
           `• "recebi 3000 pix"\n` +
           `• "salário 5000"\n\n` +
@@ -4990,12 +5026,12 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           helpResponse = `💸 *Registrar gastos é simples!*\n\n` +
             `É só me dizer assim:\n\n` +
             `• "café 5 pix"\n` +
-            `• "almoço 30 débito"\n` +
+            `• "almoço 30 dinheiro"\n` +
             `• "uber 15 crédito"\n\n` +
             `Eu pergunto o que faltar!\n\n` +
             `Também dá pra mandar:\n` +
             `• "ontem jantar 80 cartão"\n` +
-            `• "dia 05/02 mercado 150 débito"\n\n` +
+            `• "dia 05/02 mercado 150 dinheiro"\n\n` +
             `Quer testar agora? 😊`;
         } else if (/\b(cartao|cartões|credito|limite)\b/i.test(conteudoProcessado)) {
           helpResponse = `💳 *Sobre cartões de crédito:*\n\n` +
@@ -5120,7 +5156,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           }
         } else {
           // Nunca usou ou sem transações
-          contextMessage = `\n\nSou seu assistente financeiro! 💰\n\nPode me dizer seus gastos assim:\n"café 5 pix" ou "almoço 30 débito"\n\nEu cuido do resto!`;
+          contextMessage = `\n\nSou seu assistente financeiro! 💰\n\nPode me dizer seus gastos assim:\n"café 5 pix" ou "almoço 30 dinheiro"\n\nEu cuido do resto!`;
         }
         
         await sendMessage(payload.phoneNumber, `${greeting}, ${primeiroNome}! 👋${contextMessage}`, payload.messageSource);
@@ -5227,14 +5263,22 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     }
     
     // ========================================================================
-    // 💡 FALLBACK INTELIGENTE: Se parece pergunta → responder como chat
+    // 💡 FIX #3: FALLBACK INTELIGENTE EXPANDIDO
+    // ========================================================================
+    // Se parece pergunta OU mensagem longa sem números → responder como chat
+    // Reduz drasticamente os "não entendi" desnecessários
     // ========================================================================
     const normalizedFallback = normalizeText(conteudoProcessado);
     const parecePerguntar = conteudoProcessado.includes("?") || 
                             normalizedFallback.match(/^(como|quando|quanto|qual|por que|o que|sera|devo|posso|tenho|to |tou |estou |consigo)/);
     
-    if (parecePerguntar) {
-      console.log(`💬 [FALLBACK→CHAT] Redirecionando para chat: "${conteudoProcessado.slice(0, 50)}..."`);
+    // FIX #3: Mensagem longa (>5 palavras) sem números → provavelmente é chat
+    const words = conteudoProcessado.trim().split(/\s+/).length;
+    const hasNumber = /\d/.test(conteudoProcessado);
+    const isLongTextWithoutNumber = words > 5 && !hasNumber;
+    
+    if (parecePerguntar || isLongTextWithoutNumber) {
+      console.log(`💬 [FALLBACK→CHAT] Redirecionando para chat: "${conteudoProcessado.slice(0, 50)}..." (${parecePerguntar ? 'pergunta' : 'texto longo'})`);
       
       const summary = await getMonthlySummary(userId);
       const chatResponse = await generateChatResponse(
@@ -5251,7 +5295,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         user_id: userId,
         user_message: conteudoProcessado,
         ai_response: chatResponse,
-        tipo: "chat_fallback"
+        tipo: isLongTextWithoutNumber ? "chat_fallback_long" : "chat_fallback"
       });
       return;
     }

@@ -1189,26 +1189,38 @@ export type Database = {
       }
       erros_interpretacao: {
         Row: {
+          ai_classification: string | null
+          confidence: number | null
           created_at: string | null
           erro: string | null
           evento_id: string | null
           id: string
+          message: string | null
+          reason: string | null
           resposta_ia: Json | null
           user_id: string | null
         }
         Insert: {
+          ai_classification?: string | null
+          confidence?: number | null
           created_at?: string | null
           erro?: string | null
           evento_id?: string | null
           id?: string
+          message?: string | null
+          reason?: string | null
           resposta_ia?: Json | null
           user_id?: string | null
         }
         Update: {
+          ai_classification?: string | null
+          confidence?: number | null
           created_at?: string | null
           erro?: string | null
           evento_id?: string | null
           id?: string
+          message?: string | null
+          reason?: string | null
           resposta_ia?: Json | null
           user_id?: string | null
         }
