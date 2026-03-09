@@ -1230,9 +1230,9 @@ async function processarJob(job: any): Promise<void> {
         
         const editAliases: Record<string, string> = {
           "edit_pix": "pix",
-          "edit_debito": "debito",
-          "edit_credito": "credito",
-          "edit_dinheiro": "dinheiro"
+          "edit_debito": "dinheiro",
+          "edit_dinheiro": "dinheiro",
+          "edit_credito": "credito"
         };
         const newMethod = editAliases[payload.buttonReplyId];
         
