@@ -5156,7 +5156,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           }
         } else {
           // Nunca usou ou sem transações
-          contextMessage = `\n\nSou seu assistente financeiro! 💰\n\nPode me dizer seus gastos assim:\n"café 5 pix" ou "almoço 30 débito"\n\nEu cuido do resto!`;
+          contextMessage = `\n\nSou seu assistente financeiro! 💰\n\nPode me dizer seus gastos assim:\n"café 5 pix" ou "almoço 30 dinheiro"\n\nEu cuido do resto!`;
         }
         
         await sendMessage(payload.phoneNumber, `${greeting}, ${primeiroNome}! 👋${contextMessage}`, payload.messageSource);
