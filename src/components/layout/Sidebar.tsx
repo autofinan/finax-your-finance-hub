@@ -16,6 +16,7 @@ import {
   Palmtree,
   Target,
   Landmark,
+  BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
@@ -34,6 +35,7 @@ const navItems = [
   { to: '/eventos', icon: Palmtree, label: 'Eventos & Viagens' },
   { to: '/metas', icon: Target, label: 'Metas' },
   { to: '/dividas', icon: Landmark, label: 'Dívidas' },
+  { to: '/projecoes', icon: BarChart3, label: 'Projeções' },
   { to: '/relatorios', icon: TrendingUp, label: 'Relatórios' },
   { to: '/chat', icon: MessageCircle, label: 'Fin Chat' },
 ];
