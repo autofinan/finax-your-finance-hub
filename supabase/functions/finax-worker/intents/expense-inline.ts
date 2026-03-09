@@ -348,6 +348,13 @@ export async function registerExpenseInline(
     console.error("⚠️ [PERFIL] Erro não-bloqueante:", perfilErr);
   }
   
+  // 🚨 ALERTAS PROATIVOS (spending_alerts)
+  try {
+    await checkImmediateAlerts(userId, { valor, categoria, descricao });
+  } catch (alertErr) {
+    console.error("⚠️ [ALERTS] Erro não-bloqueante:", alertErr);
+  }
+  
   // 💰 VERIFICAR ORÇAMENTO
   const budgetAlert = await checkBudgetAfterExpense(userId, categoria, valor);
   
