@@ -47,17 +47,31 @@ const Metas = () => {
     getInsightMeta,
     formatCurrency,
   } = useMetas(usuarioId || undefined);
+
+  const {
+    metas: metasFrequencia,
+    loading: loadingFreq,
+    criarMeta: criarMetaFrequencia,
+    deletarMeta: deletarMetaFrequencia,
+  } = useMetasFrequencia(usuarioId || undefined);
   
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isAddProgressOpen, setIsAddProgressOpen] = useState(false);
+  const [isCreateFreqOpen, setIsCreateFreqOpen] = useState(false);
   const [selectedMeta, setSelectedMeta] = useState<Meta | null>(null);
   
-  // Form states
+  // Form states - Savings
   const [name, setName] = useState('');
   const [targetAmount, setTargetAmount] = useState('');
   const [deadline, setDeadline] = useState('');
   const [category, setCategory] = useState('');
   const [progressValue, setProgressValue] = useState('');
+
+  // Form states - Frequency
+  const [freqNome, setFreqNome] = useState('');
+  const [freqCategoria, setFreqCategoria] = useState('');
+  const [freqLimite, setFreqLimite] = useState('');
+  const [freqPalavras, setFreqPalavras] = useState('');
 
   const handleCreate = async () => {
     if (!name || !targetAmount) return;
