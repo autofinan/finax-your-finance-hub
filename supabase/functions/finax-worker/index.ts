@@ -4907,7 +4907,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           .eq("usuario_id", userId)
           .eq("tipo", "saida")
           .eq("status", "confirmada")
-          .gte("data", inicioMesChat.toISOString());
+          .gte("data", inicioMesChat.toISOString())
+          .limit(10000);
         
         if (catBreakdown && catBreakdown.length > 0) {
           const byCategory: Record<string, number> = {};
