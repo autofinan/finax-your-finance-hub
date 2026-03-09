@@ -93,7 +93,7 @@ export const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; 
     useButtons: true,
     buttons: [
       { id: "pay_pix", title: "📱 Pix" },
-      { id: "pay_debito", title: "💳 Débito" },
+      { id: "pay_dinheiro", title: "💵 Dinheiro" },
       { id: "pay_credito", title: "💳 Crédito" }
     ]
   },
