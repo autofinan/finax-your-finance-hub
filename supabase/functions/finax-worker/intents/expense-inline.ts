@@ -379,10 +379,25 @@ export async function registerExpenseInline(
     message += `\n\n${budgetAlert}`;
   }
   
-  // 🏁 FREEDOM MICRO-INSIGHT
-  const freedomInsight = await getFreedomMicroInsight(userId, valor);
-  if (freedomInsight) {
-    message += freedomInsight;
+  // 🏁 FREEDOM MICRO-INSIGHT (PRO ONLY)
+  try {
+    const { data: usuario } = await supabase
+      .from("usuarios")
+      .select("plano, trial_fim")
+      .eq("id", userId)
+      .single();
+    
+    const isPro = usuario?.plano === "pro" || 
+      (usuario?.plano === "trial" && usuario?.trial_fim && new Date(usuario.trial_fim) > new Date());
+    
+    if (isPro) {
+      const freedomInsight = await getFreedomMicroInsight(userId, valor);
+      if (freedomInsight) {
+        message += freedomInsight;
+      }
+    }
+  } catch (freedomErr) {
+    console.error("⚠️ [FREEDOM] Erro não-bloqueante:", freedomErr);
   }
   
   if (queueInfo) {
