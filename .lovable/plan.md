@@ -28,28 +28,57 @@
 | Vendedor IA Especialista (finaxSalesResponse com Gemini) | ✅ |
 | Sequência de Vendas 4 Toques (daily-sales cron) | ✅ |
 | Migração URLs para finaxai.vercel.app | ✅ |
+| Padronização visual UI (dark theme, glassmorphism) | ✅ |
+
+---
 
 ## 🔜 Pendente (por prioridade)
 
-### Alta Prioridade
-| Item | Complexidade | Estimativa |
-|------|-------------|-----------|
-| Configurar cron job para daily-sales (pg_cron) | Baixa | 10 min |
-| Comprar domínio curto (fin.ax / finax.link) para encurtador | Externa | - |
+### 🔴 Alta Prioridade
 
-### Média Prioridade
-| Item | Complexidade | Estimativa |
-|------|-------------|-----------|
-| Projeções Financeiras (3/6/12 meses) | Média | 1-2 sessões |
-| Sistema de cupons/descontos (quando decidido) | Média | 1 sessão |
+| Item | Complexidade | Impacto | Estimativa |
+|------|-------------|---------|-----------|
+| Configurar cron job daily-sales (pg_cron + pg_net) | Baixa | 🔥 Alto | 10 min |
+| Comprar domínio curto (fin.ax / finax.link) | Externa | Alto | — |
 
-### Baixa Prioridade
-| Item | Complexidade | Estimativa |
-|------|-------------|-----------|
-| Metas de Frequência (novo tipo de meta) | Baixa | 1 sessão |
-| Progresso Acumulado | Baixa | 1 sessão |
-| Relatórios diferenciados (Básico vs Pro) | Baixa | 1 sessão |
+> **Cron job** = ativação imediata da sequência automática de 4 toques de vendas. Prioridade máxima.
 
-## Próximo Passo Recomendado
+---
 
-**Configurar cron job** — Ativar pg_cron + pg_net para rodar `daily-sales` todo dia às 10h (horário de Brasília). Isso ativa a sequência de 4 toques automática.
+### 🟡 Média Prioridade
+
+| Item | Complexidade | Impacto | Estimativa |
+|------|-------------|---------|-----------|
+| Projeções Financeiras (3/6/12 meses) | Média | Alto | 1-2 sessões |
+| Sistema de cupons/descontos (Stripe) | Média | Médio | 1 sessão |
+
+---
+
+### 🟢 Baixa Prioridade
+
+| Item | Complexidade | Impacto | Estimativa |
+|------|-------------|---------|-----------|
+| Metas de Frequência (ex: máx. 8 deliveries/mês) | Baixa | Médio | 1 sessão |
+| Progresso Acumulado (juros evitados + dias antecipados) | Baixa | Médio | 1 sessão |
+| Relatórios diferenciados (Básico vs Pro) | Baixa | Baixo | 1 sessão |
+
+---
+
+## 💡 Backlog Técnico
+
+| Categoria | Item |
+|-----------|------|
+| Infraestrutura | Padronizar estrutura de logs entre edge functions |
+| Infraestrutura | Melhorar error handling no pipeline WhatsApp |
+| Performance | Cache inteligente para queries de relatórios |
+| UX/Mobile | Otimizar experiência mobile na web app |
+| AI/ML | Melhorar precisão da categorização com histórico |
+| AI/ML | Recomendações personalizadas por perfil do usuário |
+
+---
+
+## 🎯 Próximo Sprint Recomendado
+
+1. **Configurar cron job** — ativa vendas automáticas imediatamente
+2. **Projeções Financeiras** — alto valor percebido para usuários Pro
+3. **Metas de Frequência** — diferenciação competitiva única
