@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useUsuarioId } from '@/hooks/useUsuarioId';
 import { useMetas, Meta } from '@/hooks/useMetas';
+import { useMetasFrequencia, MetaFrequencia } from '@/hooks/useMetasFrequencia';
 import { usePlanoStatus } from '@/hooks/usePlanoStatus';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Progress } from '@/components/ui/progress';
 import { 
   Plus, 
   Target, 
@@ -21,6 +23,8 @@ import {
   Calendar,
   Trash2,
   Trophy,
+  Repeat,
+  AlertTriangle,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
