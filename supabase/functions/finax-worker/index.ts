@@ -5263,14 +5263,22 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     }
     
     // ========================================================================
-    // 💡 FALLBACK INTELIGENTE: Se parece pergunta → responder como chat
+    // 💡 FIX #3: FALLBACK INTELIGENTE EXPANDIDO
+    // ========================================================================
+    // Se parece pergunta OU mensagem longa sem números → responder como chat
+    // Reduz drasticamente os "não entendi" desnecessários
     // ========================================================================
     const normalizedFallback = normalizeText(conteudoProcessado);
     const parecePerguntar = conteudoProcessado.includes("?") || 
                             normalizedFallback.match(/^(como|quando|quanto|qual|por que|o que|sera|devo|posso|tenho|to |tou |estou |consigo)/);
     
-    if (parecePerguntar) {
-      console.log(`💬 [FALLBACK→CHAT] Redirecionando para chat: "${conteudoProcessado.slice(0, 50)}..."`);
+    // FIX #3: Mensagem longa (>5 palavras) sem números → provavelmente é chat
+    const words = conteudoProcessado.trim().split(/\s+/).length;
+    const hasNumber = /\d/.test(conteudoProcessado);
+    const isLongTextWithoutNumber = words > 5 && !hasNumber;
+    
+    if (parecePerguntar || isLongTextWithoutNumber) {
+      console.log(`💬 [FALLBACK→CHAT] Redirecionando para chat: "${conteudoProcessado.slice(0, 50)}..." (${parecePerguntar ? 'pergunta' : 'texto longo'})`);
       
       const summary = await getMonthlySummary(userId);
       const chatResponse = await generateChatResponse(
@@ -5287,7 +5295,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         user_id: userId,
         user_message: conteudoProcessado,
         ai_response: chatResponse,
-        tipo: "chat_fallback"
+        tipo: isLongTextWithoutNumber ? "chat_fallback_long" : "chat_fallback"
       });
       return;
     }
