@@ -225,39 +225,40 @@ export default function Dividas() {
             <p className="text-slate-500">Registre suas dívidas para acompanhar e acelerar sua quitação</p>
           </div>
         ) : (
-          <div className="grid gap-4">
-            {dividas.map(d => {
+          <div className="space-y-3">
+            {dividas.map((d, index) => {
               const prazo = calcularPrazoMinimo(d.saldo_devedor, d.valor_minimo, d.taxa_juros);
               return (
-                <Card key={d.id} className={`bg-card border-border ${!d.ativa ? 'opacity-50' : ''}`}>
-                  <CardContent className="py-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
+                <div key={d.id} className={`bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-5 transition-all duration-300 hover:border-indigo-500/30 ${!d.ativa ? 'opacity-50' : ''}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="p-4 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20">
                         <span className="text-2xl">{TIPO_ICONS[d.tipo] || '📄'}</span>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-bold text-foreground">{d.nome}</h3>
-                            <Badge variant={d.ativa ? 'default' : 'secondary'} className="text-[10px]">
-                              {d.ativa ? TIPO_LABELS[d.tipo] || d.tipo : 'Quitada'}
-                            </Badge>
-                          </div>
-                          <div className="flex gap-4 mt-1 text-xs text-muted-foreground">
-                            <span>Saldo: <strong className="text-destructive">{formatCurrency(d.saldo_devedor)}</strong></span>
-                            {d.taxa_juros && <span>Juros: {d.taxa_juros}%/mês</span>}
-                            {d.valor_minimo && <span>Mínimo: {formatCurrency(d.valor_minimo)}</span>}
-                          </div>
-                          {/* Projeção simples para Básico, completa para Pro */}
-                          {d.ativa && prazo && (
-                            <p className="text-xs text-amber-400 mt-1">⏱️ {prazo}</p>
-                          )}
-                          {/* Teaser de projeção de liberdade */}
-                          {d.ativa && showUpgradeTeaser('debt_freedom_projection') && d.taxa_juros && (
-                            <p className="text-xs text-primary/60 mt-1 italic">
-                              🔒 Veja em quantos dias pode ficar livre — Pro
-                            </p>
-                          )}
-                        </div>
                       </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-lg text-white">{d.nome}</h3>
+                          <Badge variant={d.ativa ? 'default' : 'secondary'} className="text-[10px]">
+                            {d.ativa ? TIPO_LABELS[d.tipo] || d.tipo : 'Quitada'}
+                          </Badge>
+                        </div>
+                        <div className="flex gap-4 mt-1 text-xs text-slate-400">
+                          <span>Saldo: <strong className="text-red-400">{formatCurrency(d.saldo_devedor)}</strong></span>
+                          {d.taxa_juros && <span>Juros: {d.taxa_juros}%/mês</span>}
+                          {d.valor_minimo && <span>Mínimo: {formatCurrency(d.valor_minimo)}</span>}
+                        </div>
+                        {/* Projeção simples para Básico, completa para Pro */}
+                        {d.ativa && prazo && (
+                          <p className="text-xs text-amber-400 mt-1">⏱️ {prazo}</p>
+                        )}
+                        {/* Teaser de projeção de liberdade */}
+                        {d.ativa && showUpgradeTeaser('debt_freedom_projection') && d.taxa_juros && (
+                          <p className="text-xs text-indigo-400/60 mt-1 italic">
+                            🔒 Veja em quantos dias pode ficar livre — Pro
+                          </p>
+                        )}
+                      </div>
+                    </div>
                       <div className="flex items-center gap-2">
                         <Button variant="ghost" size="icon" onClick={() => handleToggleAtiva(d)} title={d.ativa ? 'Marcar como quitada' : 'Reativar'}>
                           <CheckCircle className={`w-4 h-4 ${d.ativa ? 'text-muted-foreground' : 'text-emerald-400'}`} />
