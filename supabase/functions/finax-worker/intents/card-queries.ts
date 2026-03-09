@@ -86,7 +86,8 @@ export async function queryCardExpenses(userId: string): Promise<string> {
     .eq("tipo", "saida")
     .eq("forma_pagamento", "credito")
     .gte("data", inicioMes.toISOString())
-    .eq("status", "confirmada");
+    .eq("status", "confirmada")
+    .limit(10000);
   
   if (!gastos || gastos.length === 0) {
     return "Nenhum gasto no crédito este mês 💳";
@@ -124,7 +125,8 @@ export async function queryContextExpenses(userId: string, contextId: string): P
     .from("transacoes")
     .select("valor")
     .eq("context_id", contextId)
-    .eq("status", "confirmada");
+    .eq("status", "confirmada")
+    .limit(10000);
   
   const total = gastos?.reduce((sum, g) => sum + Number(g.valor), 0) || 0;
   return { total, count: gastos?.length || 0 };

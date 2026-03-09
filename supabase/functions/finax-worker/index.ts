@@ -979,7 +979,8 @@ async function processarJob(job: any): Promise<void> {
           .eq("tipo", scope === "income" ? "entrada" : "saida")
           .gte("data", viewStartOfMonth.toISOString())
           .eq("status", "confirmada")
-          .order("data", { ascending: false });
+          .order("data", { ascending: false })
+          .limit(1000);
         
         if (viewCategory) {
           viewQuery = viewQuery.eq("categoria", viewCategory);
@@ -1037,7 +1038,8 @@ async function processarJob(job: any): Promise<void> {
           .eq("usuario_id", userId)
           .eq("tipo", "saida")
           .gte("data", catStartDate.toISOString())
-          .eq("status", "confirmada");
+          .eq("status", "confirmada")
+          .limit(10000);
         
         if (!catTxs || catTxs.length === 0) {
           await sendMessage(payload.phoneNumber, "Nenhum gasto encontrado 🤷", payload.messageSource);
@@ -4095,7 +4097,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             .eq("tipo", "entrada")
             .gte("data", inicioMes.toISOString())
             .eq("status", "confirmada")
-            .order("data", { ascending: false });
+            .order("data", { ascending: false })
+            .limit(1000);
           
           if (!entradas || entradas.length === 0) {
             await sendMessage(payload.phoneNumber, "💰 Nenhuma entrada registrada este mês.\n\n_Manda \"recebi 1500\" pra registrar!_", payload.messageSource);
@@ -4385,7 +4388,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           .eq("tipo", "entrada")
           .gte("data", inicioMes2.toISOString())
           .eq("status", "confirmada")
-          .order("data", { ascending: false });
+          .order("data", { ascending: false })
+          .limit(1000);
         
         if (!entradas2 || entradas2.length === 0) {
           await sendMessage(payload.phoneNumber, "💰 Nenhuma entrada registrada este mês.\n\n_Manda \"recebi 1500\" pra registrar!_", payload.messageSource);
@@ -4432,7 +4436,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
             .eq("tipo", "saida")
             .gte("data", inicioMes3.toISOString())
             .eq("status", "confirmada")
-            .order("data", { ascending: false });
+            .order("data", { ascending: false })
+            .limit(1000);
           
           if (!gastos || gastos.length === 0) {
             await sendMessage(payload.phoneNumber, 
@@ -4902,7 +4907,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           .eq("usuario_id", userId)
           .eq("tipo", "saida")
           .eq("status", "confirmada")
-          .gte("data", inicioMesChat.toISOString());
+          .gte("data", inicioMesChat.toISOString())
+          .limit(10000);
         
         if (catBreakdown && catBreakdown.length > 0) {
           const byCategory: Record<string, number> = {};

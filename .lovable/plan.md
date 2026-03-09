@@ -29,6 +29,11 @@
 | Sequência de Vendas 4 Toques (daily-sales cron) | ✅ |
 | Migração URLs para finaxai.vercel.app | ✅ |
 | Padronização visual UI (dark theme, glassmorphism) | ✅ |
+| **Auditoria Técnica: Índices DB** | ✅ 09/03 |
+| **Auditoria Técnica: .limit() em queries** | ✅ 09/03 |
+| **Auditoria Técnica: Validação expense** | ✅ 09/03 |
+| **Auditoria Técnica: A/B Test structure** | ✅ 09/03 |
+| **Auditoria Técnica: Transaction Factory** | ✅ 09/03 |
 
 ---
 
