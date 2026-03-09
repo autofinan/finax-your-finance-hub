@@ -22,6 +22,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Eventos from '@/pages/Eventos';
 import Metas from '@/pages/Metas';
 import Dividas from '@/pages/Dividas';
+import Projecoes from '@/pages/Projecoes';
 
 const queryClient = new QueryClient();
 
