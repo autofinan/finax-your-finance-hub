@@ -282,12 +282,12 @@ export default function Dividas() {
                       </Button>
                     </div>
                   </div>
-                  </CardContent>
-                </Card>
+                </div>
               );
             })}
           </div>
         )}
+        </div>
       </div>
     </AppLayout>
   );
