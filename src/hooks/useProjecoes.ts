@@ -21,8 +21,8 @@ export interface ProjecaoMes {
   dividaRestante: number;
 }
 
-export function useProjecoes(transacoes: Transacao[], usuarioId?: string) {
-  const { saldoTotal, minimoTotal, dividasAtivas } = useDividas();
+export function useProjecoes(transacoes: Transacao[]) {
+  const { saldoTotal } = useDividas();
 
   return useMemo(() => {
     if (!transacoes.length) {
