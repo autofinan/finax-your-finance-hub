@@ -90,30 +90,37 @@ export async function learnMerchantPattern(params: LearnPatternParams): Promise<
     const expiresAt = new Date(Date.now() + PATTERN_TTL_DAYS * 24 * 60 * 60 * 1000);
     
     if (existing) {
-      // REGRA: Só atualizar se confidence >= 0.7 OU mesmo padrão
+      // REGRA: Só incrementar se mesma categoria + mesmo pagamento
       const isSamePattern = 
         existing.inferred_category === category && 
         existing.inferred_payment_method === paymentMethod;
       
-      if (existing.confidence >= CONFIDENCE_THRESHOLD || isSamePattern) {
+      if (isSamePattern) {
+        const newUsageCount = existing.usage_count + 1;
+        const newConfidence = Math.min(0.99, existing.confidence + 0.15);
+        // Só ativar (confidence >= 0.7) quando usage_count >= 3
+        const effectiveConfidence = newUsageCount >= 3 ? newConfidence : Math.min(newConfidence, CONFIDENCE_THRESHOLD - 0.01);
+        
         await supabase.from("user_patterns")
           .update({
             inferred_category: category,
             inferred_payment_method: paymentMethod,
             inferred_card_id: cardId || existing.inferred_card_id,
-            confidence: Math.min(0.99, existing.confidence + 0.1),
-            usage_count: existing.usage_count + 1,
+            confidence: effectiveConfidence,
+            usage_count: newUsageCount,
             last_used_at: new Date().toISOString(),
             expires_at: expiresAt.toISOString()
           })
           .eq("id", existing.id);
         
-        console.log(`🧠 [MEMORY] Padrão atualizado: ${merchantNormalized} (conf: ${(existing.confidence + 0.1).toFixed(2)})`);
+        const isActive = newUsageCount >= 3 && effectiveConfidence >= CONFIDENCE_THRESHOLD;
+        console.log(`🧠 [MEMORY] Padrão atualizado: ${merchantNormalized} (uso: ${newUsageCount}x, conf: ${effectiveConfidence.toFixed(2)}, ativo: ${isActive})`);
       } else {
-        console.log(`⚠️ [MEMORY] Padrão divergente ignorado (conf < ${CONFIDENCE_THRESHOLD})`);
+        // Padrão divergente - não sobrescrever, apenas logar
+        console.log(`⚠️ [MEMORY] Padrão divergente ignorado: ${merchantNormalized} (existente: ${existing.inferred_category}/${existing.inferred_payment_method}, novo: ${category}/${paymentMethod})`);
       }
     } else {
-      // Inserir novo padrão
+      // Inserir novo padrão com confidence baixa (NÃO será aplicado até 3x)
       await supabase.from("user_patterns").insert({
         user_id: userId,
         merchant: description,
@@ -121,14 +128,14 @@ export async function learnMerchantPattern(params: LearnPatternParams): Promise<
         inferred_category: category,
         inferred_payment_method: paymentMethod,
         inferred_card_id: cardId,
-        confidence: 0.5,  // Começa com confiança moderada
+        confidence: 0.3,  // Começa BAIXO - não será aplicado até 3x
         usage_count: 1,
         source_transaction_id: transactionId,
         expires_at: expiresAt.toISOString(),
         decision_version: DECISION_VERSION
       });
       
-      console.log(`🧠 [MEMORY] Novo padrão criado: ${merchantNormalized}`);
+      console.log(`🧠 [MEMORY] Novo padrão criado: ${merchantNormalized} (conf: 0.3, precisa de 3x para ativar)`);
     }
   } catch (error) {
     console.error("❌ [MEMORY] Erro ao aprender padrão:", error);
