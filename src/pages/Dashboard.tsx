@@ -8,6 +8,7 @@ import { BudgetCard } from '@/components/dashboard/BudgetCard';
 import { InsightDoDia } from '@/components/dashboard/InsightDoDia';
 import { QuickActions } from '@/components/dashboard/QuickActions';
 import { FreedomCard } from '@/components/dashboard/FreedomCard';
+import { ProgressoAcumuladoCard } from '@/components/dashboard/ProgressoAcumuladoCard';
 import { useTransacoes } from '@/hooks/useTransacoes';
 import { useDashboard } from '@/hooks/useDashboard';
 import { usePlanoStatus } from '@/hooks/usePlanoStatus';
