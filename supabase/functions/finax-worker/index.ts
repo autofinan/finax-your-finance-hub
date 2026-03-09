@@ -2476,6 +2476,27 @@ async function processarJob(job: any): Promise<void> {
           const result = await updateTransactionPaymentMethod(lastTx.id, paymentMentioned);
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
           
+          // 🧠 APRENDER COM A CORREÇÃO (popular ai_corrections)
+          if (hasCorrectionWord && lastTx.forma_pagamento && lastTx.forma_pagamento !== paymentMentioned) {
+            try {
+              const { learnFromCorrection } = await import("./learning/corrections.ts");
+              await learnFromCorrection({
+                userId,
+                originalMessage: lastTx.descricao || conteudoProcessado,
+                originalClassification: { 
+                  actionType: "expense", 
+                  slots: { payment_method: lastTx.forma_pagamento } 
+                },
+                userCorrection: conteudoProcessado,
+                correctedField: "payment_method",
+                correctedValue: paymentMentioned
+              });
+              console.log(`🧠 [LEARN] Correção de payment_method salva: ${lastTx.forma_pagamento} → ${paymentMentioned}`);
+            } catch (learnErr) {
+              console.error("⚠️ [LEARN] Erro não-bloqueante:", learnErr);
+            }
+          }
+          
           await supabase.from("historico_conversas").insert({
             phone_number: payload.phoneNumber,
             user_id: userId,

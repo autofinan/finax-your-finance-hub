@@ -34,6 +34,9 @@
 | **Auditoria Técnica: Validação expense** | ✅ 09/03 |
 | **Auditoria Técnica: A/B Test structure** | ✅ 09/03 |
 | **Auditoria Técnica: Transaction Factory** | ✅ 09/03 |
+| **Alertas Proativos (spending_alerts)** | ✅ 09/03 |
+| **Aprendizado com Correções (ai_corrections)** | ✅ 09/03 |
+| **Remoção tabela hipoteses_registro** | ✅ 09/03 |
 
 ---
 
