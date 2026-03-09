@@ -217,15 +217,13 @@ export default function Dividas() {
 
         {/* Dividas List */}
         {isLoading ? (
-          <div className="text-center text-muted-foreground py-12">Carregando...</div>
+          <div className="text-center text-slate-400 py-12">Carregando...</div>
         ) : dividas.length === 0 ? (
-          <Card className="bg-card border-border">
-            <CardContent className="py-12 text-center">
-              <TrendingDown className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
-              <p className="text-muted-foreground">Nenhuma dívida registrada</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Registre suas dívidas para acompanhar e acelerar sua quitação</p>
-            </CardContent>
-          </Card>
+          <div className="bg-slate-900/40 backdrop-blur-xl border border-white/5 rounded-2xl p-16 text-center">
+            <TrendingDown className="w-16 h-16 mx-auto text-slate-600 mb-4" />
+            <h3 className="text-xl font-bold text-white mb-2">Nenhuma dívida registrada</h3>
+            <p className="text-slate-500">Registre suas dívidas para acompanhar e acelerar sua quitação</p>
+          </div>
         ) : (
           <div className="grid gap-4">
             {dividas.map(d => {
