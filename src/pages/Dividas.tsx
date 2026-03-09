@@ -4,7 +4,7 @@ import { useDividas, type Divida } from '@/hooks/useDividas';
 import { usePlanoStatus } from '@/hooks/usePlanoStatus';
 import { UpgradeTeaser } from '@/components/UpgradeTeaser';
 import { formatCurrency } from '@/lib/utils';
-import { Card, CardContent } from '@/components/ui/card';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
