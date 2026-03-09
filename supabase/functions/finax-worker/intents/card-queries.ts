@@ -125,7 +125,8 @@ export async function queryContextExpenses(userId: string, contextId: string): P
     .from("transacoes")
     .select("valor")
     .eq("context_id", contextId)
-    .eq("status", "confirmada");
+    .eq("status", "confirmada")
+    .limit(10000);
   
   const total = gastos?.reduce((sum, g) => sum + Number(g.valor), 0) || 0;
   return { total, count: gastos?.length || 0 };
