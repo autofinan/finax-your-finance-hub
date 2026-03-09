@@ -49,7 +49,6 @@ export function useProjecoes(transacoes: Transacao[]) {
 
     const mediaEntradas = totalEntradas / mesesComDados;
     const mediaSaidas = totalSaidas / mesesComDados;
-    const margemMensal = mediaEntradas - mediaSaidas;
 
     // Tendência: comparar último mês com penúltimo
     const mesAtual = agora.toISOString().substring(0, 7);
