@@ -155,7 +155,17 @@ export async function registerExpenseInline(
   createActionFn?: (userId: string, type: string, intent: string, slots: Record<string, any>, pendingSlot?: string | null, messageId?: string | null) => Promise<any>,
   closeActionFn?: (actionId: string, entityId?: string) => Promise<void>
 ): Promise<{ success: boolean; message: string; isDuplicate?: boolean }> {
-  const valor = slots.amount!;
+  const valor = slots.amount;
+  
+  // ✅ VALIDAÇÃO CRÍTICA: Rejeitar valores ausentes ou zero
+  if (!valor || typeof valor !== "number" || valor <= 0 || isNaN(valor)) {
+    console.error(`❌ [EXPENSE] Valor inválido: ${valor} (tipo: ${typeof valor})`);
+    return { 
+      success: false, 
+      message: "Não consegui identificar o valor 🤔\nPode reformular? Ex: *Mercado 150*" 
+    };
+  }
+  
   let descricao = slots.description || "";
   
   // 🧹 LIMPAR DESCRIÇÃO: extrair apenas o item/serviço
