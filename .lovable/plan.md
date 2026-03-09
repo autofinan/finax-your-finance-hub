@@ -37,19 +37,28 @@
 | **Alertas Proativos (spending_alerts)** | ✅ 09/03 |
 | **Aprendizado com Correções (ai_corrections)** | ✅ 09/03 |
 | **Remoção tabela hipoteses_registro** | ✅ 09/03 |
+| **Projeções Financeiras (3/6/12 meses - Web)** | ✅ 09/03 |
+| **Metas de Frequência (Web)** | ✅ 09/03 |
+| **Progresso Acumulado (card dashboard)** | ✅ 09/03 |
+| **Dashboard Realtime (supabase.channel)** | ✅ 09/03 |
+| **Mobile Nav melhorada** | ✅ 09/03 |
+| **Configurações expandidas (categorias + alertas)** | ✅ 09/03 |
 
 ---
 
 ## 🔜 Pendente (por prioridade)
 
-### 🔴 Alta Prioridade
+### 🔴 Alta Prioridade — Sprint 1 (Estabilidade WhatsApp)
 
 | Item | Complexidade | Impacto | Estimativa |
 |------|-------------|---------|-----------|
+| TTL Cleanup (actions expiradas) | Baixa | 🔥 Alto | 15 min |
+| Unificar execução de intents (executeIntent) | Média | 🔥 Alto | 30 min |
+| Fallback inteligente (unknown → chat IA) | Baixa | Alto | 15 min |
+| Log de erros_interpretacao | Baixa | Médio | 10 min |
 | Configurar cron job daily-sales (pg_cron + pg_net) | Baixa | 🔥 Alto | 10 min |
-| Comprar domínio curto (fin.ax / finax.link) | Externa | Alto | — |
 
-> **Cron job** = ativação imediata da sequência automática de 4 toques de vendas. Prioridade máxima.
+> **Sprint 1** = parar de travar com coisas simples. Prioridade máxima.
 
 ---
 
@@ -57,18 +66,9 @@
 
 | Item | Complexidade | Impacto | Estimativa |
 |------|-------------|---------|-----------|
-| Projeções Financeiras (3/6/12 meses) | Média | Alto | 1-2 sessões |
 | Sistema de cupons/descontos (Stripe) | Média | Médio | 1 sessão |
-
----
-
-### 🟢 Baixa Prioridade
-
-| Item | Complexidade | Impacto | Estimativa |
-|------|-------------|---------|-----------|
-| Metas de Frequência (ex: máx. 8 deliveries/mês) | Baixa | Médio | 1 sessão |
-| Progresso Acumulado (juros evitados + dias antecipados) | Baixa | Médio | 1 sessão |
 | Relatórios diferenciados (Básico vs Pro) | Baixa | Baixo | 1 sessão |
+| Comprar domínio curto (fin.ax / finax.link) | Externa | Alto | — |
 
 ---
 
@@ -79,7 +79,6 @@
 | Infraestrutura | Padronizar estrutura de logs entre edge functions |
 | Infraestrutura | Melhorar error handling no pipeline WhatsApp |
 | Performance | Cache inteligente para queries de relatórios |
-| UX/Mobile | Otimizar experiência mobile na web app |
 | AI/ML | Melhorar precisão da categorização com histórico |
 | AI/ML | Recomendações personalizadas por perfil do usuário |
 
@@ -87,6 +86,6 @@
 
 ## 🎯 Próximo Sprint Recomendado
 
-1. **Configurar cron job** — ativa vendas automáticas imediatamente
-2. **Projeções Financeiras** — alto valor percebido para usuários Pro
-3. **Metas de Frequência** — diferenciação competitiva única
+1. **Sprint 1 (Estabilidade)** — TTL cleanup, unificar execução, fallback inteligente
+2. **Configurar cron job** — ativa vendas automáticas
+3. **Relatórios diferenciados** — valor percebido Básico vs Pro
