@@ -219,3 +219,139 @@ export function invalidatePromptCache(name?: string): void {
     console.log(`🔄 [PROMPTS] Cache de prompts limpo`);
   }
 }
+
+// ============================================================================
+// 🧪 A/B TEST - PROMPT SELECTION
+// ============================================================================
+// Seleciona prompt baseado em A/B test (quando ativado)
+// Usa hash do userId para distribuição consistente (mesmo user = mesmo grupo)
+// ============================================================================
+
+export interface ABTestConfig {
+  enabled: boolean;
+  control_prompt_name: string;   // Prompt A (controle)
+  variant_prompt_name: string;   // Prompt B (variante)
+  variant_percentage: number;     // 0-100: % de usuários no grupo B
+}
+
+// Cache do A/B test config
+let abTestConfig: ABTestConfig | null = null;
+let abTestCacheExpiry: number = 0;
+
+export async function getABTestConfig(): Promise<ABTestConfig | null> {
+  const now = Date.now();
+  
+  if (abTestConfig !== null && now < abTestCacheExpiry) {
+    return abTestConfig.enabled ? abTestConfig : null;
+  }
+  
+  try {
+    const { data, error } = await supabase
+      .from("ai_prompts")
+      .select("name, active, performance")
+      .eq("active", true)
+      .in("name", ["finax_prompt_v7", "finax_prompt_v8"])
+      .order("version", { ascending: false });
+    
+    if (error || !data || data.length < 2) {
+      // Não há 2 prompts ativos → sem A/B test
+      abTestConfig = { enabled: false, control_prompt_name: "", variant_prompt_name: "", variant_percentage: 0 };
+      abTestCacheExpiry = now + PROMPT_CACHE_TTL_MS;
+      return null;
+    }
+    
+    // Verificar se algum tem ab_test config no campo performance
+    const v7 = data.find(p => p.name === "finax_prompt_v7");
+    const v8 = data.find(p => p.name === "finax_prompt_v8");
+    
+    if (!v7 || !v8) {
+      abTestConfig = { enabled: false, control_prompt_name: "", variant_prompt_name: "", variant_percentage: 0 };
+      abTestCacheExpiry = now + PROMPT_CACHE_TTL_MS;
+      return null;
+    }
+    
+    const perf = v8.performance as Record<string, any> | null;
+    const abEnabled = perf?.ab_test_enabled === true;
+    const variantPct = perf?.ab_test_percentage ?? 0;
+    
+    abTestConfig = {
+      enabled: abEnabled,
+      control_prompt_name: "finax_prompt_v7",
+      variant_prompt_name: "finax_prompt_v8",
+      variant_percentage: variantPct
+    };
+    
+    abTestCacheExpiry = now + PROMPT_CACHE_TTL_MS;
+    
+    if (abEnabled) {
+      console.log(`🧪 [A/B TEST] Ativo: ${variantPct}% no prompt v8`);
+    }
+    
+    return abTestConfig.enabled ? abTestConfig : null;
+    
+  } catch (err) {
+    console.warn(`⚠️ [A/B TEST] Erro ao buscar config:`, err);
+    return null;
+  }
+}
+
+/**
+ * Determina qual prompt usar para um dado userId.
+ * Usa hash simples do userId para distribuição consistente.
+ */
+export function getUserABGroup(userId: string, variantPercentage: number): "control" | "variant" {
+  // Hash simples: soma dos charCodes mod 100
+  let hash = 0;
+  for (let i = 0; i < userId.length; i++) {
+    hash = (hash + userId.charCodeAt(i)) % 100;
+  }
+  return hash < variantPercentage ? "variant" : "control";
+}
+
+/**
+ * Retorna o prompt correto para o usuário (A/B test aware).
+ * Se A/B test desabilitado, retorna o fallback (prompt hardcoded).
+ */
+export async function getPromptForUser(userId: string, fallbackPrompt: string): Promise<{ prompt: string; group: "control" | "variant" | "default"; promptName: string }> {
+  const abConfig = await getABTestConfig();
+  
+  if (!abConfig) {
+    return { prompt: fallbackPrompt, group: "default", promptName: "hardcoded_v7" };
+  }
+  
+  const group = getUserABGroup(userId, abConfig.variant_percentage);
+  const promptName = group === "variant" ? abConfig.variant_prompt_name : abConfig.control_prompt_name;
+  
+  const prompt = await getActivePrompt(promptName, fallbackPrompt);
+  
+  // Se o prompt do banco é o fallback, usar hardcoded
+  if (prompt === DEFAULT_FINAX_PROMPT || prompt === "FALLBACK_PROMPT") {
+    return { prompt: fallbackPrompt, group: "default", promptName: "hardcoded_v7" };
+  }
+  
+  console.log(`🧪 [A/B] User ${userId.slice(0, 8)}... → grupo "${group}" → prompt "${promptName}"`);
+  return { prompt, group, promptName };
+}
+
+/**
+ * Registra resultado do A/B test para análise posterior.
+ */
+export async function recordABTestResult(
+  userId: string,
+  group: string,
+  promptName: string,
+  intent: string,
+  confidence: number,
+  wasExecuted: boolean
+): Promise<void> {
+  try {
+    await recordMetric("ab_test_result", confidence, {
+      group,
+      prompt_name: promptName,
+      intent,
+      executed: String(wasExecuted)
+    });
+  } catch {
+    // Silencioso - não interromper fluxo
+  }
+}
