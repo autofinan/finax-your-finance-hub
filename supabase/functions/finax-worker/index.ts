@@ -2459,6 +2459,26 @@ async function processarJob(job: any): Promise<void> {
     });
     
     // ========================================================================
+    // 📝 FIX #4: LOG DE ERROS — Salvar decisões fracas para análise
+    // ========================================================================
+    if (decision.confidence < 0.5 || decision.actionType === "unknown") {
+      try {
+        await supabase.from("erros_interpretacao").insert({
+          user_id: userId,
+          evento_id: eventoId,
+          message: conteudoProcessado?.substring(0, 200) || "",
+          ai_classification: decision.actionType,
+          confidence: decision.confidence,
+          reason: decision.reasoning || "Low confidence",
+          erro: `${decision.actionType} @ ${decision.confidence}`
+        });
+        console.log(`📝 [ERRO_LOG] Interpretação fraca salva: "${decision.actionType}" (${decision.confidence})`);
+      } catch (logErr) {
+        console.warn(`📝 [ERRO_LOG] Falha ao salvar (não-bloqueante):`, logErr);
+      }
+    }
+    
+    // ========================================================================
     // 🔄 POST-CLASSIFICATION INTERCEPTOR: Payment method correction
     // ========================================================================
     // If user says something like "paguei em pix" and last transaction was
