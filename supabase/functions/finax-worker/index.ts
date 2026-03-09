@@ -3332,9 +3332,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           `🔄 ${slots.description || "Recorrente"} - R$ ${slots.amount?.toFixed(2)}/mês\n\nComo você paga?`, 
           [
             { id: "rec_pay_pix", title: "📱 Pix" },
-            { id: "rec_pay_debito", title: "💳 Débito" },
-            { id: "rec_pay_credito", title: "💳 Crédito" },
-            { id: "rec_pay_dinheiro", title: "💵 Dinheiro" }
+            { id: "rec_pay_dinheiro", title: "💵 Dinheiro" },
+            { id: "rec_pay_credito", title: "💳 Crédito" }
           ], 
           payload.messageSource
         );
