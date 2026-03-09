@@ -16,7 +16,7 @@ import {
 const Projecoes = () => {
   const { usuarioId } = useUsuarioId();
   const { transacoes } = useTransacoes(usuarioId || undefined);
-  const { cenarios, mediaEntradas, mediaSaidas, tendencia } = useProjecoes(transacoes, usuarioId || undefined);
+  const { cenarios, mediaEntradas, mediaSaidas, tendencia } = useProjecoes(transacoes);
   const [periodo, setPeriodo] = useState<'3' | '6' | '12'>('6');
 
   const cenariosFiltrados = cenarios.filter(c => c.meses === Number(periodo));
