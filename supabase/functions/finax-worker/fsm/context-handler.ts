@@ -787,9 +787,8 @@ export function getSlotPrompt(slotType: string): { text: string; buttons?: Array
       text: "Como você pagou?",
       buttons: [
         { id: "pay_pix", title: "📱 Pix" },
-        { id: "pay_debito", title: "💳 Débito" },
-        { id: "pay_credito", title: "💳 Crédito" },
-        { id: "pay_dinheiro", title: "💵 Dinheiro" }
+        { id: "pay_dinheiro", title: "💵 Dinheiro" },
+        { id: "pay_credito", title: "💳 Crédito" }
       ]
     },
     source: {

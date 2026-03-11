@@ -332,7 +332,7 @@ export function normalizeAISlots(slots: Record<string, any>): ExtractedSlots {
   if (slots.payment_method) {
     const pm = String(slots.payment_method).toLowerCase();
     const paymentMap: Record<string, string> = {
-      "pix": "pix", "débito": "debito", "debito": "debito",
+      "pix": "pix", "débito": "dinheiro", "debito": "dinheiro",
       "crédito": "credito", "credito": "credito", "cartão": "credito",
       "dinheiro": "dinheiro",
     };
