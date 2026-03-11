@@ -140,7 +140,7 @@ export async function updateTransactionPaymentMethod(
 
   const paymentEmoji =
     newMethod === "pix" ? "📱" :
-    newMethod === "debito" ? "💳" :
+    newMethod === "dinheiro" ? "💵" :
     newMethod === "credito" ? "💳" : "💵";
 
   return {
