@@ -81,7 +81,7 @@ export function extractSlotValue(message: string, slotType: string): any {
     }
     case "payment_method":
       if (normalized.includes("pix")) return "pix";
-      if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
+      if (normalized.includes("debito") || normalized.includes("débito")) return "dinheiro";
       if (normalized.includes("credito") || normalized.includes("crédito")) return "credito";
       if (normalized.includes("dinheiro")) return "dinheiro";
       return null;
@@ -140,7 +140,7 @@ export async function updateTransactionPaymentMethod(
 
   const paymentEmoji =
     newMethod === "pix" ? "📱" :
-    newMethod === "debito" ? "💳" :
+    newMethod === "dinheiro" ? "💵" :
     newMethod === "credito" ? "💳" : "💵";
 
   return {

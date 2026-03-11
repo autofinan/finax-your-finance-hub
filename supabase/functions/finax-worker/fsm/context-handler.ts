@@ -113,7 +113,7 @@ function isSubjectChange(normalized: string, currentIntent: string): boolean {
 
 function extractPaymentFromText(normalized: string): string | null {
   if (normalized.includes("pix")) return "pix";
-  if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
+  if (normalized.includes("debito") || normalized.includes("débito")) return "dinheiro";
   if (normalized.includes("dinheiro") || normalized.includes("cash")) return "dinheiro";
   if (normalized.includes("credito") || normalized.includes("crédito") || 
       normalized.includes("cartao") || normalized.includes("cartão")) return "credito";
@@ -551,7 +551,7 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
     
     case "payment_method":
       if (normalized.includes("pix")) return "pix";
-      if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
+      if (normalized.includes("debito") || normalized.includes("débito")) return "dinheiro";
       if (normalized.includes("credito") || normalized.includes("crédito") || 
           normalized.includes("cartao") || normalized.includes("cartão")) return "credito";
       if (normalized.includes("dinheiro") || normalized.includes("cash")) return "dinheiro";
@@ -660,7 +660,7 @@ export function generateConfirmationMessage(
       if (slots.payment_method) {
         const paymentEmoji: Record<string, string> = {
           "pix": "📱 Pix",
-          "debito": "💳 Débito",
+          "dinheiro": "💵 Dinheiro",
           "credito": "💳 Crédito",
           "dinheiro": "💵 Dinheiro"
         };
@@ -772,9 +772,8 @@ export function getSlotPrompt(slotType: string): { text: string; buttons?: Array
       text: "Como você pagou?",
       buttons: [
         { id: "pay_pix", title: "📱 Pix" },
-        { id: "pay_debito", title: "💳 Débito" },
-        { id: "pay_credito", title: "💳 Crédito" },
-        { id: "pay_dinheiro", title: "💵 Dinheiro" }
+        { id: "pay_dinheiro", title: "💵 Dinheiro" },
+        { id: "pay_credito", title: "💳 Crédito" }
       ]
     };
   }
@@ -788,9 +787,8 @@ export function getSlotPrompt(slotType: string): { text: string; buttons?: Array
       text: "Como você pagou?",
       buttons: [
         { id: "pay_pix", title: "📱 Pix" },
-        { id: "pay_debito", title: "💳 Débito" },
-        { id: "pay_credito", title: "💳 Crédito" },
-        { id: "pay_dinheiro", title: "💵 Dinheiro" }
+        { id: "pay_dinheiro", title: "💵 Dinheiro" },
+        { id: "pay_credito", title: "💳 Crédito" }
       ]
     },
     source: {
