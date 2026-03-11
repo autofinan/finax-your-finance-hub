@@ -660,7 +660,7 @@ export function generateConfirmationMessage(
       if (slots.payment_method) {
         const paymentEmoji: Record<string, string> = {
           "pix": "📱 Pix",
-          "debito": "💳 Débito",
+          "dinheiro": "💵 Dinheiro",
           "credito": "💳 Crédito",
           "dinheiro": "💵 Dinheiro"
         };
