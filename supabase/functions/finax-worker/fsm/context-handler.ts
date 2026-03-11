@@ -551,7 +551,7 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
     
     case "payment_method":
       if (normalized.includes("pix")) return "pix";
-      if (normalized.includes("debito") || normalized.includes("débito")) return "debito";
+      if (normalized.includes("debito") || normalized.includes("débito")) return "dinheiro";
       if (normalized.includes("credito") || normalized.includes("crédito") || 
           normalized.includes("cartao") || normalized.includes("cartão")) return "credito";
       if (normalized.includes("dinheiro") || normalized.includes("cash")) return "dinheiro";
