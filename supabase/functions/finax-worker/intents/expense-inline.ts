@@ -204,11 +204,10 @@ export async function registerExpenseInline(
       if (existingDesc === normalizedDesc || normalizedDesc.includes(existingDesc) || existingDesc.includes(normalizedDesc)) {
         console.log(`⚠️ [DEDUPE] Possível duplicata detectada: ${recentTx[0].id}`);
         const createFn = createActionFn || defaultCreateAction;
-          await createFn(userId, "duplicate_confirm", "duplicate_expense", {
-            ...slots,
-            original_tx_id: recentTx[0].id
-          }, null, null);
-        }
+        await createFn(userId, "duplicate_confirm", "duplicate_expense", {
+          ...slots,
+          original_tx_id: recentTx[0].id
+        }, null, null);
         
         const minutesAgo = Math.round((Date.now() - new Date(recentTx[0].created_at).getTime()) / 60000);
         return {
@@ -326,9 +325,9 @@ export async function registerExpenseInline(
   }
   
   if (actionId) {
-  const closeFn = closeActionFn || defaultCloseAction;
-  await closeFn(actionId, tx.id);
-}
+    const closeFn = closeActionFn || defaultCloseAction;
+    await closeFn(actionId, tx.id);
+  }
   
   // 🧠 MEMORY LAYER
   try {
