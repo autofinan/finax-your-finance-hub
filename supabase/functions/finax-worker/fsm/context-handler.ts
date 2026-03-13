@@ -379,7 +379,7 @@ function fillPendingSlot(
       
       const updatedSlots: ExtractedSlots = {
         ...activeAction.slots,
-        payment_method: paymentOverride,
+        payment_method: paymentOverride as ExtractedSlots["payment_method"],
       };
       // Remover slots de cartão inválidos
       delete updatedSlots.card;
