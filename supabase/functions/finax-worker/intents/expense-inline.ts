@@ -16,6 +16,7 @@ import { checkBudgetAfterExpense } from "./budget.ts";
 import { linkTransactionToContext, getActiveContext } from "./context-handler.ts";
 import { getFreedomMicroInsight } from "./freedom-insights.ts";
 import { checkImmediateAlerts } from "./alerts.ts";
+import { closeAction as defaultCloseAction, createAction as defaultCreateAction } from "../fsm/action-manager.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -202,8 +203,8 @@ export async function registerExpenseInline(
       const existingDesc = (recentTx[0].descricao || "").toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       if (existingDesc === normalizedDesc || normalizedDesc.includes(existingDesc) || existingDesc.includes(normalizedDesc)) {
         console.log(`⚠️ [DEDUPE] Possível duplicata detectada: ${recentTx[0].id}`);
-        if (createActionFn) {
-          await createActionFn(userId, "duplicate_confirm", "duplicate_expense", {
+        const createFn = createActionFn || defaultCreateAction;
+          await createFn(userId, "duplicate_confirm", "duplicate_expense", {
             ...slots,
             original_tx_id: recentTx[0].id
           }, null, null);
@@ -324,7 +325,10 @@ export async function registerExpenseInline(
     contextInfo = `\n📍 _Vinculado a: ${activeCtx.label}_`;
   }
   
-  if (actionId && closeActionFn) await closeActionFn(actionId, tx.id);
+  if (actionId) {
+  const closeFn = closeActionFn || defaultCloseAction;
+  await closeFn(actionId, tx.id);
+}
   
   // 🧠 MEMORY LAYER
   try {
