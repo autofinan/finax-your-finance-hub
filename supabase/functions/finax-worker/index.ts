@@ -87,6 +87,45 @@ interface DecisionOutput {
 const registerExpense = registerExpenseInline;
 const getMonthlySummary = getMonthlySummaryInline;
 
+// ============================================================================
+// 💳 CHECKOUT URL GENERATOR
+// ============================================================================
+async function generateCheckoutUrl(planType: "basico" | "pro", phone: string): Promise<string> {
+  try {
+    const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+    const priceId = planType === "pro"
+      ? Deno.env.get("STRIPE_PRICE_PRO")
+      : Deno.env.get("STRIPE_PRICE_BASICO");
+
+    if (!stripeSecretKey || !priceId) {
+      return `${SITE_URL}/?plan=${planType}`;
+    }
+
+    const { default: Stripe } = await import(STRIPE_IMPORT_URL);
+    const stripe = new Stripe(stripeSecretKey, {
+      apiVersion: "2023-10-16",
+      httpClient: Stripe.createFetchHttpClient(),
+    });
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${SITE_URL}/dashboard?success=true&plan=${planType}`,
+      cancel_url: `${SITE_URL}/?canceled=true`,
+      metadata: { plan: planType, phone },
+      subscription_data: { metadata: { plan: planType } },
+      allow_promotion_codes: true,
+      phone_number_collection: { enabled: true },
+    });
+
+    return session.url || `${SITE_URL}/?plan=${planType}`;
+  } catch (err) {
+    console.error("[WORKER] Stripe checkout error:", err);
+    return `${SITE_URL}/?plan=${planType}`;
+  }
+}
+
 // Wrapper para handleExpenseResult que injeta sendMessage/sendButtons
 async function handleExpenseResultCompat(
   result: { success: boolean; message: string; isDuplicate?: boolean },
@@ -2549,7 +2588,7 @@ async function processarJob(job: any): Promise<void> {
     const userPlano = usuario?.plano || "trial";
     const isProUserFlag = checkIsProUser(userPlano, usuario?.trial_fim || null);
     
-    if (PRO_ONLY_INTENTS.includes(decision.actionType) && !isProUser) {
+    if (PRO_ONLY_INTENTS.includes(decision.actionType) && !isProUserFlag) {
       const teaser = PRO_TEASER_INTENTS[decision.actionType] || "⭐ Este recurso é exclusivo do plano Pro!";
       console.log(`🔒 [GATING] Bloqueando intent Pro "${decision.actionType}" para plano "${userPlano}"`);
       await sendButtons(payload.phoneNumber,
