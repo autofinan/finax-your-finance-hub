@@ -1780,7 +1780,7 @@ async function processarJob(job: any): Promise<void> {
             await confirmPattern(patternId);
           }
           // Executar a transação com os slots já preenchidos
-          const result = await registerExpense(userId, activeAction.slots as any, activeAction.id);
+          const result = await registerExpense(userId, activeAction.slots as ExtractedSlots, activeAction.id);
           await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
         } else {
           await sendMessage(payload.phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", payload.messageSource);
@@ -2940,7 +2940,7 @@ async function processarJob(job: any): Promise<void> {
         }
         
         // Executar diretamente
-        const result = await registerExpense(userId, slots as any, undefined);
+        const result = await registerExpense(userId, slots, undefined);
         await supabase.from("actions")
           .update({ status: "done" })
           .eq("user_id", userId)
@@ -3196,7 +3196,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     // ✅ Slots completos - registrar direto
     console.log(`💸 [RECLASSIFIED] Registrando gasto reclassificado`);
     
-    const result = await registerExpense(userId, slots as any, undefined);
+    const result = await registerExpense(userId, slots, undefined);
     await supabase.from("actions")
       .update({ status: "done" })
       .eq("user_id", userId)
