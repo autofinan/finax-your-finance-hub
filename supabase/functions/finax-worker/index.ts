@@ -64,6 +64,8 @@ import { getActiveContext, createUserContext, closeUserContext, linkTransactionT
 import { generateChatResponse } from "./intents/chat-handler.ts";
 import { listTransactionsForCancel, cancelTransaction, getLastTransaction, updateTransactionPaymentMethod } from "./intents/cancel-handler.ts";
 import { finaxSalesResponse, shortenURL } from "./sales/seller.ts";
+import { SITE_URL, PRICE_BASICO, PRICE_PRO, PRO_ONLY_INTENTS, PRO_TEASER_INTENTS, STRIPE_IMPORT_URL, CHAT_CONFIDENCE_THRESHOLD, HISTORY_CONTEXT_LIMIT, SIMULTANEOUS_MSG_WINDOW_MS } from "./config/constants.ts";
+import { isProUser as checkIsProUser } from "./core/plan-guard.ts";
 
 // DecisionOutput type used by processarJob
 interface DecisionOutput {
@@ -234,46 +236,7 @@ async function processarJob(job: any): Promise<void> {
       // Verificar se trial expirou
       if (plano === "trial" && trialFim && trialFim < agora) {
         console.log(`🔒 [BLOQUEIO] Trial expirado para usuário ${userId}`);
-        
-        // ================================================================
-        // 🔗 CHECKOUT LINKS - Gerar URLs reais do Stripe
-        // ================================================================
-        const SITE_URL = "https://finaxai.vercel.app";
-        
-        async function generateCheckoutUrl(planType: "basico" | "pro", phone: string): Promise<string> {
-          try {
-            const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
-            const priceId = planType === "pro" 
-              ? Deno.env.get("STRIPE_PRICE_PRO") 
-              : Deno.env.get("STRIPE_PRICE_BASICO");
             
-            if (!stripeSecretKey || !priceId) {
-              console.error(`[CHECKOUT] Missing Stripe config for ${planType}`);
-              return `${SITE_URL}/?plan=${planType}`;
-            }
-            
-            const { default: Stripe } = await import("https://esm.sh/stripe@14.21.0?target=deno");
-            const stripe = new Stripe(stripeSecretKey, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
-            
-            const session = await stripe.checkout.sessions.create({
-              mode: "subscription",
-              payment_method_types: ["card"],
-              line_items: [{ price: priceId, quantity: 1 }],
-              success_url: `${SITE_URL}/dashboard?success=true&plan=${planType}`,
-              cancel_url: `${SITE_URL}/?canceled=true`,
-              metadata: { plan: planType, phone },
-              subscription_data: { metadata: { plan: planType } },
-              allow_promotion_codes: true,
-              phone_number_collection: { enabled: true },
-            });
-            
-            return session.url || `${SITE_URL}/?plan=${planType}`;
-          } catch (err) {
-            console.error(`[CHECKOUT] Error generating URL:`, err);
-            return `${SITE_URL}/?plan=${planType}`;
-          }
-        }
-        
         // ================================================================
         // 🔑 VERIFICAR CÓDIGO DE ATIVAÇÃO
         // ================================================================
@@ -869,47 +832,7 @@ async function processarJob(job: any): Promise<void> {
         await sendMessage(payload.phoneNumber, "👍 Cancelado!", payload.messageSource);
         return;
       }
-      
-      // ====================================================================
-      // ⭐ UPGRADE PRO - Gating button response
-      // ====================================================================
-      if (payload.buttonReplyId === "upgrade_pro") {
-        const SITE_URL = "https://finaxai.vercel.app";
-        try {
-          const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
-          const priceId = Deno.env.get("STRIPE_PRICE_PRO");
-          if (stripeSecretKey && priceId) {
-            const { default: Stripe } = await import("https://esm.sh/stripe@14.21.0?target=deno");
-            const stripe = new Stripe(stripeSecretKey, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
-            const session = await stripe.checkout.sessions.create({
-              mode: "subscription",
-              payment_method_types: ["card"],
-              line_items: [{ price: priceId, quantity: 1 }],
-              success_url: `${SITE_URL}/dashboard?success=true&plan=pro`,
-              cancel_url: `${SITE_URL}/?canceled=true`,
-              metadata: { plan: "pro", phone: payload.phoneNumber },
-              subscription_data: { metadata: { plan: "pro" } },
-              allow_promotion_codes: true,
-            });
-            await sendMessage(payload.phoneNumber, 
-              `⭐ *Plano Pro* — R$ 29,90/mês\n\nSimulador de quitação, alertas inteligentes, cartões ilimitados e muito mais!\n\n👉 Assine aqui: ${session.url}`,
-              payload.messageSource
-            );
-          } else {
-            await sendMessage(payload.phoneNumber, `⭐ Acesse ${SITE_URL} para assinar o Pro!`, payload.messageSource);
-          }
-        } catch (err) {
-          console.error(`[UPGRADE] Error:`, err);
-          await sendMessage(payload.phoneNumber, `⭐ Acesse https://finaxai.vercel.app para assinar o Pro!`, payload.messageSource);
-        }
-        return;
-      }
-      
-      if (payload.buttonReplyId === "gating_ok") {
-        await sendMessage(payload.phoneNumber, "Beleza! 👍 Me manda o que precisar 😊", payload.messageSource);
-        return;
-      }
-      
+  
       // ====================================================================
       // 📦 MÚLTIPLOS GASTOS - Separado ou Junto
       // ====================================================================
@@ -2622,17 +2545,9 @@ async function processarJob(job: any): Promise<void> {
     
     // ========================================================================
     // 🔒 PRO-ONLY FEATURE GATING (Básico vs Pro no WhatsApp)
-    // ========================================================================
-    const PRO_ONLY_INTENTS = ["query_alerts", "purchase", "query_freedom", "simulate_debts"];
-    const PRO_TEASER_INTENTS: Record<string, string> = {
-      query_alerts: "🚨 *Alertas Proativos* são exclusivos do plano Pro!\n\nCom o Pro, você recebe alertas automáticos sobre anomalias e riscos nos seus gastos.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
-      purchase: "🛒 *Consultor de Compras* é exclusivo do plano Pro!\n\nCom o Pro, eu analiso se a compra cabe no seu orçamento antes de comprar.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
-      query_freedom: "🏁 *Previsão de Liberdade Financeira* é exclusiva do plano Pro!\n\nCom o Pro, eu calculo quando você será livre das dívidas e o impacto de cada gasto.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
-      simulate_debts: "📊 *Simulador de Quitação* é exclusivo do plano Pro!\n\nCom o Pro, simulo cenários para você quitar suas dívidas mais rápido.\n\n⭐ Upgrade por apenas R$ 29,90/mês",
-    };
-    
+    // ========================================================================  
     const userPlano = usuario?.plano || "trial";
-    const isProUser = userPlano === "pro" || (userPlano === "trial" && usuario?.trial_fim && new Date(usuario.trial_fim) > new Date());
+    const isProUserFlag = checkIsProUser(userPlano, usuario?.trial_fim || null);
     
     if (PRO_ONLY_INTENTS.includes(decision.actionType) && !isProUser) {
       const teaser = PRO_TEASER_INTENTS[decision.actionType] || "⭐ Este recurso é exclusivo do plano Pro!";
