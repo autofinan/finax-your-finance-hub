@@ -325,9 +325,9 @@ export async function registerExpenseInline(
   }
   
   if (actionId) {
-  const closeFn = closeActionFn || defaultCloseAction;
-  await closeFn(actionId, tx.id);
-}
+    const closeFn = closeActionFn || defaultCloseAction;
+    await closeFn(actionId, tx.id);
+  }
   
   // 🧠 MEMORY LAYER
   try {
