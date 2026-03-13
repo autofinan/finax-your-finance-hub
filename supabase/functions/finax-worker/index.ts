@@ -2588,7 +2588,7 @@ async function processarJob(job: any): Promise<void> {
     const userPlano = usuario?.plano || "trial";
     const isProUserFlag = checkIsProUser(userPlano, usuario?.trial_fim || null);
     
-    if (PRO_ONLY_INTENTS.includes(decision.actionType) && !isProUser) {
+    if (PRO_ONLY_INTENTS.includes(decision.actionType) && !isProUserFlag) {
       const teaser = PRO_TEASER_INTENTS[decision.actionType] || "⭐ Este recurso é exclusivo do plano Pro!";
       console.log(`🔒 [GATING] Bloqueando intent Pro "${decision.actionType}" para plano "${userPlano}"`);
       await sendButtons(payload.phoneNumber,
