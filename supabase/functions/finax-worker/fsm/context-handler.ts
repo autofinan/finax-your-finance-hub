@@ -533,13 +533,23 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
     
     case "due_day":
     case "day_of_month":
-    case "closing_day":
+    case "closing_day": {
       const dayMatch = rawMessage.match(/(\d{1,2})/);
       if (dayMatch) {
         const day = parseInt(dayMatch[1]);
         if (day >= 1 && day <= 31) return day;
       }
       return null;
+    }
+
+    case "installments": {
+      const installmentMatch = normalized.match(/(\d{1,2})\s*(x|vezes|parcela|parcelas)?/i) || rawMessage.match(/(\d{1,2})/);
+      if (!installmentMatch) return null;
+
+      const count = parseInt(installmentMatch[1], 10);
+      if (Number.isNaN(count) || count < 2 || count > 72) return null;
+      return count;
+    }
     
     case "type_choice": {
       const expenseWords = ["gasto", "despesa", "saida", "saída", "expense", "1"];
