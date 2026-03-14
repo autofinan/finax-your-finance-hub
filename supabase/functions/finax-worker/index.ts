@@ -4035,7 +4035,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       // Usuário está respondendo a "precisa de ajuda com o quê?" mas IA classificou como chat/outro
       let helpResponse = "";
       
-      if (/\b(gasto|registr|anotar|lanc|compra|despesa)\b/i.test(conteudoProcessado)) {
+      if (/\b(gastos?|registr|anotar|lanc|compras?|despesas?)\b/i.test(conteudoProcessado)) {
         helpResponse = `💸 *Registrar gastos é simples!*\n\n` +
           `É só me dizer assim:\n\n` +
           `• "café 5 pix"\n` +
@@ -4046,7 +4046,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
           `• "ontem jantar 80 cartão"\n` +
           `• "dia 05/02 mercado 150 dinheiro"\n\n` +
           `Quer testar agora? 😊`;
-      } else if (/\b(cartao|cartões|credito|limite)\b/i.test(conteudoProcessado)) {
+      } else if (/\b(cartao|cartões|cartoes|credito|crédito|limite)\b/i.test(conteudoProcessado)) {
         helpResponse = `💳 *Sobre cartões de crédito:*\n\n` +
           `Ver seus cartões:\n` +
           `• "meus cartões"\n\n` +
