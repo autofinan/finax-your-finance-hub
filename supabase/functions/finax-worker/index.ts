@@ -772,6 +772,34 @@ async function processarJob(job: any): Promise<void> {
     
     if (isButtonReply && payload.buttonReplyId) {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
+
+      // ====================================================================
+      // 🔁 DUPLICATE CONFIRM HANDLERS (robusto contra contexto perdido)
+      // ====================================================================
+      if (payload.buttonReplyId === "duplicate_confirm_yes") {
+        await handleDuplicateConfirmYes({
+          userId,
+          activeAction,
+          phoneNumber: payload.phoneNumber,
+          messageSource: payload.messageSource,
+          registerExpense,
+          closeAction,
+          sendMessage,
+        });
+        return;
+      }
+
+      if (payload.buttonReplyId === "duplicate_confirm_no") {
+        await handleDuplicateConfirmNo({
+          userId,
+          activeAction,
+          phoneNumber: payload.phoneNumber,
+          messageSource: payload.messageSource,
+          closeAction,
+          sendMessage,
+        });
+        return;
+      }
       
       // ====================================================================
       // ✅ CONFIRMAÇÃO VIA BOTÃO (confirm_yes / confirm_no)
