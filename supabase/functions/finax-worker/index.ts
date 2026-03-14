@@ -4689,10 +4689,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       
       if (pendingSlot === "payment_method") {
         const normalizedGuard = normalizeText(conteudoProcessado);
-        if (normalizedGuard.includes("pix")) slotValue = "pix";
-        else if (normalizedGuard.includes("debito") || normalizedGuard.includes("débito")) slotValue = "dinheiro";
-        else if (normalizedGuard.includes("credito") || normalizedGuard.includes("crédito")) slotValue = "credito";
-        else if (normalizedGuard.includes("dinheiro")) slotValue = "dinheiro";
+        slotValue = extractPaymentMethodFromText(normalizedGuard);
       } else if (pendingSlot === "amount") {
         const numMatch = conteudoProcessado.match(/(\d+[.,]?\d*)/);
         if (numMatch && numMatch[1]) slotValue = parseFloat(numMatch[1].replace(",", "."));
