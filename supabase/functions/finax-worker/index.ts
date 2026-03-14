@@ -4035,7 +4035,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       // Usuário está respondendo a "precisa de ajuda com o quê?" mas IA classificou como chat/outro
       let helpResponse = "";
       
-      if (/\b(gasto|registr|anotar|lanc|compra|despesa)\b/i.test(conteudoProcessado)) {
+      if (/\b(gastos?|registr|anotar|lanc|compras?|despesas?)\b/i.test(conteudoProcessado)) {
         helpResponse = `💸 *Registrar gastos é simples!*\n\n` +
           `É só me dizer assim:\n\n` +
           `• "café 5 pix"\n` +
