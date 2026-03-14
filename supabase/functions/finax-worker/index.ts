@@ -1579,7 +1579,7 @@ async function processarJob(job: any): Promise<void> {
       if (payload.buttonReplyId.startsWith("rec_pay_") && activeAction?.intent === "recurring") {
         const paymentAliases: Record<string, string> = {
           "rec_pay_pix": "pix",
-          "rec_pay_debito": "dinheiro",
+          "rec_pay_debito": "debito",
           "rec_pay_credito": "credito",
           "rec_pay_dinheiro": "dinheiro"
         };
