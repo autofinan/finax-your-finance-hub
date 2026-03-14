@@ -113,7 +113,7 @@ function isSubjectChange(normalized: string, currentIntent: string): boolean {
 
 function extractPaymentFromText(normalized: string): string | null {
   if (normalized.includes("pix")) return "pix";
-  if (normalized.includes("debito") || normalized.includes("débito")) return "dinheiro";
+  if (normalized.includes("debito") || normalized.includes("débito") || normalized.includes("debit")) return "debito";
   if (normalized.includes("dinheiro") || normalized.includes("cash")) return "dinheiro";
   if (normalized.includes("credito") || normalized.includes("crédito") || 
       normalized.includes("cartao") || normalized.includes("cartão")) return "credito";
