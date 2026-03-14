@@ -69,6 +69,18 @@ export function logDecision(data: { messageId: string; decision: string; details
   }, "Decision logged");
 }
 
+export function extractPaymentMethodFromText(normalizedText: string): "pix" | "debito" | "credito" | "dinheiro" | null {
+  const normalized = normalizeText(normalizedText);
+
+  if (normalized.includes("pix")) return "pix";
+  // Regra de negócio: texto explícito "débito" deve registrar como débito
+  if (normalized.includes("debito") || normalized.includes("débito") || normalized.includes("debit")) return "debito";
+  if (normalized.includes("credito") || normalized.includes("crédito") || normalized.includes("cartao") || normalized.includes("cartão")) return "credito";
+  if (normalized.includes("dinheiro") || normalized.includes("cash") || normalized.includes("especie") || normalized.includes("espécie")) return "dinheiro";
+
+  return null;
+}
+
 export function extractSlotValue(message: string, slotType: string): any {
   const normalized = normalizeText(message);
 
@@ -80,11 +92,7 @@ export function extractSlotValue(message: string, slotType: string): any {
       return null;
     }
     case "payment_method":
-      if (normalized.includes("pix")) return "pix";
-      if (normalized.includes("debito") || normalized.includes("débito")) return "dinheiro";
-      if (normalized.includes("credito") || normalized.includes("crédito")) return "credito";
-      if (normalized.includes("dinheiro")) return "dinheiro";
-      return null;
+      return extractPaymentMethodFromText(normalized);
 
     case "source":
       if (normalized.includes("pix")) return "pix";

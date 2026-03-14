@@ -45,9 +45,9 @@ import {
 } from "./ui/slot-prompts.ts";
 import { learnMerchantPattern } from "./memory/patterns.ts";
 import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
-import { 
-  normalizeText, detectQueryScope, detectTimeRange, 
-  isNumericOnly, parseNumericValue, logDecision, extractSlotValue
+import {
+  normalizeText, detectQueryScope, detectTimeRange,
+  isNumericOnly, parseNumericValue, logDecision, extractSlotValue, extractPaymentMethodFromText
 } from "./utils/helpers.ts";
 import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 import { analyzeImageWithGemini, downloadWhatsAppMedia, transcreverAudio, type OCRResult } from "./utils/media.ts";
@@ -63,6 +63,7 @@ import { listCardsForUser, updateCardLimit, queryCardLimits, queryCardExpenses, 
 import { getActiveContext, createUserContext, closeUserContext, linkTransactionToContext } from "./intents/context-handler.ts";
 import { generateChatResponse } from "./intents/chat-handler.ts";
 import { listTransactionsForCancel, cancelTransaction, getLastTransaction, updateTransactionPaymentMethod } from "./intents/cancel-handler.ts";
+import { handleDuplicateConfirmNo, handleDuplicateConfirmYes } from "./intents/duplicate-handler.ts";
 import { finaxSalesResponse, shortenURL } from "./sales/seller.ts";
 import { SITE_URL, PRICE_BASICO, PRICE_PRO, PRO_ONLY_INTENTS, PRO_TEASER_INTENTS, STRIPE_IMPORT_URL, CHAT_CONFIDENCE_THRESHOLD, HISTORY_CONTEXT_LIMIT, SIMULTANEOUS_MSG_WINDOW_MS } from "./config/constants.ts";
 import { isProUser as checkIsProUser } from "./core/plan-guard.ts";
@@ -771,6 +772,34 @@ async function processarJob(job: any): Promise<void> {
     
     if (isButtonReply && payload.buttonReplyId) {
       console.log(`🔘 [BUTTON] Callback: ${payload.buttonReplyId}`);
+
+      // ====================================================================
+      // 🔁 DUPLICATE CONFIRM HANDLERS (robusto contra contexto perdido)
+      // ====================================================================
+      if (payload.buttonReplyId === "duplicate_confirm_yes") {
+        await handleDuplicateConfirmYes({
+          userId,
+          activeAction,
+          phoneNumber: payload.phoneNumber,
+          messageSource: payload.messageSource,
+          registerExpense,
+          closeAction,
+          sendMessage,
+        });
+        return;
+      }
+
+      if (payload.buttonReplyId === "duplicate_confirm_no") {
+        await handleDuplicateConfirmNo({
+          userId,
+          activeAction,
+          phoneNumber: payload.phoneNumber,
+          messageSource: payload.messageSource,
+          closeAction,
+          sendMessage,
+        });
+        return;
+      }
       
       // ====================================================================
       // ✅ CONFIRMAÇÃO VIA BOTÃO (confirm_yes / confirm_no)
@@ -1192,7 +1221,7 @@ async function processarJob(job: any): Promise<void> {
         
         const editAliases: Record<string, string> = {
           "edit_pix": "pix",
-          "edit_debito": "dinheiro",
+          "edit_debito": "debito",
           "edit_dinheiro": "dinheiro",
           "edit_credito": "credito"
         };
@@ -1550,7 +1579,7 @@ async function processarJob(job: any): Promise<void> {
       if (payload.buttonReplyId.startsWith("rec_pay_") && activeAction?.intent === "recurring") {
         const paymentAliases: Record<string, string> = {
           "rec_pay_pix": "pix",
-          "rec_pay_debito": "dinheiro",
+          "rec_pay_debito": "debito",
           "rec_pay_credito": "credito",
           "rec_pay_dinheiro": "dinheiro"
         };
@@ -1671,29 +1700,6 @@ async function processarJob(job: any): Promise<void> {
       if (payload.buttonReplyId === "limit_cancel") {
         if (activeAction) await closeAction(activeAction.id);
         await sendMessage(payload.phoneNumber, "Ok, cancelado! 👍", payload.messageSource);
-        return;
-      }
-      
-      // ====================================================================
-      // ✅ FIX BUG #2: DUPLICATE CONFIRM HANDLERS
-      // ====================================================================
-      if (payload.buttonReplyId === "duplicate_confirm_yes") {
-        const dupAction = activeAction?.intent === "duplicate_expense" ? activeAction : null;
-        if (dupAction) {
-          const dupSlots = { ...(dupAction.slots as ExtractedSlots), _skip_duplicate: true };
-          await closeAction(dupAction.id);
-          const result = await registerExpense(userId, dupSlots);
-          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-        } else {
-          await sendMessage(payload.phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", payload.messageSource);
-        }
-        return;
-      }
-      
-      if (payload.buttonReplyId === "duplicate_confirm_no") {
-        // ✅ BUG #2 FIX: Funciona mesmo sem action ativa (expirada)
-        if (activeAction) await closeAction(activeAction.id);
-        await sendMessage(payload.phoneNumber, "Ok, não vou registrar! 👍", payload.messageSource);
         return;
       }
       
@@ -1984,7 +1990,7 @@ async function processarJob(job: any): Promise<void> {
       // Verificar se é resposta a um slot (não enfileirar nesse caso)
       const isSlotResponse = activeActionForLock?.pending_slot && (
         // Respostas típicas de slot: pagamento, números curtos, confirmações
-        /^(pix|debito|credito|dinheiro|cartao|sim|nao|\d{1,4})$/i.test(conteudoProcessado.trim())
+        /^(pix|debito|débito|credito|dinheiro|cartao|sim|nao|\d{1,4})$/i.test(conteudoProcessado.trim())
       );
       
       // Verificar se parece um novo gasto (tem valor numérico + mais texto)
@@ -2451,13 +2457,7 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     {
       const norm = normalizeText(conteudoProcessado);
-      const paymentMentioned = (() => {
-        if (norm.includes("pix")) return "pix";
-        if (norm.includes("debito") || norm.includes("débito")) return "dinheiro";
-        if (norm.includes("credito") || norm.includes("crédito")) return "credito";
-        if (norm.includes("dinheiro")) return "dinheiro";
-        return null;
-      })();
+      const paymentMentioned = extractPaymentMethodFromText(norm);
       
       // Detectar palavras de correção
       const correctionWords = ["errei", "desculpa", "era no", "era na", "foi no", "foi na", "nao foi", "não foi", "errado", "corrige", "corrigir"];
@@ -4689,10 +4689,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       
       if (pendingSlot === "payment_method") {
         const normalizedGuard = normalizeText(conteudoProcessado);
-        if (normalizedGuard.includes("pix")) slotValue = "pix";
-        else if (normalizedGuard.includes("debito") || normalizedGuard.includes("débito")) slotValue = "dinheiro";
-        else if (normalizedGuard.includes("credito") || normalizedGuard.includes("crédito")) slotValue = "credito";
-        else if (normalizedGuard.includes("dinheiro")) slotValue = "dinheiro";
+        slotValue = extractPaymentMethodFromText(normalizedGuard);
       } else if (pendingSlot === "amount") {
         const numMatch = conteudoProcessado.match(/(\d+[.,]?\d*)/);
         if (numMatch && numMatch[1]) slotValue = parseFloat(numMatch[1].replace(",", "."));

@@ -206,16 +206,17 @@ export const SLOT_PROMPTS: Record<string, {
 // ============================================================================
 
 export const PAYMENT_ALIASES: Record<string, string> = {
-  "pix": "pix", 
-  "débito": "dinheiro", 
-  "debito": "dinheiro", 
-  "crédito": "credito", 
-  "credito": "credito", 
+  "pix": "pix",
+  "débito": "debito",
+  "debito": "debito",
+  "debit": "debito",
+  "crédito": "credito",
+  "credito": "credito",
   "cartão": "credito",
-  "dinheiro": "dinheiro", 
+  "dinheiro": "dinheiro",
   "cash": "dinheiro",
-  "pay_pix": "pix", 
-  "pay_debito": "dinheiro", 
+  "pay_pix": "pix",
+  "pay_debito": "debito",
   "pay_dinheiro": "dinheiro",
   "pay_credito": "credito"
 };
