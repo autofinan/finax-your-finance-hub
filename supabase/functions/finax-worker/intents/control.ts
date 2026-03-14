@@ -131,7 +131,7 @@ export async function handleControl(
 // Helper: Resposta de follow-up para ajuda contextual
 // ============================================================================
 function _getHelpFollowUp(text: string): string | null {
-  if (/\b(gasto|registr|anotar|lanc|compra|despesa)\b/i.test(text)) {
+  if (/\b(gastos?|registr|anotar|lanc|compras?|despesas?)\b/i.test(text)) {
     return `💸 *Registrar gastos é simples!*\n\n` +
       `É só me dizer assim:\n\n` +
       `• "café 5 pix"\n` +
