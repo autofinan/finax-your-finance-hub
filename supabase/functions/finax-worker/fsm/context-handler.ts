@@ -618,6 +618,10 @@ function getSlotRetryMessage(slotType: string, retryCount: number): string {
       "Qual o limite? Manda só o número 💰",
       "Exemplo: 2000 ou 3500,00"
     ],
+    installments: [
+      "Em quantas vezes? (ex: 3x, 12x)",
+      "Manda só o número de parcelas (ex: 2, 6, 10)"
+    ],
     payment_method: [
       "Como você pagou? *Pix*, *débito*, *crédito* ou *dinheiro*?",
       "Foi pix, cartão ou dinheiro? Pode escrever!"
