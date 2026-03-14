@@ -2,7 +2,7 @@
 // 🗑️ INTENT: CANCEL ROUTING (Cancelar transação ou recorrente)
 // ============================================================================
 
-import { listTransactionsForCancel, cancelTransaction, getLastTransaction } from "./cancel-handler.ts";
+import { listTransactionsForCancel, cancelTransaction, getLastTransaction, findTransactionsByName } from "./cancel-handler.ts";
 import { listActiveRecurrings, cancelRecurring, findRecurringByName } from "./recurring-handler.ts";
 import { createAction } from "../fsm/action-manager.ts";
 import { normalizeText } from "../utils/helpers.ts";
