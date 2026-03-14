@@ -68,6 +68,24 @@ async function calcFreedomDays(userId: string): Promise<FreedomResult | null> {
 // 💬 MICRO-INSIGHT PÓS GASTO (append ao message do expense)
 // ============================================================================
 
+const MIN_DAYS_IMPACT_TO_NOTIFY = 3;
+
+function formatFreedomDuration(totalDays: number): string {
+  const anos = Math.floor(totalDays / 365);
+  const meses = Math.floor((totalDays % 365) / 30);
+  const dias = totalDays % 30;
+
+  if (anos > 0) {
+    return `${anos} ano${anos > 1 ? "s" : ""} e ${meses} mês(es)`;
+  }
+
+  if (meses > 0) {
+    return `${meses} mês(es) e ${dias} dia(s)`;
+  }
+
+  return `${dias} dia(s)`;
+}
+
 export async function getFreedomMicroInsight(
   userId: string,
   valorGasto: number
@@ -77,9 +95,23 @@ export async function getFreedomMicroInsight(
     if (!result || result.diasParaLiberdade === Infinity) return "";
 
     const diasImpacto = Math.round(result.impactoPorReal * valorGasto);
-    if (diasImpacto < 1) return "";
 
-    return `\n\n🏁 _Esse gasto = +${diasImpacto} dia${diasImpacto > 1 ? "s" : ""} no caminho pra liberdade_`;
+    // Evita mensagem em todo gasto pequeno (reduz ruído)
+    if (diasImpacto < MIN_DAYS_IMPACT_TO_NOTIFY) return "";
+
+    const diasAntes = result.diasParaLiberdade;
+    const diasDepois = diasAntes + diasImpacto;
+
+    const dataAntes = new Date();
+    dataAntes.setDate(dataAntes.getDate() + diasAntes);
+
+    const dataDepois = new Date();
+    dataDepois.setDate(dataDepois.getDate() + diasDepois);
+
+    const mesAntes = dataAntes.toLocaleDateString("pt-BR", { month: "short", year: "numeric" });
+    const mesDepois = dataDepois.toLocaleDateString("pt-BR", { month: "short", year: "numeric" });
+
+    return `\n\n🏁 *Impacto na sua meta de liberdade*\nEsse gasto adiciona *+${diasImpacto} dia${diasImpacto > 1 ? "s" : ""}* na projeção.\n📅 Antes: ${formatFreedomDuration(diasAntes)} (${mesAntes})\n📅 Agora: ${formatFreedomDuration(diasDepois)} (${mesDepois})`;
   } catch (err) {
     console.error("⚠️ [FREEDOM] Erro micro-insight:", err);
     return "";
