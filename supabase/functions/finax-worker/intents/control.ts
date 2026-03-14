@@ -143,7 +143,7 @@ function _getHelpFollowUp(text: string): string | null {
       `• "dia 05/02 mercado 150 dinheiro"\n\n` +
       `Quer testar agora? 😊`;
   }
-  if (/\b(cartao|cartões|credito|limite)\b/i.test(text)) {
+  if (/\b(cartao|cartões|cartoes|credito|crédito|limite)\b/i.test(text)) {
     return `💳 *Sobre cartões de crédito:*\n\n` +
       `Ver seus cartões:\n` +
       `• "meus cartões"\n\n` +

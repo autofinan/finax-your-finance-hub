@@ -83,3 +83,19 @@ export async function updateTransactionPaymentMethod(txId: string, newMethod: st
     message: `✅ *Corrigido!*\n\n💸 R$ ${tx.valor?.toFixed(2)} agora é *${paymentEmoji} ${newMethod}*`
   };
 }
+
+// ============================================================================
+// 🔍 BUSCAR TRANSAÇÕES POR NOME
+// ============================================================================
+
+export async function findTransactionsByName(userId: string, searchTerm: string): Promise<any[]> {
+  const { data } = await supabase
+    .from("transacoes")
+    .select("id, valor, descricao, categoria, data, status")
+    .eq("usuario_id", userId)
+    .in("status", ["confirmada", "prevista"])
+    .ilike("descricao", `%${searchTerm}%`)
+    .order("created_at", { ascending: false })
+    .limit(5);
+  return data || [];
+}

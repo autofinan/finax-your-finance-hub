@@ -52,23 +52,31 @@ export async function handleCancelRouting(
   // Se parece cancelamento de recorrente OU tem termo de busca
   if (isRecurringCancel || searchTerm) {
     let recorrentes: any[] = [];
+    let transacoes: any[] = [];
 
     if (searchTerm) {
+      // Buscar em AMBOS: recorrentes E transações por nome
       recorrentes = await findRecurringByName(userId, searchTerm);
+      transacoes = await findTransactionsByName(userId, searchTerm);
     }
 
-    if (recorrentes.length === 0) {
+    // Se não achou nada pelo nome, tentar listar recorrentes (só se foi pedido explícito de recorrente)
+    if (recorrentes.length === 0 && transacoes.length === 0 && isRecurringCancel) {
       recorrentes = await listActiveRecurrings(userId);
     }
 
-    if (recorrentes.length === 0) {
-      // Fallback: tentar transações
-      const txs = await listTransactionsForCancel(userId);
-      if (txs.length === 0) {
-        await sendMessage(phoneNumber, "Você não tem gastos recorrentes nem transações recentes para cancelar 🤔", messageSource);
-        return;
-      }
-      await _showTransactionCancelOptions(txs, userId, messageId, sendButtons, sendListMessage, phoneNumber, messageSource);
+    // Se ainda não achou nada
+    if (recorrentes.length === 0 && transacoes.length === 0) {
+      const fallbackMsg = searchTerm
+        ? `Não encontrei "${searchTerm}" nos seus gastos ou recorrentes 🤔`
+        : "Você não tem gastos recorrentes nem transações recentes para cancelar 🤔";
+      await sendMessage(phoneNumber, fallbackMsg, messageSource);
+      return;
+    }
+
+    // Se só achou transações pontuais, mostrar essas
+    if (recorrentes.length === 0 && transacoes.length > 0) {
+      await _showTransactionCancelOptions(transacoes, userId, messageId, sendButtons, sendListMessage, phoneNumber, messageSource);
       return;
     }
 
