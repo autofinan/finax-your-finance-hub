@@ -1704,29 +1704,6 @@ async function processarJob(job: any): Promise<void> {
       }
       
       // ====================================================================
-      // ✅ FIX BUG #2: DUPLICATE CONFIRM HANDLERS
-      // ====================================================================
-      if (payload.buttonReplyId === "duplicate_confirm_yes") {
-        const dupAction = activeAction?.intent === "duplicate_expense" ? activeAction : null;
-        if (dupAction) {
-          const dupSlots = { ...(dupAction.slots as ExtractedSlots), _skip_duplicate: true };
-          await closeAction(dupAction.id);
-          const result = await registerExpense(userId, dupSlots);
-          await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-        } else {
-          await sendMessage(payload.phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", payload.messageSource);
-        }
-        return;
-      }
-      
-      if (payload.buttonReplyId === "duplicate_confirm_no") {
-        // ✅ BUG #2 FIX: Funciona mesmo sem action ativa (expirada)
-        if (activeAction) await closeAction(activeAction.id);
-        await sendMessage(payload.phoneNumber, "Ok, não vou registrar! 👍", payload.messageSource);
-        return;
-      }
-      
-      // ====================================================================
       // 📦 INSTALLMENT PAYMENT METHOD HANDLERS (boleto vs cartão)
       // ====================================================================
       if (payload.buttonReplyId === "installment_credito") {
