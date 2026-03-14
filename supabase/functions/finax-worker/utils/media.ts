@@ -238,8 +238,9 @@ Formato para MÚLTIPLOS itens:
       if (parsed.forma_pagamento) {
         const paymentMap: Record<string, string> = {
           "pix": "pix",
-          "débito": "dinheiro", 
-          "debito": "dinheiro",
+          "débito": "debito",
+          "debito": "debito",
+          "debit": "debito",
           "crédito": "credito",
           "credito": "credito",
           "cartão": "credito",

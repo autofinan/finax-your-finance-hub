@@ -1990,7 +1990,7 @@ async function processarJob(job: any): Promise<void> {
       // Verificar se é resposta a um slot (não enfileirar nesse caso)
       const isSlotResponse = activeActionForLock?.pending_slot && (
         // Respostas típicas de slot: pagamento, números curtos, confirmações
-        /^(pix|debito|credito|dinheiro|cartao|sim|nao|\d{1,4})$/i.test(conteudoProcessado.trim())
+        /^(pix|debito|débito|credito|dinheiro|cartao|sim|nao|\d{1,4})$/i.test(conteudoProcessado.trim())
       );
       
       // Verificar se parece um novo gasto (tem valor numérico + mais texto)
