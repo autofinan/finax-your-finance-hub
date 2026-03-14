@@ -3,11 +3,10 @@ import { SLOT_PROMPTS } from "../ui/slot-prompts.ts";
 import { updateAction, closeAction, createAction, cancelAction } from "../fsm/action-manager.ts";
 import { registerExpense } from "../intents/expense.ts";
 import { registerIncome } from "../intents/income.ts";
-import { registerRecurring } from "../intents/recurring-handler.ts";
-import { cancelTransaction, cancelRecurring } from "../intents/cancel-handler.ts";
+import { registerRecurring, cancelRecurring } from "../intents/recurring-handler.ts";
+import { cancelTransaction, updateTransactionPaymentMethod } from "../intents/cancel-handler.ts";
 import { handleExpenseResult } from "../intents/expense-inline.ts";
 import { listCardsForUser } from "../intents/card-queries.ts";
-import { updateTransactionPaymentMethod } from "../intents/cancel-handler.ts";
 import type { ExtractedSlots } from "../decision/ai-engine.ts";
 
 const supabase = createClient(

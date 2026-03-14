@@ -120,6 +120,12 @@ export async function registerExpense(
     console.log(`📅 [EXPENSE] Data atual: ${dateISO} (${timeString})`);
   }
   
+  const resolvedCardId = slots.card_id || (
+    typeof slots.card === "string" && /^[0-9a-fA-F-]{36}$/.test(slots.card)
+      ? slots.card
+      : null
+  );
+
   const { data: transaction, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
     valor: slots.amount,
@@ -133,7 +139,7 @@ export async function registerExpense(
     forma_pagamento: slots.payment_method,
     status: "confirmada",
     idempotency_key: dedupeHash,
-    id_cartao: slots.card || null,
+    id_cartao: resolvedCardId,
     context_id: activeContext?.id || null
   }).select("id").single();
   
