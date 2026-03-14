@@ -2457,13 +2457,7 @@ async function processarJob(job: any): Promise<void> {
     // ========================================================================
     {
       const norm = normalizeText(conteudoProcessado);
-      const paymentMentioned = (() => {
-        if (norm.includes("pix")) return "pix";
-        if (norm.includes("debito") || norm.includes("débito")) return "dinheiro";
-        if (norm.includes("credito") || norm.includes("crédito")) return "credito";
-        if (norm.includes("dinheiro")) return "dinheiro";
-        return null;
-      })();
+      const paymentMentioned = extractPaymentMethodFromText(norm);
       
       // Detectar palavras de correção
       const correctionWords = ["errei", "desculpa", "era no", "era na", "foi no", "foi na", "nao foi", "não foi", "errado", "corrige", "corrigir"];
