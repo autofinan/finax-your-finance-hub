@@ -45,9 +45,9 @@ import {
 } from "./ui/slot-prompts.ts";
 import { learnMerchantPattern } from "./memory/patterns.ts";
 import { startOnboarding, handleOnboardingStep } from "./utils/onboarding.ts";
-import { 
-  normalizeText, detectQueryScope, detectTimeRange, 
-  isNumericOnly, parseNumericValue, logDecision, extractSlotValue
+import {
+  normalizeText, detectQueryScope, detectTimeRange,
+  isNumericOnly, parseNumericValue, logDecision, extractSlotValue, extractPaymentMethodFromText
 } from "./utils/helpers.ts";
 import { sendMessage, sendButtons, sendListMessage } from "./ui/whatsapp-sender.ts";
 import { analyzeImageWithGemini, downloadWhatsAppMedia, transcreverAudio, type OCRResult } from "./utils/media.ts";
