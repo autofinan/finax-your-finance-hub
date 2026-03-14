@@ -1,21 +1,37 @@
-import { createUserContext, getActiveContext, closeUserContext } from "./context-handler.ts";
+// ============================================================================
+// 📍 INTENT: SET_CONTEXT (Criar/encerrar contexto de gastos)
+// ============================================================================
+
+import { getActiveContext, createUserContext, closeUserContext } from "./context-handler.ts";
+import { normalizeText } from "../utils/helpers.ts";
+import { markAsExecuted } from "../utils/ai-decisions.ts";
 
 export async function handleSetContext(
   userId: string,
   slots: Record<string, any>,
+  conteudoProcessado: string,
+  decisionId: string | null,
   sendMessage: (phone: string, msg: string, source: string) => Promise<void>,
   phoneNumber: string,
   messageSource: string
 ): Promise<void> {
-  const label = slots.context_label || slots.description || "Contexto";
-
-  const activeCtx = await getActiveContext(userId);
-  if (activeCtx) {
-    await closeUserContext(userId);
+  // Verificar se é encerramento de contexto
+  const normalized = normalizeText(conteudoProcessado);
+  if (normalized.includes("terminei") || normalized.includes("fim do") || normalized.includes("acabou") || normalized.includes("encerr")) {
+    const result = await closeUserContext(userId);
+    await sendMessage(phoneNumber, result.message, messageSource);
+    return;
   }
 
-  await createUserContext(userId, label);
-
-  const message = `📍 *Contexto ativado: ${label}*\n\nA partir de agora, seus gastos serão vinculados a "${label}".\n\nQuando terminar, diga "encerrar contexto".`;
-  await sendMessage(phoneNumber, message, messageSource);
+  // Criar novo contexto
+  try {
+    const result = await createUserContext(userId, slots);
+    if (decisionId) {
+      await markAsExecuted(decisionId, result.success);
+    }
+    await sendMessage(phoneNumber, result.message, messageSource);
+  } catch (ctxError) {
+    console.error(`❌ [CONTEXT] Exception ao criar contexto:`, ctxError);
+    await sendMessage(phoneNumber, "Ops, erro ao criar contexto 😕\n\nTenta assim: \"vou viajar de 18/02 até 28/02\"", messageSource);
+  }
 }
