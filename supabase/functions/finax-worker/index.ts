@@ -3763,27 +3763,8 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     
     // ========================================================================
     if (decision.actionType === "set_context") {
-      const slots = decision.slots;
-      
-      // Verificar se é encerramento de contexto
-      const normalized = normalizeText(conteudoProcessado);
-      if (normalized.includes("terminei") || normalized.includes("fim do") || normalized.includes("acabou") || normalized.includes("encerr")) {
-        const result = await closeUserContext(userId);
-        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-        return;
-      }
-      
-      // ✅ BUG #6 FIX: Try-catch para criação de contexto
-      try {
-        const result = await createUserContext(userId, slots);
-        if (decision.decisionId) {
-          await markAsExecuted(decision.decisionId, result.success);
-        }
-        await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
-      } catch (ctxError) {
-        console.error(`❌ [CONTEXT] Exception ao criar contexto:`, ctxError);
-        await sendMessage(payload.phoneNumber, "Ops, erro ao criar contexto 😕\n\nTenta assim: \"vou viajar de 18/02 até 28/02\"", payload.messageSource);
-      }
+      const { handleSetContext } = await import("./intents/set-context.ts");
+      await handleSetContext(userId, decision.slots, conteudoProcessado, decision.decisionId || null, sendMessage, payload.phoneNumber, payload.messageSource);
       return;
     }
     
