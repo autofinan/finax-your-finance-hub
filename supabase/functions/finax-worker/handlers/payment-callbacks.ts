@@ -288,7 +288,8 @@ export async function handlePaymentCallbacks(
     };
     
     if (activeAction.intent === "expense") {
-      const result = await registerExpense(userId, updatedSlots, activeAction.id);
+      const result = await registerExpense(userId, updatedSlots as ExtractedSlots, activeAction.id, activeAction.id);
+      await supabase.from("actions").update({ status: "done" }).eq("id", activeAction.id);
       await handleExpenseResultCompat(result, phoneNumber, messageSource, sendMessage, sendButtons);
       return true;
     } else if (activeAction.intent === "recurring") {
@@ -305,8 +306,9 @@ export async function handlePaymentCallbacks(
 
   // LIMITE INSUFICIENTE - Handlers
   if (buttonId === "limit_force_yes" && activeAction?.intent === "expense") {
-    const result = await registerExpense(userId, activeAction.slots as ExtractedSlots, activeAction.id);
-    await sendMessage(phoneNumber, result.message, messageSource);
+    const result = await registerExpense(userId, activeAction.slots as ExtractedSlots, activeAction.id, activeAction.id);
+    await supabase.from("actions").update({ status: "done" }).eq("id", activeAction.id);
+    await handleExpenseResultCompat(result, phoneNumber, messageSource, sendMessage, sendButtons);
     return true;
   }
   

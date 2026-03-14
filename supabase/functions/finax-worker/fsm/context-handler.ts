@@ -796,6 +796,7 @@ export function getSlotPrompt(slotType: string): { text: string; buttons?: Array
     amount: { text: "Qual foi o valor? 💰" },
     value: { text: "Qual o valor? 💰" },
     limit: { text: "Qual o limite do cartão? 💰" },
+    installments: { text: "Em quantas vezes? (ex: 2x, 6x, 12x)" },
     description: { text: "O que você comprou? 📝" },
     payment_method: {
       text: "Como você pagou?",
@@ -810,7 +811,7 @@ export function getSlotPrompt(slotType: string): { text: string; buttons?: Array
       buttons: [
         { id: "src_pix", title: "📱 Pix" },
         { id: "src_dinheiro", title: "💵 Dinheiro" },
-        { id: "src_transferencia", title: "🏦 Transferência" }
+        { id: "src_transf", title: "🏦 Transferência" }
       ]
     },
     due_day: { text: "Qual o dia do vencimento? (1 a 31)" },
