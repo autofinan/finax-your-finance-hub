@@ -65,7 +65,12 @@ export async function registerInstallment(
     };
   }
   
-  if (!slots.installments || slots.installments < 2) {
+  const parsedInstallments =
+    typeof slots.installments === "string"
+      ? parseInt(slots.installments.replace(/\D/g, ""), 10)
+      : Number(slots.installments);
+
+  if (!Number.isFinite(parsedInstallments) || parsedInstallments < 2) {
     return {
       success: false,
       message: "Em quantas vezes? (ex: 3x, 12x)",
@@ -125,8 +130,8 @@ export async function registerInstallment(
   // VERIFICAR LIMITE (TOTAL, não por parcela)
   // ========================================================================
   
-  const valorTotal = slots.amount;
-  const numParcelas = slots.installments;
+  const valorTotal = Number(slots.amount);
+  const numParcelas = parsedInstallments;
   const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
   
   if (selectedCard.limite_disponivel !== null && selectedCard.limite_disponivel < valorTotal) {

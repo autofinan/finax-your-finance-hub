@@ -76,11 +76,12 @@ export function getMissingSlots(actionType: ActionType, slots: Record<string, an
 export const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; buttons?: Array<{ id: string; title: string }> }> = {
   amount: { text: "Qual foi o valor? 💸" },
   amount_income: { text: "Qual foi o valor que entrou? 💰" },
+  installments: { text: "Em quantas vezes? (ex: 2x, 6x, 12x)" },
   description: { text: "O que foi essa compra?" },
   description_income: { text: "De onde veio esse dinheiro?" },
-  source: { 
-    text: "Como você recebeu?", 
-    useButtons: true, 
+  source: {
+    text: "Como você recebeu?",
+    useButtons: true,
     buttons: [
       { id: "src_pix", title: "📱 Pix" },
       { id: "src_dinheiro", title: "💵 Dinheiro" },
@@ -88,8 +89,8 @@ export const SLOT_PROMPTS: Record<string, { text: string; useButtons?: boolean; 
       { id: "src_deposito", title: "💳 Depósito" }
     ]
   },
-  payment_method: { 
-    text: "Como você pagou?", 
+  payment_method: {
+    text: "Como você pagou?",
     useButtons: true,
     buttons: [
       { id: "pay_pix", title: "📱 Pix" },
@@ -121,5 +122,6 @@ export const SOURCE_ALIASES: Record<string, string> = {
   "pix": "pix", "dinheiro": "dinheiro", "transferencia": "transferencia",
   "salario": "salario", "deposito": "deposito",
   "src_pix": "pix", "src_dinheiro": "dinheiro", "src_transf": "transferencia",
+  "src_transferencia": "transferencia",
   "src_deposito": "deposito", "src_salario": "salario"
 };

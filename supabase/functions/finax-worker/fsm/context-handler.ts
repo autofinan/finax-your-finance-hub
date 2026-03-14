@@ -533,13 +533,23 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
     
     case "due_day":
     case "day_of_month":
-    case "closing_day":
+    case "closing_day": {
       const dayMatch = rawMessage.match(/(\d{1,2})/);
       if (dayMatch) {
         const day = parseInt(dayMatch[1]);
         if (day >= 1 && day <= 31) return day;
       }
       return null;
+    }
+
+    case "installments": {
+      const installmentMatch = normalized.match(/(\d{1,2})\s*(x|vezes|parcela|parcelas)?/i) || rawMessage.match(/(\d{1,2})/);
+      if (!installmentMatch) return null;
+
+      const count = parseInt(installmentMatch[1], 10);
+      if (Number.isNaN(count) || count < 2 || count > 72) return null;
+      return count;
+    }
     
     case "type_choice": {
       const expenseWords = ["gasto", "despesa", "saida", "saída", "expense", "1"];
@@ -607,6 +617,10 @@ function getSlotRetryMessage(slotType: string, retryCount: number): string {
     limit: [
       "Qual o limite? Manda só o número 💰",
       "Exemplo: 2000 ou 3500,00"
+    ],
+    installments: [
+      "Em quantas vezes? (ex: 3x, 12x)",
+      "Manda só o número de parcelas (ex: 2, 6, 10)"
     ],
     payment_method: [
       "Como você pagou? *Pix*, *débito*, *crédito* ou *dinheiro*?",
@@ -782,6 +796,7 @@ export function getSlotPrompt(slotType: string): { text: string; buttons?: Array
     amount: { text: "Qual foi o valor? 💰" },
     value: { text: "Qual o valor? 💰" },
     limit: { text: "Qual o limite do cartão? 💰" },
+    installments: { text: "Em quantas vezes? (ex: 2x, 6x, 12x)" },
     description: { text: "O que você comprou? 📝" },
     payment_method: {
       text: "Como você pagou?",
@@ -796,7 +811,7 @@ export function getSlotPrompt(slotType: string): { text: string; buttons?: Array
       buttons: [
         { id: "src_pix", title: "📱 Pix" },
         { id: "src_dinheiro", title: "💵 Dinheiro" },
-        { id: "src_transferencia", title: "🏦 Transferência" }
+        { id: "src_transf", title: "🏦 Transferência" }
       ]
     },
     due_day: { text: "Qual o dia do vencimento? (1 a 31)" },
