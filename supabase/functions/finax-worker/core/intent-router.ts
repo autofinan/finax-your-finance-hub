@@ -315,14 +315,14 @@ export async function routeIntent(
         // ========================================================================
         // 🧠 CONFIRMAÇÃO DE PADRÃO DE CARTÃO (antes de executar)
         // ========================================================================
-        if (patternRequiresConfirmation && slots.card_id && patternCardName) {
-          console.log(`🧠 [PATTERN] Pedindo confirmação: ${slots.description} → ${patternCardName}`);
+        if (eliteContext.patternRequiresConfirmation && slots.card_id && eliteContext.patternCardName) {
+          console.log(`🧠 [PATTERN] Pedindo confirmação: ${slots.description} → ${eliteContext.patternCardName}`);
           
           // Salvar action com slots completos + patternId no meta
           await createAction(userId, "expense", "expense", slots, "card_confirm", payload.messageId);
           // Atualizar meta da action com patternId
           await supabase.from("actions")
-            .update({ meta: { patternId } })
+            .update({ meta: { patternId: eliteContext.patternId } })
             .eq("user_id", userId)
             .eq("status", "collecting");
           
@@ -331,7 +331,7 @@ export async function routeIntent(
           
           await sendButtons(
             payload.phoneNumber,
-            `🧠 ${desc} ${valor} no *${patternCardName}*, certo?`,
+            `🧠 ${desc} ${valor} no *${eliteContext.patternCardName}*, certo?`,
             [
               { id: "pattern_confirm_yes", title: "✅ Sim, registrar" },
               { id: "pattern_confirm_no", title: "❌ Não, outro cartão" }
