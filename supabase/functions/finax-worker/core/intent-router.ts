@@ -4,17 +4,20 @@
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { type ExtractedSlots } from "../decision/ai-engine.ts";
+import { type ExtractedSlots } from "../decision/types.ts";
+import { type MessageSource, type JobPayload } from "./job-context.ts";
+import { SLOT_PROMPTS, getMissingSlots, hasAllRequiredSlots } from "../ui/slot-prompts.ts";
 import { createAction, updateAction, closeAction } from "../fsm/action-manager.ts";
 import { registerExpenseInline, handleExpenseResult } from "../intents/expense-inline.ts";
 import { registerIncome } from "../intents/income.ts";
-import { registerRecurring } from "../intents/recurring-handler.ts";
+import { registerRecurring, cancelRecurring } from "../intents/recurring-handler.ts";
 import { listCardsForUser, queryCardLimits, queryCardExpenses, queryContextExpenses } from "../intents/card-queries.ts";
 import { getActiveContext, createUserContext, closeUserContext } from "../intents/context-handler.ts";
 import { getLastTransaction, listTransactionsForCancel, cancelTransaction, updateTransactionPaymentMethod } from "../intents/cancel-handler.ts";
 import { setBudget } from "../intents/budget.ts";
 import { normalizeText, isNumericOnly } from "../utils/helpers.ts";
 import { markAsExecuted } from "../utils/ai-decisions.ts";
+import { processNextInQueue, queueMessage, markMessageProcessed } from "../utils/message-queue.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -26,9 +29,9 @@ const registerExpense = registerExpenseInline;
 async function handleExpenseResultCompat(
   result: { success: boolean; message: string; isDuplicate?: boolean },
   phoneNumber: string,
-  messageSource: string,
-  sendMessage: Function,
-  sendButtons: Function
+  messageSource: MessageSource,
+  sendMessage: (phone: string, msg: string, source: string) => Promise<void>,
+  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: string) => Promise<void>
 ): Promise<void> {
   return handleExpenseResult(result, phoneNumber, messageSource, sendMessage as any, sendButtons as any);
 }
