@@ -741,7 +741,11 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     // 🔄 RECURRING - Gastos Recorrentes
     // ========================================================================
     if (decision.actionType === "recurring") {
-      const slots = decision.slots;
+      const slots = {
+        ...decision.slots,
+        description: refineRecurringDescription(conteudoProcessado, decision.slots?.description)
+      };
+      decision.slots = slots;
       const missing = getMissingSlots("recurring", slots);
       
       // ✅ EXECUÇÃO DIRETA: tem amount e description
