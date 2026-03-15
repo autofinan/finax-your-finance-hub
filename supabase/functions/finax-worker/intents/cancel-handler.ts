@@ -31,12 +31,54 @@ export async function listTransactionsForCancel(userId: string): Promise<any[]> 
 // ============================================================================
 
 export async function cancelTransaction(userId: string, txId: string): Promise<{ success: boolean; message: string }> {
-  const { data: tx } = await supabase.from("transacoes").select("*").eq("id", txId).eq("usuario_id", userId).single();
+  const { data: tx } = await supabase
+    .from("transacoes")
+    .select("id, valor, descricao, categoria, status, id_recorrente")
+    .eq("id", txId)
+    .eq("usuario_id", userId)
+    .single();
+
   if (!tx) return { success: false, message: "Transação não encontrada 🤔" };
   if (tx.status === "cancelada") return { success: false, message: "Já foi cancelada 👍" };
-  
-  await supabase.from("transacoes").update({ status: "cancelada" }).eq("id", txId);
-  return { success: true, message: `✅ *Transação cancelada!*\n\n🗑️ R$ ${tx.valor?.toFixed(2)} - ${tx.descricao || tx.categoria}` };
+
+  const { error: txError } = await supabase
+    .from("transacoes")
+    .update({ status: "cancelada" })
+    .eq("id", txId)
+    .eq("usuario_id", userId);
+
+  if (txError) {
+    console.error("❌ [CANCEL] Erro ao cancelar transação:", txError);
+    return { success: false, message: "Não consegui cancelar agora 😕" };
+  }
+
+  let recurringCancelled = false;
+
+  // Se a transação estiver vinculada a uma recorrência, desativar também.
+  // Isso evita continuar cobrando em meses seguintes quando o usuário cancela pelo atalho de transação.
+  if (tx.id_recorrente) {
+    const { error: recError } = await supabase
+      .from("gastos_recorrentes")
+      .update({ ativo: false, updated_at: new Date().toISOString() })
+      .eq("id", tx.id_recorrente)
+      .eq("usuario_id", userId)
+      .eq("ativo", true);
+
+    if (recError) {
+      console.error("⚠️ [CANCEL] Falha ao desativar recorrência vinculada:", recError);
+    } else {
+      recurringCancelled = true;
+    }
+  }
+
+  const recurringNote = recurringCancelled
+    ? "\n\n🔄 A recorrência vinculada também foi desativada."
+    : "";
+
+  return {
+    success: true,
+    message: `✅ *Transação cancelada!*\n\n🗑️ R$ ${tx.valor?.toFixed(2)} - ${tx.descricao || tx.categoria}${recurringNote}`
+  };
 }
 
 // ============================================================================
