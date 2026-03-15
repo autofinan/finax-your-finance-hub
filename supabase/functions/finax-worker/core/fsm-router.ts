@@ -33,8 +33,8 @@ export async function handleFSM(
   activeAction: any,
   conteudoProcessado: string,
   payload: { phoneNumber: string; messageSource: MessageSource; messageId?: string },
-  sendMessage: (phone: string, msg: string, source: MessageSource) => Promise<void>,
-  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: MessageSource) => Promise<void>
+  sendMessage: (phone: string, msg: string, source: MessageSource) => Promise<boolean | void>,
+  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: MessageSource) => Promise<boolean | void>
 ): Promise<{ handled: boolean; shouldContinue: boolean }> {
 
   if (!activeAction || (!activeAction.pending_slot && activeAction.status !== "awaiting_confirmation")) {

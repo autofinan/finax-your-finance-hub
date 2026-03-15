@@ -9,11 +9,11 @@ const supabase = createClient(
 export async function handleQueryCallbacks(
   buttonId: string,
   userId: string,
-  sendMessage: (phone: string, msg: string, source: string) => Promise<void>,
-  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: string) => Promise<void>,
-  sendListMessage: (phone: string, body: string, buttonText: string, sections: any[], source: string) => Promise<void>,
+  sendMessage: (phone: string, msg: string, source: "meta" | "vonage") => Promise<boolean | void>,
+  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: "meta" | "vonage") => Promise<boolean | void>,
+  sendListMessage: (phone: string, body: string, buttonText: string, sections: any[], source: "meta" | "vonage") => Promise<boolean | void>,
   phoneNumber: string,
-  messageSource: string
+  messageSource: "meta" | "vonage"
 ): Promise<boolean> {
   if (!buttonId?.startsWith("view_all_") && !buttonId?.startsWith("view_by_category_")) {
     return false;
