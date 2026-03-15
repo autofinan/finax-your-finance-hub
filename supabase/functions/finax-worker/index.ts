@@ -1297,30 +1297,29 @@ async function processarJob(job: any): Promise<void> {
     // Este guard protege contra a IA classificar erroneamente como "chat"
     // quando o usuário está no meio de um fluxo de registro.
     // ========================================================================
+    const guardAction = activeAction;
     if ((decision.actionType === "chat" || decision.actionType === "unknown") &&
-        activeAction !== null && 
-        (activeAction.intent === "expense" || activeAction.intent === "income" || activeAction.intent === "duplicate_expense") &&
-        (activeAction.pending_slot || activeAction.intent === "duplicate_expense")) {
+        guardAction &&
+        (guardAction.intent === "expense" || guardAction.intent === "income" || guardAction.intent === "duplicate_expense") &&
+        (guardAction.pending_slot || guardAction.intent === "duplicate_expense")) {
       
-      // ✅ FIX WA-7: Handle "sim"/"não" como texto para duplicate_confirm
-      if (activeAction.intent === "duplicate_expense") {
+      if (guardAction.intent === "duplicate_expense") {
         const dupNormalized = normalizeText(conteudoProcessado);
         if (dupNormalized.includes("nao") || dupNormalized.includes("não") || dupNormalized === "n") {
-          await closeAction(activeAction.id);
+          await closeAction(guardAction.id);
           await sendMessage(payload.phoneNumber, "Ok, não vou registrar! 👍", payload.messageSource);
           return;
         }
         if (dupNormalized.includes("sim") || dupNormalized === "s" || dupNormalized.includes("registra")) {
-          const dupSlots = { ...(activeAction.slots as ExtractedSlots), _skip_duplicate: true };
-          await closeAction(activeAction.id);
+          const dupSlots = { ...(guardAction.slots as ExtractedSlots), _skip_duplicate: true };
+          await closeAction(guardAction.id);
           const result = await registerExpense(userId, dupSlots);
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
           return;
         }
       }
       
-      if (!activeAction.pending_slot) {
-        // duplicate_expense without pending_slot and no clear yes/no → re-ask
+      if (!guardAction.pending_slot) {
         await sendButtons(payload.phoneNumber,
           "Quer registrar mesmo assim?",
           [
@@ -1331,54 +1330,50 @@ async function processarJob(job: any): Promise<void> {
         return;
       }
       
-      console.log(`🛡️ [GUARD] Bloqueando chat - action ativa: ${activeAction.intent} aguardando ${activeAction.pending_slot}`);
+      console.log(`🛡️ [GUARD] Bloqueando chat - action ativa: ${guardAction.intent} aguardando ${guardAction.pending_slot}`);
       
-      // Tentar extrair o slot pendente da mensagem atual
-      const pendingSlot: string = activeAction.pending_slot;
+      const pendingSlot = guardAction.pending_slot ?? "";
       let slotValue: any = null;
       
       if (pendingSlot === "payment_method") {
-        const normalizedGuard = normalizeText(conteudoProcessado);
-        slotValue = extractPaymentMethodFromText(normalizedGuard);
+        slotValue = extractPaymentMethodFromText(normalizeText(conteudoProcessado));
       } else if (pendingSlot === "amount") {
         const numMatch = conteudoProcessado.match(/(\d+[.,]?\d*)/);
-        if (numMatch && numMatch[1]) slotValue = parseFloat(numMatch[1].replace(",", "."));
+        const rawNum = numMatch?.[1];
+        if (rawNum) slotValue = parseFloat(rawNum.replace(",", "."));
       } else if (pendingSlot === "description") {
         slotValue = conteudoProcessado.trim();
       }
       
       if (slotValue !== null) {
-        // Preencher o slot e continuar o fluxo
-        const updatedSlots: Record<string, any> = { ...activeAction.slots, [pendingSlot]: slotValue };
-        const actionType = activeAction.intent as ActionType;
+        const updatedSlots: Record<string, any> = { ...guardAction.slots, [pendingSlot]: slotValue };
+        const actionType = guardAction.intent as ActionType;
         const missing = getMissingSlots(actionType, updatedSlots);
         
         if (hasAllRequiredSlots(actionType, updatedSlots)) {
-          // Executar!
-          const result = actionType === "income" 
-            ? await registerIncome(userId, updatedSlots, activeAction.id)
-            : await registerExpense(userId, updatedSlots, activeAction.id);
+          const result = actionType === "income"
+            ? await registerIncome(userId, updatedSlots, guardAction.id)
+            : await registerExpense(userId, updatedSlots, guardAction.id);
           await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
           return;
         }
         
-        // Ainda falta slot → perguntar próximo
-        await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: missing[0] });
         const nextSlotKey = missing[0];
+        await updateAction(guardAction.id, { slots: updatedSlots, pending_slot: nextSlotKey });
         const prompt = SLOT_PROMPTS[nextSlotKey];
-        if (prompt?.useButtons && prompt.buttons) {
-          await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+        const promptButtons = prompt?.buttons ?? [];
+        if (prompt?.useButtons && promptButtons.length > 0) {
+          await sendButtons(payload.phoneNumber, prompt.text, promptButtons, payload.messageSource);
         } else {
           await sendMessage(payload.phoneNumber, prompt?.text || `Qual o ${nextSlotKey}?`, payload.messageSource);
         }
         return;
       }
       
-      // Não conseguiu extrair → re-perguntar
-      const promptKey = pendingSlot;
-      const prompt = SLOT_PROMPTS[promptKey];
-      if (prompt?.useButtons && prompt.buttons) {
-        await sendButtons(payload.phoneNumber, `Hmm, não entendi 🤔\n\n${prompt.text}`, prompt.buttons, payload.messageSource);
+      const prompt = SLOT_PROMPTS[pendingSlot];
+      const promptButtons = prompt?.buttons ?? [];
+      if (prompt?.useButtons && promptButtons.length > 0) {
+        await sendButtons(payload.phoneNumber, `Hmm, não entendi 🤔\n\n${prompt.text}`, promptButtons, payload.messageSource);
       } else {
         await sendMessage(payload.phoneNumber, `Hmm, não entendi 🤔\n\n${prompt?.text || "Continue..."}`, payload.messageSource);
       }
