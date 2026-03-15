@@ -7,7 +7,7 @@ import { registerRecurring, cancelRecurring } from "../intents/recurring-handler
 import { cancelTransaction, updateTransactionPaymentMethod } from "../intents/cancel-handler.ts";
 import { handleExpenseResult } from "../intents/expense-inline.ts";
 import { listCardsForUser } from "../intents/card-queries.ts";
-import type { ExtractedSlots } from "../decision/ai-engine.ts";
+import type { ExtractedSlots } from "../decision/types.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -21,7 +21,7 @@ async function handleExpenseResultCompat(
   sendMsg: (p: string, m: string, s: string) => Promise<void>,
   sendBtns: (p: string, t: string, b: Array<{ id: string; title: string }>, s: string) => Promise<void>
 ): Promise<void> {
-  return handleExpenseResult(result, phone, source, sendMsg, sendBtns);
+  return handleExpenseResult(result, phone, source as any, sendMsg as any, sendBtns as any);
 }
 
 export async function handleButtonCallbacks(
@@ -42,7 +42,7 @@ export async function handleButtonCallbacks(
   if (buttonId === "confirm_yes" && activeAction && activeAction.status === "awaiting_confirmation") {
     console.log(`✅ [BUTTON] Confirmação recebida para ${activeAction.intent}`);
     
-    const slots = activeAction.slots as ExtractedSlots;
+    const slots = activeAction.slots as any;
     let result: { message: string; success?: boolean };
     
     switch (activeAction.intent) {

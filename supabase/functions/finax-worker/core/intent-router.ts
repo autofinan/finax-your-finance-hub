@@ -4,17 +4,20 @@
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { type ExtractedSlots } from "../decision/ai-engine.ts";
+import { type ExtractedSlots } from "../decision/types.ts";
+import { type MessageSource, type JobPayload } from "./job-context.ts";
+import { SLOT_PROMPTS, getMissingSlots, hasAllRequiredSlots } from "../ui/slot-prompts.ts";
 import { createAction, updateAction, closeAction } from "../fsm/action-manager.ts";
 import { registerExpenseInline, handleExpenseResult } from "../intents/expense-inline.ts";
 import { registerIncome } from "../intents/income.ts";
-import { registerRecurring } from "../intents/recurring-handler.ts";
+import { registerRecurring, cancelRecurring } from "../intents/recurring-handler.ts";
 import { listCardsForUser, queryCardLimits, queryCardExpenses, queryContextExpenses } from "../intents/card-queries.ts";
 import { getActiveContext, createUserContext, closeUserContext } from "../intents/context-handler.ts";
 import { getLastTransaction, listTransactionsForCancel, cancelTransaction, updateTransactionPaymentMethod } from "../intents/cancel-handler.ts";
 import { setBudget } from "../intents/budget.ts";
 import { normalizeText, isNumericOnly } from "../utils/helpers.ts";
 import { markAsExecuted } from "../utils/ai-decisions.ts";
+import { processNextInQueue, queueMessage, markMessageProcessed } from "../utils/message-queue.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -26,9 +29,9 @@ const registerExpense = registerExpenseInline;
 async function handleExpenseResultCompat(
   result: { success: boolean; message: string; isDuplicate?: boolean },
   phoneNumber: string,
-  messageSource: string,
-  sendMessage: Function,
-  sendButtons: Function
+  messageSource: MessageSource,
+  sendMessage: (phone: string, msg: string, source: string) => Promise<void>,
+  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: string) => Promise<void>
 ): Promise<void> {
   return handleExpenseResult(result, phoneNumber, messageSource, sendMessage as any, sendButtons as any);
 }
@@ -312,14 +315,14 @@ export async function routeIntent(
         // ========================================================================
         // 🧠 CONFIRMAÇÃO DE PADRÃO DE CARTÃO (antes de executar)
         // ========================================================================
-        if (patternRequiresConfirmation && slots.card_id && patternCardName) {
-          console.log(`🧠 [PATTERN] Pedindo confirmação: ${slots.description} → ${patternCardName}`);
+        if (eliteContext.patternRequiresConfirmation && slots.card_id && eliteContext.patternCardName) {
+          console.log(`🧠 [PATTERN] Pedindo confirmação: ${slots.description} → ${eliteContext.patternCardName}`);
           
           // Salvar action com slots completos + patternId no meta
           await createAction(userId, "expense", "expense", slots, "card_confirm", payload.messageId);
           // Atualizar meta da action com patternId
           await supabase.from("actions")
-            .update({ meta: { patternId } })
+            .update({ meta: { patternId: eliteContext.patternId } })
             .eq("user_id", userId)
             .eq("status", "collecting");
           
@@ -328,7 +331,7 @@ export async function routeIntent(
           
           await sendButtons(
             payload.phoneNumber,
-            `🧠 ${desc} ${valor} no *${patternCardName}*, certo?`,
+            `🧠 ${desc} ${valor} no *${eliteContext.patternCardName}*, certo?`,
             [
               { id: "pattern_confirm_yes", title: "✅ Sim, registrar" },
               { id: "pattern_confirm_no", title: "❌ Não, outro cartão" }
@@ -390,7 +393,7 @@ export async function routeIntent(
           await markAsExecuted(decision.decisionId, result.success ?? true);
         }
         
-        await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
+        await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource as MessageSource, sendMessage, sendButtons);
         
         // ✅ APÓS registrar expense que foi reclassificado de pay_bill → oferecer criar fatura
         if (slots.suggest_bill_after && slots.description) {
@@ -415,7 +418,7 @@ export async function routeIntent(
         if (nextQueued) {
           console.log(`📬 [QUEUE] Processando próximo da fila: "${nextQueued.message_text}"`);
           // Re-invocar o pipeline para a mensagem da fila
-          const queuePayload: JobPayload = {
+          const queuePayload = {
             ...payload,
             messageText: nextQueued.message_text,
             messageId: nextQueued.message_id,
@@ -778,12 +781,13 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         const valorTotal = Number(slots.amount || 0);
         const numParcelas = Number(slots.installments || 1);
         const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
-        const { dateISO, timeString } = (await import("../finax-worker/utils/date-helpers.ts")).getBrasiliaISO();
+        const { getBrasiliaISO } = await import("../utils/date-helpers.ts");
+        const { dateISO, timeString } = getBrasiliaISO();
         
         // Categorizar
         let category = slots.category || "outros";
         if (slots.description && !slots.category) {
-          const { categorizeDescription } = await import("./ai/categorizer.ts");
+          const { categorizeDescription } = await import("../ai/categorizer.ts");
           const catResult = await categorizeDescription(slots.description);
           category = catResult.category;
         }

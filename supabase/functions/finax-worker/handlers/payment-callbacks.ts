@@ -6,7 +6,7 @@ import { registerIncome } from "../intents/income.ts";
 import { registerRecurring } from "../intents/recurring-handler.ts";
 import { handleExpenseResult } from "../intents/expense-inline.ts";
 import { listCardsForUser } from "../intents/card-queries.ts";
-import type { ExtractedSlots } from "../decision/ai-engine.ts";
+import type { ExtractedSlots } from "../decision/types.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -20,7 +20,7 @@ async function handleExpenseResultCompat(
   sendMsg: (p: string, m: string, s: string) => Promise<void>,
   sendBtns: (p: string, t: string, b: Array<{ id: string; title: string }>, s: string) => Promise<void>
 ): Promise<void> {
-  return handleExpenseResult(result, phone, source, sendMsg, sendBtns);
+  return handleExpenseResult(result, phone, source as any, sendMsg as any, sendBtns as any);
 }
 
 export async function handlePaymentCallbacks(
@@ -88,7 +88,7 @@ export async function handlePaymentCallbacks(
       const missing = getMissingSlots("expense", updatedSlots);
       
       if (missing.length === 0) {
-        const result = await registerExpense(userId, updatedSlots, activeAction.id);
+        const result = await registerExpense(userId, updatedSlots as any, activeAction.id);
         
         const remainingExpenses = activeAction.slots?.remaining_expenses as Array<{amount: number; description: string; confidence?: number}> | undefined;
         
@@ -288,7 +288,7 @@ export async function handlePaymentCallbacks(
     };
     
     if (activeAction.intent === "expense") {
-      const result = await registerExpense(userId, updatedSlots as ExtractedSlots, activeAction.id, activeAction.id);
+      const result = await registerExpense(userId, updatedSlots as any, activeAction.id, activeAction.id);
       await supabase.from("actions").update({ status: "done" }).eq("id", activeAction.id);
       await handleExpenseResultCompat(result, phoneNumber, messageSource, sendMessage, sendButtons);
       return true;
@@ -306,7 +306,7 @@ export async function handlePaymentCallbacks(
 
   // LIMITE INSUFICIENTE - Handlers
   if (buttonId === "limit_force_yes" && activeAction?.intent === "expense") {
-    const result = await registerExpense(userId, activeAction.slots as ExtractedSlots, activeAction.id, activeAction.id);
+    const result = await registerExpense(userId, activeAction.slots as any, activeAction.id, activeAction.id);
     await supabase.from("actions").update({ status: "done" }).eq("id", activeAction.id);
     await handleExpenseResultCompat(result, phoneNumber, messageSource, sendMessage, sendButtons);
     return true;
@@ -409,7 +409,7 @@ export async function handlePaymentCallbacks(
         const { confirmPattern } = await import("../memory/patterns.ts");
         await confirmPattern(patternId);
       }
-      const result = await registerExpense(userId, activeAction.slots as ExtractedSlots, activeAction.id);
+      const result = await registerExpense(userId, activeAction.slots as any, activeAction.id);
       await handleExpenseResultCompat(result, phoneNumber, messageSource, sendMessage, sendButtons);
     } else {
       await sendMessage(phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", messageSource);
