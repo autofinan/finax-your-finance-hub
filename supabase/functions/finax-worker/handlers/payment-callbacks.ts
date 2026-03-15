@@ -88,7 +88,7 @@ export async function handlePaymentCallbacks(
       const missing = getMissingSlots("expense", updatedSlots);
       
       if (missing.length === 0) {
-        const result = await registerExpense(userId, updatedSlots, activeAction.id);
+        const result = await registerExpense(userId, updatedSlots as any, activeAction.id);
         
         const remainingExpenses = activeAction.slots?.remaining_expenses as Array<{amount: number; description: string; confidence?: number}> | undefined;
         
