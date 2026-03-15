@@ -781,12 +781,13 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         const valorTotal = Number(slots.amount || 0);
         const numParcelas = Number(slots.installments || 1);
         const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
-        const { dateISO, timeString } = (await import("../finax-worker/utils/date-helpers.ts")).getBrasiliaISO();
+        const { getBrasiliaISO } = await import("../utils/date-helpers.ts");
+        const { dateISO, timeString } = getBrasiliaISO();
         
         // Categorizar
         let category = slots.category || "outros";
         if (slots.description && !slots.category) {
-          const { categorizeDescription } = await import("./ai/categorizer.ts");
+          const { categorizeDescription } = await import("../ai/categorizer.ts");
           const catResult = await categorizeDescription(slots.description);
           category = catResult.category;
         }
