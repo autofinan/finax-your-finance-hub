@@ -4,12 +4,12 @@
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { type ExtractedSlots } from "../decision/ai-engine.ts";
+import { type ExtractedSlots } from "../decision/types.ts";
+import { type MessageSource } from "./job-context.ts";
 import { updateAction, closeAction, cancelAction } from "../fsm/action-manager.ts";
-import { registerExpenseInline } from "../intents/expense-inline.ts";
+import { registerExpenseInline, handleExpenseResult } from "../intents/expense-inline.ts";
 import { registerIncome } from "../intents/income.ts";
 import { registerRecurring } from "../intents/recurring-handler.ts";
-import { handleExpenseResult } from "../intents/expense-inline.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -21,7 +21,7 @@ const registerExpense = registerExpenseInline;
 async function handleExpenseResultCompat(
   result: { success: boolean; message: string; isDuplicate?: boolean },
   phoneNumber: string,
-  messageSource: string,
+  messageSource: MessageSource,
   sendMessage: Function,
   sendButtons: Function
 ): Promise<void> {
