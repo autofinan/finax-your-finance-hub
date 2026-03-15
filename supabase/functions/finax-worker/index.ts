@@ -2943,7 +2943,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     // 🔍 VERIFICAR HELP CONTEXT ANTES DO ROTEAMENTO (Bug #5 fix)
     // ========================================================================
     const helpCtxPreChat = await getConversationContext(userId);
-    if (helpCtxPreChat?.lastIntent === "help" && decision.actionType !== "control") {
+    if (helpCtxPreChat?.lastIntent === "help" && decision.actionType !== "control" && decision.actionType !== "expense" && decision.actionType !== "income") {
       // Usuário está respondendo a "precisa de ajuda com o quê?" mas IA classificou como chat/outro
       let helpResponse = "";
       
