@@ -36,6 +36,56 @@ async function handleExpenseResultCompat(
   return handleExpenseResult(result, phoneNumber, messageSource, sendMessage as any, sendButtons as any);
 }
 
+function isGenericRecurringDescription(description?: string): boolean {
+  if (!description) return true;
+  const d = normalizeText(description);
+  return [
+    "todo mes",
+    "todo mes pago",
+    "mensal",
+    "mensalidade",
+    "assinatura",
+    "gasto recorrente",
+    "recorrente",
+    "pago"
+  ].includes(d);
+}
+
+function refineRecurringDescription(originalMessage: string, currentDescription?: string): string | undefined {
+  if (!originalMessage) return currentDescription;
+  if (currentDescription && !isGenericRecurringDescription(currentDescription)) {
+    return currentDescription;
+  }
+
+  const patterns = [
+    /(?:todo\s+m[eê]s|mensal(?:mente)?|semanal(?:mente)?|anual(?:mente)?)[^\n\r]{0,25}?(?:de|do|da)\s+(.+)$/i,
+    /(?:pago|pagar|pagando|cobram|cobrar)[^\n\r]{0,20}?(?:de|do|da)\s+(.+)$/i,
+    /\d+[.,]?\d*\s*(?:de|do|da)\s+(.+)$/i
+  ];
+
+  let candidate = "";
+  for (const pattern of patterns) {
+    const m = originalMessage.match(pattern);
+    if (m?.[1]) {
+      candidate = m[1];
+      break;
+    }
+  }
+
+  if (!candidate) return currentDescription;
+
+  candidate = candidate
+    .replace(/\b(todo\s+m[eê]s|mensal(?:mente)?|semanal(?:mente)?|anual(?:mente)?|recorr[eê]ncia|recorrente|assinatura)\b/gi, " ")
+    .replace(/\b(pix|d[eé]bito|cr[eé]dito|dinheiro|cart[aã]o)\b/gi, " ")
+    .replace(/^[\s-]*(de|do|da)\s+/i, "")
+    .replace(/[?.!,;:]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (candidate.length < 2) return currentDescription;
+  return candidate.charAt(0).toUpperCase() + candidate.slice(1);
+}
+
 export async function routeIntent(
   decision: any,
   userId: string,
