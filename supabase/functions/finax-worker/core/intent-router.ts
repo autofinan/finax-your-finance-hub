@@ -418,7 +418,7 @@ export async function routeIntent(
         if (nextQueued) {
           console.log(`📬 [QUEUE] Processando próximo da fila: "${nextQueued.message_text}"`);
           // Re-invocar o pipeline para a mensagem da fila
-          const queuePayload: JobPayload = {
+          const queuePayload = {
             ...payload,
             messageText: nextQueued.message_text,
             messageId: nextQueued.message_id,
