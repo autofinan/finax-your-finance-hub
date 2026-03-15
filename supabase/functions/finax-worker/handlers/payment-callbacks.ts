@@ -288,7 +288,7 @@ export async function handlePaymentCallbacks(
     };
     
     if (activeAction.intent === "expense") {
-      const result = await registerExpense(userId, updatedSlots as ExtractedSlots, activeAction.id, activeAction.id);
+      const result = await registerExpense(userId, updatedSlots as any, activeAction.id, activeAction.id);
       await supabase.from("actions").update({ status: "done" }).eq("id", activeAction.id);
       await handleExpenseResultCompat(result, phoneNumber, messageSource, sendMessage, sendButtons);
       return true;
