@@ -2251,7 +2251,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         const valorTotal = Number(slots.amount || 0);
         const numParcelas = Number(slots.installments || 1);
         const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
-        const { dateISO, timeString } = (await import("../finax-worker/utils/date-helpers.ts")).getBrasiliaISO();
+        const { dateISO, timeString } = getBrasiliaISO();
         
         // Categorizar
         let category = slots.category || "outros";

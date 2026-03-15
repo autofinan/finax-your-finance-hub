@@ -61,9 +61,18 @@ export async function handleCancelRouting(
       transacoes = await findTransactionsByName(userId, searchTerm);
     }
 
-    // Se não achou nada pelo nome, tentar listar recorrentes (só se foi pedido explícito de recorrente)
+    // Se não achou nada pelo nome E usou pronome contextual ("essa", "esse", "ultimo")
+    // → buscar último recorrente criado
     if (recorrentes.length === 0 && transacoes.length === 0 && isRecurringCancel) {
-      recorrentes = await listActiveRecurrings(userId);
+      if (normalized.includes("essa") || normalized.includes("esse") || normalized.includes("ultimo") || normalized.includes("ultima")) {
+        // Buscar o recorrente mais recente
+        recorrentes = await listActiveRecurrings(userId);
+        if (recorrentes.length > 0) {
+          recorrentes = [recorrentes[0]]; // Pegar só o último
+        }
+      } else {
+        recorrentes = await listActiveRecurrings(userId);
+      }
     }
 
     // Se ainda não achou nada

@@ -297,8 +297,30 @@ export async function handlePaymentCallbacks(
       await sendMessage(phoneNumber, result.message, messageSource);
       return true;
     } else if (activeAction.intent === "installment") {
+      // ✅ FIX: Verificar se installments está presente antes de registrar
+      const installments = updatedSlots.installments;
+      const parsedInstallments = typeof installments === "string" 
+        ? parseInt(installments.replace(/\D/g, ""), 10) 
+        : Number(installments);
+      
+      if (!Number.isFinite(parsedInstallments) || parsedInstallments < 2) {
+        // Falta o número de parcelas → perguntar
+        await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: "installments" });
+        await sendMessage(phoneNumber, "Em quantas vezes? (ex: 2x, 6x, 12x)", messageSource);
+        return true;
+      }
+      
+      updatedSlots.installments = parsedInstallments;
       const { registerInstallment } = await import("../intents/installment.ts");
       const result = await registerInstallment(userId, updatedSlots as any, activeAction.id);
+      
+      if (!result.success && result.missingSlot) {
+        await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: result.missingSlot });
+        await sendMessage(phoneNumber, result.message, messageSource);
+        return true;
+      }
+      
+      await supabase.from("actions").update({ status: "done" }).eq("id", activeAction.id);
       await sendMessage(phoneNumber, result.message, messageSource);
       return true;
     }

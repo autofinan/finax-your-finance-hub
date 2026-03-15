@@ -25,7 +25,7 @@ export function normalizeText(text: string): string {
 }
 
 export function detectQueryScope(normalized: string): string {
-  if ((normalized.includes("relatorio") || normalized.includes("report")) && normalized.includes("semanal")) return "weekly_report";
+  if ((normalized.includes("relatorio") || normalized.includes("report") || normalized.includes("resumo")) && (normalized.includes("semanal") || normalized.includes("semana"))) return "weekly_report";
   if (normalized.includes("fatura") && (normalized.includes("detalh") || normalized.includes("tem na") || normalized.includes("abrir") || normalized.includes("ver"))) return "invoice_detail";
   if (normalized.includes("detalh") && normalized.includes("fatura")) return "invoice_detail";
   if (normalized.includes("fatura") && (normalized.includes("futur") || normalized.includes("proximo") || normalized.includes("proxima") || normalized.includes("mes que vem") || normalized.includes("previsao"))) return "invoice_future";
