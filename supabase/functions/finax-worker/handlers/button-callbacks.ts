@@ -7,7 +7,7 @@ import { registerRecurring, cancelRecurring } from "../intents/recurring-handler
 import { cancelTransaction, updateTransactionPaymentMethod } from "../intents/cancel-handler.ts";
 import { handleExpenseResult } from "../intents/expense-inline.ts";
 import { listCardsForUser } from "../intents/card-queries.ts";
-import type { ExtractedSlots } from "../decision/ai-engine.ts";
+import type { ExtractedSlots } from "../decision/types.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
