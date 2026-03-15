@@ -98,8 +98,8 @@ export async function handleCancelRouting(
       return;
     }
 
-    // Se só achou transações pontuais, mostrar essas (exceto quando pedido foi claramente recorrente)
-    if (recorrentes.length === 0 && transacoes.length > 0 && !isRecurringCancel) {
+    // Se só achou transações pontuais, mostrar essas
+    if (recorrentes.length === 0 && transacoes.length > 0) {
       await _showTransactionCancelOptions(transacoes, userId, messageId, sendButtons, sendListMessage, phoneNumber, messageSource);
       return;
     }
