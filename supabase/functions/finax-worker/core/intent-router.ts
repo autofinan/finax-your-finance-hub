@@ -30,8 +30,8 @@ async function handleExpenseResultCompat(
   result: { success: boolean; message: string; isDuplicate?: boolean },
   phoneNumber: string,
   messageSource: MessageSource,
-  sendMessage: (phone: string, msg: string, source: string) => Promise<void>,
-  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: string) => Promise<void>
+  sendMessage: (phone: string, msg: string, source: MessageSource) => Promise<boolean | void>,
+  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: MessageSource) => Promise<boolean | void>
 ): Promise<void> {
   return handleExpenseResult(result, phoneNumber, messageSource, sendMessage as any, sendButtons as any);
 }
@@ -44,11 +44,11 @@ export async function routeIntent(
   activeAction: any,
   usuario: any,
   transactionDate: Date | null,
-  payload: { phoneNumber: string; messageSource: string; messageId: string; messageType: string },
+  payload: { phoneNumber: string; messageSource: MessageSource; messageId: string; messageType: string },
   eliteContext: { patternApplied: boolean; patternId?: string | null; patternCardName?: string | null; patternRequiresConfirmation: boolean },
-  sendMessage: (phone: string, msg: string, source: string) => Promise<void>,
-  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: string) => Promise<void>,
-  sendListMessage: (phone: string, body: string, buttonText: string, sections: any[], source: string) => Promise<void>
+  sendMessage: (phone: string, msg: string, source: MessageSource) => Promise<boolean | void>,
+  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: MessageSource) => Promise<boolean | void>,
+  sendListMessage: (phone: string, body: string, buttonText: string, sections: any[], source: MessageSource) => Promise<boolean | void>
 ): Promise<void> {
 
     // ========================================================================

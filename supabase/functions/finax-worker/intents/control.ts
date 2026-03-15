@@ -17,10 +17,10 @@ export async function handleControl(
   nomeUsuario: string,
   conteudoProcessado: string,
   isProUser: boolean,
-  sendMessage: (phone: string, msg: string, source: string) => Promise<void>,
-  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: string) => Promise<void>,
+  sendMessage: (phone: string, msg: string, source: "meta" | "vonage") => Promise<boolean | void>,
+  sendButtons: (phone: string, text: string, buttons: Array<{ id: string; title: string }>, source: "meta" | "vonage") => Promise<boolean | void>,
   phoneNumber: string,
-  messageSource: string
+  messageSource: "meta" | "vonage"
 ): Promise<void> {
   const normalized = normalizeText(conteudoProcessado);
 
