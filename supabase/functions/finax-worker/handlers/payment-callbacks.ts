@@ -306,7 +306,7 @@ export async function handlePaymentCallbacks(
 
   // LIMITE INSUFICIENTE - Handlers
   if (buttonId === "limit_force_yes" && activeAction?.intent === "expense") {
-    const result = await registerExpense(userId, activeAction.slots as ExtractedSlots, activeAction.id, activeAction.id);
+    const result = await registerExpense(userId, activeAction.slots as any, activeAction.id, activeAction.id);
     await supabase.from("actions").update({ status: "done" }).eq("id", activeAction.id);
     await handleExpenseResultCompat(result, phoneNumber, messageSource, sendMessage, sendButtons);
     return true;
