@@ -62,11 +62,38 @@ export async function handleCancelRouting(
       searchTerm = matchResult[1]
         .trim()
         .replace(/[?.!,]+$/g, "")
-        .replace(/\b(a|o|os|as|meu|minha|esse|essa|isso|isto|este|esta|aquele|aquela|recorrencia|recorrente|assinatura|gasto|despesa)\b/gi, " ")
+        .replace(/\b(a|o|os|as|meu|minha|esse|essa|isso|isto|este|esta|aquele|aquela|recorrencia|recorrente|assinatura|gasto|despesa|ultimo|ultima)\b/gi, " ")
         .replace(/\s+/g, " ")
         .trim();
       break;
     }
+  }
+
+  // ========================================================================
+  // FAST PATH: Pronome contextual + hint de recorrência → cancelar mais recente
+  // "cancela essa recorrência", "cancela essa assinatura", "cancela esse recorrente"
+  // ========================================================================
+  if (isRecurringCancel && hasContextPronoun && !searchTerm) {
+    console.log(`🗑️ [CANCEL] Pronome contextual detectado → buscando recorrência mais recente`);
+    const recorrentes = await listActiveRecurrings(userId);
+    
+    if (recorrentes.length === 0) {
+      await sendMessage(phoneNumber, "Você não tem gastos recorrentes ativos para cancelar 🤔", messageSource);
+      return;
+    }
+    
+    // Cancelar a mais recente diretamente com confirmação
+    const rec = recorrentes[0];
+    await sendButtons(phoneNumber,
+      `🔄 Cancelar *${rec.descricao}* (R$ ${Number(rec.valor_parcela).toFixed(2)}/mês)?`,
+      [
+        { id: "cancel_confirm_rec_yes", title: "✅ Sim, cancelar" },
+        { id: "cancel_confirm_no", title: "❌ Não" }
+      ],
+      messageSource
+    );
+    await createAction(userId, "cancel_recurring", "cancel", { transaction_id: rec.id, options: [rec.id] }, "confirmation", messageId);
+    return;
   }
 
   // Se parece cancelamento de recorrente OU tem termo de busca
@@ -80,13 +107,9 @@ export async function handleCancelRouting(
       transacoes = await findTransactionsByName(userId, searchTerm);
     }
 
-    // Linguagem contextual ("essa recorrência", "quero cancelar")
-    // Priorizar recorrente(s) ativo(s), evitando cair em transação pontual por engano.
-    if (isRecurringCancel && (hasContextPronoun || !searchTerm) && recorrentes.length === 0) {
+    // Linguagem genérica sem pronome contextual e sem termo → listar recorrentes
+    if (isRecurringCancel && !searchTerm && recorrentes.length === 0) {
       recorrentes = await listActiveRecurrings(userId);
-      if (hasContextPronoun && recorrentes.length > 0) {
-        recorrentes = [recorrentes[0]]; // mais recente
-      }
     }
 
     // Se ainda não achou nada
