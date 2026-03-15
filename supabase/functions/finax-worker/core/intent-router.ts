@@ -1373,31 +1373,234 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     }
     
     // ========================================================================
-    // 💰 SET_BUDGET - Definir orçamento/limite mensal
+    // 💬 CHAT - Consultor Financeiro Conversacional
     // ========================================================================
-    if (decision.actionType === "set_budget") {
-      console.log(`💰 [SET_BUDGET] Definindo orçamento para: ${userId}`);
+    if (decision.actionType === "chat") {
+      const hasExplicitIntent = _isExplicitChatIntent(conteudoProcessado);
+      const hasHighConfidence = decision.confidence >= 0.85;
       
-      if (!decision.slots.amount) {
-        // ✅ FIX Bug 3: Criar action com pending_slot para manter contexto
-        await createAction(userId, "set_budget", "set_budget", {
-          ...decision.slots
-        }, "amount", payload.messageId);
-        await sendMessage(payload.phoneNumber, "Qual valor de limite mensal você quer definir? 💸", payload.messageSource);
+      if (!hasExplicitIntent && !hasHighConfidence) {
+        console.log(`🛑 [CHAT_GUARD] Chat bloqueado → mensagem ambígua: "${conteudoProcessado}" (conf: ${decision.confidence.toFixed(2)})`);
+        
+        await sendButtons(payload.phoneNumber, 
+          `"${conteudoProcessado}"\n\nVocê quer registrar um gasto ou consultar algo?`, 
+          [
+            { id: "word_gasto", title: "💸 Registrar gasto" },
+            { id: "word_consulta", title: "📊 Consultar" }
+          ], 
+          payload.messageSource
+        );
+        
+        await createAction(userId, "clarify", "clarify_word", 
+          { possible_description: conteudoProcessado }, 
+          "clarify_type", 
+          payload.messageId
+        );
         return;
       }
       
-      const result = await setBudget(userId, decision.slots);
-      await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+      console.log(`💬 [CHAT] Ativando modo consultor para: "${conteudoProcessado.slice(0, 50)}..."`);
+      
+      const { generateChatResponse } = await import("../intents/chat-handler.ts");
+      const { getMonthlySummaryInline } = await import("../intents/expense-inline.ts");
+      const { getActiveContext } = await import("../intents/context-handler.ts");
+      
+      let summary = await getMonthlySummaryInline(userId);
+      const activeCtx = await getActiveContext(userId);
+      
+      // Enriquecer summary com breakdown por categoria
+      try {
+        const inicioMesChat = new Date();
+        inicioMesChat.setDate(1);
+        inicioMesChat.setHours(0, 0, 0, 0);
+        
+        const { data: catBreakdown } = await supabase
+          .from("transacoes")
+          .select("categoria, valor")
+          .eq("usuario_id", userId)
+          .eq("tipo", "saida")
+          .eq("status", "confirmada")
+          .gte("data", inicioMesChat.toISOString())
+          .limit(10000);
+        
+        if (catBreakdown && catBreakdown.length > 0) {
+          const byCategory: Record<string, number> = {};
+          for (const t of catBreakdown) {
+            const cat = t.categoria || "outros";
+            byCategory[cat] = (byCategory[cat] || 0) + Number(t.valor);
+          }
+          const catList = Object.entries(byCategory)
+            .sort((a, b) => b[1] - a[1])
+            .map(([cat, total]) => `${cat}: R$ ${total.toFixed(2)}`)
+            .join(", ");
+          summary += `\n\nDetalhamento por categoria: ${catList}`;
+        }
+      } catch (catErr) {
+        console.error("⚠️ [CHAT] Erro ao buscar categorias (não-bloqueante):", catErr);
+      }
+      
+      const chatResponse = await generateChatResponse(
+        conteudoProcessado, 
+        summary,
+        activeCtx?.label || null,
+        nomeUsuario
+      );
+      
+      await sendMessage(payload.phoneNumber, chatResponse, payload.messageSource);
       
       await supabase.from("historico_conversas").insert({
         phone_number: payload.phoneNumber,
         user_id: userId,
         user_message: conteudoProcessado,
-        ai_response: result.message,
-        tipo: "set_budget"
+        ai_response: chatResponse,
+        tipo: "chat"
       });
       return;
     }
     
+    // 🎮 CONTROL (saudação, ajuda, negação)
+    if (decision.actionType === "control") {
+      const { handleControl } = await import("../intents/control.ts");
+      const isProUserFlag = usuario?.plano === "pro" || usuario?.plano === "basico";
+      await handleControl(userId, decision.slots, nomeUsuario, conteudoProcessado, isProUserFlag, sendMessage, sendButtons, payload.phoneNumber, payload.messageSource);
+      return;
+    }
+    
+    // ========================================================================
+    // 🔢 FALLBACK: NÚMERO ISOLADO
+    // ========================================================================
+    if (decision.actionType === "unknown" && payload.messageType === 'text') {
+      const { isNumericOnly: _isNum, parseNumericValue: _parseNum } = await import("../utils/helpers.ts");
+      
+      if (_isNum(conteudoProcessado)) {
+        const numValue = _parseNum(conteudoProcessado);
+        
+        if (activeAction?.pending_slot === "amount" && numValue !== null) {
+          const updatedSlots: Record<string, any> = { ...activeAction.slots, amount: numValue };
+          const actionType = activeAction.intent as any;
+          const missing = getMissingSlots(actionType, updatedSlots);
+          
+          if (hasAllRequiredSlots(actionType, updatedSlots)) {
+            const result = actionType === "income"
+              ? await registerIncome(userId, updatedSlots, activeAction.id)
+              : await registerExpense(userId, updatedSlots, activeAction.id);
+            await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
+            return;
+          }
+          
+          const nextSlotKey = missing[0];
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: nextSlotKey });
+          const prompt = SLOT_PROMPTS[nextSlotKey];
+          if (prompt?.useButtons && prompt.buttons) {
+            await sendButtons(payload.phoneNumber, prompt.text, prompt.buttons, payload.messageSource);
+          } else {
+            await sendMessage(payload.phoneNumber, prompt?.text || "Continue...", payload.messageSource);
+          }
+          return;
+        }
+        
+        // Número SEM contexto → PERGUNTAR
+        await sendButtons(payload.phoneNumber, `💰 R$ ${numValue?.toFixed(2)}\n\nEsse valor foi um gasto ou uma entrada?`, [
+          { id: "num_gasto", title: "💸 Gasto" },
+          { id: "num_entrada", title: "💰 Entrada" }
+        ], payload.messageSource);
+        
+        if (activeAction) {
+          const { cancelAction: _cancelAction } = await import("../fsm/action-manager.ts");
+          await _cancelAction(userId);
+        }
+        
+        await createAction(userId, "unknown", "numero_isolado", { amount: numValue }, "type_choice", payload.messageId);
+        return;
+      }
+    }
+    
+    // ========================================================================
+    // 🔤 FALLBACK: PALAVRA SOLTA
+    // ========================================================================
+    if (decision.actionType === "unknown" && decision.slots.possible_description) {
+      const possibleDesc = decision.slots.possible_description;
+      
+      await sendButtons(payload.phoneNumber, 
+        `"${possibleDesc}"\n\nVocê quer registrar um gasto ou consultar algo?`, 
+        [
+          { id: "word_gasto", title: "💸 Registrar gasto" },
+          { id: "word_consulta", title: "📊 Consultar" }
+        ], 
+        payload.messageSource
+      );
+      
+      await createAction(userId, "clarify", "clarify_word", 
+        { possible_description: possibleDesc }, 
+        "clarify_type", 
+        payload.messageId
+      );
+      return;
+    }
+    
+    // ========================================================================
+    // ❓ UNKNOWN FINAL → Tentar chat ou fallback gentil
+    // ========================================================================
+    if (activeAction?.pending_slot) {
+      const slotKey = activeAction.pending_slot;
+      const prompt = SLOT_PROMPTS[slotKey];
+      if (prompt?.useButtons && prompt.buttons) {
+        await sendButtons(payload.phoneNumber, `Hmm, não entendi bem 🤔\n\n${prompt.text}`, prompt.buttons, payload.messageSource);
+      } else {
+        await sendMessage(payload.phoneNumber, `Hmm, não entendi bem 🤔\n\n${prompt?.text || "Continue..."}`, payload.messageSource);
+      }
+      return;
+    }
+    
+    // Tentar chat se parece pergunta ou texto longo
+    const normalizedFallback = normalizeText(conteudoProcessado);
+    const parecePerguntar = conteudoProcessado.includes("?") || 
+                            normalizedFallback.match(/^(como|quando|quanto|qual|por que|o que|sera|devo|posso|tenho|to |tou |estou |consigo)/);
+    const words = conteudoProcessado.trim().split(/\s+/).length;
+    const hasNumber = /\d/.test(conteudoProcessado);
+    const isLongTextWithoutNumber = words > 5 && !hasNumber;
+    
+    if (parecePerguntar || isLongTextWithoutNumber) {
+      const { generateChatResponse } = await import("../intents/chat-handler.ts");
+      const { getMonthlySummaryInline } = await import("../intents/expense-inline.ts");
+      
+      const summary = await getMonthlySummaryInline(userId);
+      const chatResponse = await generateChatResponse(conteudoProcessado, summary, null, nomeUsuario);
+      await sendMessage(payload.phoneNumber, chatResponse, payload.messageSource);
+      
+      await supabase.from("historico_conversas").insert({
+        phone_number: payload.phoneNumber, user_id: userId,
+        user_message: conteudoProcessado, ai_response: chatResponse,
+        tipo: isLongTextWithoutNumber ? "chat_fallback_long" : "chat_fallback"
+      });
+      return;
+    }
+    
+    // Último fallback
+    const primeiroNome = nomeUsuario.split(" ")[0];
+    await sendMessage(payload.phoneNumber, `Oi ${primeiroNome}! 👋\n\nNão entendi bem essa. Você pode:\n\n💸 *Registrar gasto:* "café 8 pix"\n💰 *Registrar entrada:* "recebi 200"\n📊 *Ver resumo:* "resumo"\n💬 *Conversar:* "tô gastando demais?"`, payload.messageSource);
+}
+
+// Helper interno
+function _isExplicitChatIntent(text: string): boolean {
+  const t = text.toLowerCase().trim();
+  const words = t.split(/\s+/);
+  
+  const ackTokensLocal = ["obrigado", "obrigada", "valeu", "ok", "blz", "beleza", "entendi", "certo"];
+  const normalizedT = normalizeText(text);
+  if (words.length <= 2 && ackTokensLocal.some(tok => normalizedT.includes(tok))) {
+    return false;
+  }
+  
+  if (t.includes("?")) return true;
+  if (words.length > 6) return true;
+  
+  const chatVerbs = [
+    "como", "onde", "por que", "porque", "o que", "qual",
+    "me ajuda", "me diga", "acho", "devo", "vale a pena",
+    "dica", "opinião", "melhorar", "economizar", "gastando",
+    "posso", "consigo", "tenho", "tô", "estou", "será"
+  ];
+  
+  return chatVerbs.some(v => t.includes(v));
 }
