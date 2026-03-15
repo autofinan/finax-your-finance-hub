@@ -28,11 +28,12 @@ export async function handleCancelRouting(
 
   // Detectar se é cancelamento de recorrente
   const isRecurringCancel = normalized.includes("cancela") &&
-    (normalized.includes("assinatura") || normalized.includes("recorrente") ||
+    (normalized.includes("assinatura") || normalized.includes("recorrente") || normalized.includes("recorrencia") ||
      normalized.includes("netflix") || normalized.includes("spotify") ||
      normalized.includes("aluguel") || normalized.includes("academia") ||
      normalized.includes("mensal") || normalized.includes("todo mes") ||
-     normalized.includes("para de cobrar") || normalized.includes("parar"));
+     normalized.includes("para de cobrar") || normalized.includes("parar") ||
+     normalized.includes("essa") || normalized.includes("esse") || normalized.includes("ultimo") || normalized.includes("ultima"));
 
   // Extrair termo de busca
   const cancelPatterns = [
