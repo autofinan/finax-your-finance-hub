@@ -1112,6 +1112,11 @@ async function processarJob(job: any): Promise<void> {
               execResult = { message: debtResult.message };
               break;
             }
+            case "installment": {
+              const { registerInstallment } = await import("./intents/installment.ts");
+              execResult = await registerInstallment(userId, execSlots as any, activeAction.id);
+              break;
+            }
             default:
               console.log(`⚠️ [FSM] Intent "${activeAction.intent}" não suporta execução direta`);
               // Fallback: pedir confirmação
