@@ -58,9 +58,14 @@ function refineRecurringDescription(originalMessage: string, currentDescription?
   }
 
   const patterns = [
-    /(?:todo\s+m[eê]s|mensal(?:mente)?|semanal(?:mente)?|anual(?:mente)?)[^\n\r]{0,25}?(?:de|do|da)\s+(.+)$/i,
-    /(?:pago|pagar|pagando|cobram|cobrar)[^\n\r]{0,20}?(?:de|do|da)\s+(.+)$/i,
-    /\d+[.,]?\d*\s*(?:de|do|da)\s+(.+)$/i
+    // "todo mês pago 30 de passagem" → "Passagem"
+    /\d+[.,]?\d*\s*(?:reais?\s+)?(?:de|do|da|pro|pra|em|no|na)\s+(.+)/i,
+    // "todo mês pago passagem" (sem valor no meio)
+    /(?:todo\s+m[eê]s|mensal(?:mente)?|semanal(?:mente)?|anual(?:mente)?)\s+(?:pago|gasto|cobram?|pagar)\s+(?:\d+[.,]?\d*\s*(?:reais?\s+)?)?(?:de|do|da|pro|pra|em|no|na)?\s*(.+)/i,
+    // "pago X de Y" ou "pago Y"
+    /(?:pago|pagar|pagando|cobram|cobrar)\s+(?:\d+[.,]?\d*\s*(?:reais?\s+)?)?(?:de|do|da|pro|pra|em|no|na)?\s*(.+)/i,
+    // Fallback: after "de/do/da" anywhere
+    /(?:de|do|da)\s+(.{3,})$/i
   ];
 
   let candidate = "";
@@ -77,7 +82,8 @@ function refineRecurringDescription(originalMessage: string, currentDescription?
   candidate = candidate
     .replace(/\b(todo\s+m[eê]s|mensal(?:mente)?|semanal(?:mente)?|anual(?:mente)?|recorr[eê]ncia|recorrente|assinatura)\b/gi, " ")
     .replace(/\b(pix|d[eé]bito|cr[eé]dito|dinheiro|cart[aã]o)\b/gi, " ")
-    .replace(/^[\s-]*(de|do|da)\s+/i, "")
+    .replace(/\b\d+[.,]?\d*\s*(reais?|conto)?\b/gi, " ")
+    .replace(/^[\s-]*(de|do|da|pro|pra|em|no|na)\s+/i, "")
     .replace(/[?.!,;:]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
