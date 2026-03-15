@@ -108,6 +108,23 @@ export async function routeIntent(
 ): Promise<void> {
 
     // ========================================================================
+    // 🔍 VERIFICAR HELP CONTEXT ANTES DO ROTEAMENTO
+    // Se o usuário está respondendo "precisa de ajuda com o quê?" e a IA
+    // classificou como chat/unknown, redirecionar para control handler
+    // ========================================================================
+    if (decision.actionType !== "control" && decision.actionType !== "expense" && decision.actionType !== "income") {
+      const { getConversationContext } = await import("../utils/conversation-context.ts");
+      const helpCtx = await getConversationContext(userId);
+      if (helpCtx?.lastIntent === "help") {
+        console.log(`🔍 [HELP_CTX] Redirecionando para control handler (help follow-up)`);
+        const { handleControl } = await import("../intents/control.ts");
+        const isProUserFlag = usuario?.plano === "pro" || usuario?.plano === "basico";
+        await handleControl(userId, decision.slots, nomeUsuario, conteudoProcessado, isProUserFlag, sendMessage, sendButtons, payload.phoneNumber, payload.messageSource);
+        return;
+      }
+    }
+
+    // ========================================================================
     // 🎯 ROTEAMENTO POR TIPO DE AÇÃO
     // ========================================================================
     
