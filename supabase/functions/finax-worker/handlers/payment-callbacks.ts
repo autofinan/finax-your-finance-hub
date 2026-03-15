@@ -409,7 +409,7 @@ export async function handlePaymentCallbacks(
         const { confirmPattern } = await import("../memory/patterns.ts");
         await confirmPattern(patternId);
       }
-      const result = await registerExpense(userId, activeAction.slots as ExtractedSlots, activeAction.id);
+      const result = await registerExpense(userId, activeAction.slots as any, activeAction.id);
       await handleExpenseResultCompat(result, phoneNumber, messageSource, sendMessage, sendButtons);
     } else {
       await sendMessage(phoneNumber, "Ops, perdi o contexto. Tenta de novo? 😕", messageSource);

@@ -42,7 +42,7 @@ export async function handleButtonCallbacks(
   if (buttonId === "confirm_yes" && activeAction && activeAction.status === "awaiting_confirmation") {
     console.log(`✅ [BUTTON] Confirmação recebida para ${activeAction.intent}`);
     
-    const slots = activeAction.slots as ExtractedSlots;
+    const slots = activeAction.slots as any;
     let result: { message: string; success?: boolean };
     
     switch (activeAction.intent) {
