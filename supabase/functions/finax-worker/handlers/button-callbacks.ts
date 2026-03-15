@@ -21,7 +21,7 @@ async function handleExpenseResultCompat(
   sendMsg: (p: string, m: string, s: string) => Promise<void>,
   sendBtns: (p: string, t: string, b: Array<{ id: string; title: string }>, s: string) => Promise<void>
 ): Promise<void> {
-  return handleExpenseResult(result, phone, source, sendMsg, sendBtns);
+  return handleExpenseResult(result, phone, source as any, sendMsg as any, sendBtns as any);
 }
 
 export async function handleButtonCallbacks(
