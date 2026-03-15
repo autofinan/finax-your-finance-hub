@@ -26,26 +26,45 @@ export async function handleCancelRouting(
     return;
   }
 
-  // Detectar se é cancelamento de recorrente
-  const isRecurringCancel = normalized.includes("cancela") &&
-    (normalized.includes("assinatura") || normalized.includes("recorrente") || normalized.includes("recorrencia") ||
-     normalized.includes("netflix") || normalized.includes("spotify") ||
-     normalized.includes("aluguel") || normalized.includes("academia") ||
-     normalized.includes("mensal") || normalized.includes("todo mes") ||
-     normalized.includes("para de cobrar") || normalized.includes("parar") ||
-     normalized.includes("essa") || normalized.includes("esse") || normalized.includes("ultimo") || normalized.includes("ultima"));
+  // Detectar se é cancelamento de recorrente (linguagem natural)
+  const hasCancelVerb =
+    normalized.includes("cancela") ||
+    normalized.includes("cancelar") ||
+    normalized.includes("parar") ||
+    normalized.includes("para de cobrar") ||
+    normalized.includes("deixar de pagar");
 
-  // Extrair termo de busca
+  const recurringHints = [
+    "assinatura", "recorrente", "recorrencia", "mensal", "todo mes",
+    "netflix", "spotify", "aluguel", "academia"
+  ];
+
+  const hasContextPronoun =
+    normalized.includes("essa") ||
+    normalized.includes("esse") ||
+    normalized.includes("isso") ||
+    normalized.includes("ultimo") ||
+    normalized.includes("ultima");
+
+  const isRecurringCancel = hasCancelVerb &&
+    (recurringHints.some(h => normalized.includes(h)) || hasContextPronoun);
+
+  // Extrair termo de busca de forma robusta (sem cortar na primeira palavra)
   const cancelPatterns = [
-    /cancela(?:r)?\s+(?:a|o|meu|minha)?\s*(.+)/i,
-    /para(?:r)?\s+(?:de\s+)?(?:cobrar|pagar)\s+(?:a|o)?\s*(.+)/i,
+    /cancela(?:r)?\s+(?:a|o|os|as|meu|minha)?\s*(.+)/i,
+    /para(?:r)?\s+(?:de\s+)?(?:cobrar|pagar)\s+(?:a|o|os|as)?\s*(.+)/i,
   ];
 
   let searchTerm = "";
   for (const pattern of cancelPatterns) {
     const matchResult = conteudoProcessado.match(pattern);
     if (matchResult && matchResult[1]) {
-      searchTerm = matchResult[1].trim().split(" ")[0];
+      searchTerm = matchResult[1]
+        .trim()
+        .replace(/[?.!,]+$/g, "")
+        .replace(/\b(a|o|os|as|meu|minha|esse|essa|isso|isto|este|esta|aquele|aquela|recorrencia|recorrente|assinatura|gasto|despesa)\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
       break;
     }
   }
@@ -61,17 +80,12 @@ export async function handleCancelRouting(
       transacoes = await findTransactionsByName(userId, searchTerm);
     }
 
-    // Se não achou nada pelo nome E usou pronome contextual ("essa", "esse", "ultimo")
-    // → buscar último recorrente criado
-    if (recorrentes.length === 0 && transacoes.length === 0 && isRecurringCancel) {
-      if (normalized.includes("essa") || normalized.includes("esse") || normalized.includes("ultimo") || normalized.includes("ultima")) {
-        // Buscar o recorrente mais recente
-        recorrentes = await listActiveRecurrings(userId);
-        if (recorrentes.length > 0) {
-          recorrentes = [recorrentes[0]]; // Pegar só o último
-        }
-      } else {
-        recorrentes = await listActiveRecurrings(userId);
+    // Linguagem contextual ("essa recorrência", "quero cancelar")
+    // Priorizar recorrente(s) ativo(s), evitando cair em transação pontual por engano.
+    if (isRecurringCancel && (hasContextPronoun || !searchTerm) && recorrentes.length === 0) {
+      recorrentes = await listActiveRecurrings(userId);
+      if (hasContextPronoun && recorrentes.length > 0) {
+        recorrentes = [recorrentes[0]]; // mais recente
       }
     }
 
