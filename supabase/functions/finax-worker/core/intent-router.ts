@@ -393,7 +393,7 @@ export async function routeIntent(
           await markAsExecuted(decision.decisionId, result.success ?? true);
         }
         
-        await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource);
+        await handleExpenseResultCompat(result, payload.phoneNumber, payload.messageSource as MessageSource, sendMessage, sendButtons);
         
         // ✅ APÓS registrar expense que foi reclassificado de pay_bill → oferecer criar fatura
         if (slots.suggest_bill_after && slots.description) {
