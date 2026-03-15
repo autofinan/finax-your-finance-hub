@@ -198,6 +198,11 @@ export async function handleFSM(
           execResult = { message: debtResult.message };
           break;
         }
+        case "installment": {
+          const { registerInstallment } = await import("../intents/installment.ts");
+          execResult = await registerInstallment(userId, execSlots as any, activeAction.id);
+          break;
+        }
         default: {
           console.log(`⚠️ [FSM] Intent "${activeAction.intent}" não suporta execução direta`);
           const { generateConfirmationMessage, setActionAwaitingConfirmation } = await import("../fsm/context-handler.ts");

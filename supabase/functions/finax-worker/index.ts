@@ -1112,6 +1112,11 @@ async function processarJob(job: any): Promise<void> {
               execResult = { message: debtResult.message };
               break;
             }
+            case "installment": {
+              const { registerInstallment } = await import("./intents/installment.ts");
+              execResult = await registerInstallment(userId, execSlots as any, activeAction.id);
+              break;
+            }
             default:
               console.log(`⚠️ [FSM] Intent "${activeAction.intent}" não suporta execução direta`);
               // Fallback: pedir confirmação
@@ -2251,7 +2256,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         const valorTotal = Number(slots.amount || 0);
         const numParcelas = Number(slots.installments || 1);
         const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
-        const { dateISO, timeString } = (await import("../finax-worker/utils/date-helpers.ts")).getBrasiliaISO();
+        const { dateISO, timeString } = getBrasiliaISO();
         
         // Categorizar
         let category = slots.category || "outros";
@@ -2943,7 +2948,7 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     // 🔍 VERIFICAR HELP CONTEXT ANTES DO ROTEAMENTO (Bug #5 fix)
     // ========================================================================
     const helpCtxPreChat = await getConversationContext(userId);
-    if (helpCtxPreChat?.lastIntent === "help" && decision.actionType !== "control") {
+    if (helpCtxPreChat?.lastIntent === "help" && decision.actionType !== "control" && decision.actionType !== "expense" && decision.actionType !== "income") {
       // Usuário está respondendo a "precisa de ajuda com o quê?" mas IA classificou como chat/outro
       let helpResponse = "";
       
