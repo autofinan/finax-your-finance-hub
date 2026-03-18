@@ -260,13 +260,18 @@ export async function registerExpense(
   const _time = dateISO.substring(11, 16); // "15:33"
   const formattedDateTime = `${_d}/${_m}/${_y} às ${_time}`;
   
-  const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
+  const catEmojis: Record<string, string> = {
+    alimentacao: "🍽️", mercado: "🛒", transporte: "🚗", moradia: "🏠",
+    lazer: "🎮", saude: "💊", educacao: "📚", outros: "📦"
+  };
+  const emoji = catEmojis[category] || "💸";
   
   console.log(`✅ [EXPENSE] Registrado: ${transaction.id}`);
   console.log(`📅 [EXPENSE] Salvo no banco: ${dateISO}`);
   console.log(`📅 [EXPENSE] Mostrado ao usuário: ${formattedDateTime}`);
   
-  const message = `✅ Gasto registrado!\n\n📝 ${slots.description || category}\n💰 R$ ${(slots.amount || 0).toFixed(2)}\n${paymentEmoji} ${slots.payment_method || "pix"}\n📅 ${formattedDateTime}`;
+  const valorFormatado = (slots.amount || 0).toFixed(2).replace(".", ",");
+  const message = `${emoji} *Gasto registrado!*\n\n💸 -R$ ${valorFormatado}\n📂 ${category}\n${slots.description ? `📝 ${slots.description}\n` : ""}💳 ${slots.payment_method || "pix"}\n📅 ${formattedDateTime}`;
 
   return {
     success: true,
