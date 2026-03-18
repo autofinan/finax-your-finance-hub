@@ -146,21 +146,55 @@ export async function registerExpense(
   if (error) {
     console.error("❌ [EXPENSE] Erro:", error);
     
-    if (actionId) {
-      const { data: action } = await supabase
-        .from("actions")
-        .select("meta")
-        .eq("id", actionId)
-        .single();
+    // Handle duplicate idempotency_key gracefully (error 23505)
+    if (error.code === "23505" && error.message?.includes("idempotency_key")) {
+      console.log(`⚠️ [EXPENSE] Duplicate idempotency_key, retrying without it`);
       
-      const decisionId = action?.meta?.decision_id;
-      await markAsExecuted(decisionId, false);
+      // Retry insert without idempotency_key
+      const { data: retryTx, error: retryError } = await supabase.from("transacoes").insert({
+        usuario_id: userId,
+        valor: slots.amount,
+        categoria: category,
+        tipo: "saida",
+        descricao: slots.description || category,
+        data: dateISO,
+        data_transacao: dateISO,
+        hora_transacao: timeString,
+        origem: "whatsapp",
+        forma_pagamento: slots.payment_method,
+        status: "confirmada",
+        id_cartao: resolvedCardId,
+        context_id: activeContext?.id || null
+      }).select("id").single();
+      
+      if (retryError) {
+        console.error("❌ [EXPENSE] Retry also failed:", retryError);
+        if (actionId) {
+          const { data: action } = await supabase.from("actions").select("meta").eq("id", actionId).single();
+          await markAsExecuted(action?.meta?.decision_id, false);
+        }
+        return { success: false, message: "Ops, algo deu errado ao registrar 😕" };
+      }
+      
+      // Use retry result - continue flow below with retryTx
+      (transaction as any) = retryTx;
+    } else {
+      if (actionId) {
+        const { data: action } = await supabase
+          .from("actions")
+          .select("meta")
+          .eq("id", actionId)
+          .single();
+        
+        const decisionId = action?.meta?.decision_id;
+        await markAsExecuted(decisionId, false);
+      }
+      
+      return {
+        success: false,
+        message: "Ops, algo deu errado ao registrar 😕"
+      };
     }
-    
-    return {
-      success: false,
-      message: "Ops, algo deu errado ao registrar 😕"
-    };
   }
   
   if (actionId) {
