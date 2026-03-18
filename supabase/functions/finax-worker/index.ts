@@ -732,10 +732,10 @@ async function processarJob(job: any): Promise<void> {
     if (isAcknowledgement(payload.messageText || "")) {
       console.log(`🤝 [ACK] Mensagem de cortesia detectada: "${payload.messageText}"`);
       
-      // Se há action pendente, manter estado (não interromper coleta)
+      // Se há action pendente, responder com emoji e manter estado (não interromper coleta)
       if (activeAction && activeAction.pending_slot) {
-        console.log(`🤝 [ACK] Action pendente - mantendo estado, não respondendo`);
-        // Silêncio - apenas manter o fluxo
+        console.log(`🤝 [ACK] Action pendente - respondendo emoji e mantendo estado`);
+        await sendMessage(payload.phoneNumber, "😊 Tô aqui! Responde a pergunta anterior 👆", payload.messageSource);
         return;
       }
       
