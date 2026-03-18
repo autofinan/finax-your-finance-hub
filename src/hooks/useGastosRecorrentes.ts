@@ -206,6 +206,32 @@ export function useGastosRecorrentes(usuarioIdProp?: string) {
     }
   }, [usuarioId, loadingUsuarioId]);
 
+  // Realtime subscription para atualizações via WhatsApp
+  useEffect(() => {
+    if (!usuarioId) return;
+
+    const channel = supabase
+      .channel('gastos_recorrentes_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'gastos_recorrentes',
+          filter: `usuario_id=eq.${usuarioId}`,
+        },
+        () => {
+          console.log('🔄 [REALTIME] Gastos recorrentes atualizados');
+          fetchGastos();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [usuarioId]);
+
   return {
     gastos,
     loading,

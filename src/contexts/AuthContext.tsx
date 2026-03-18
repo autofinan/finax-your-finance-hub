@@ -297,7 +297,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log('✅ [AUTH] Token refreshed automatically');
         }
         if (event === 'SIGNED_OUT') {
-          console.log('⚠️ [AUTH] Supabase session signed out');
+          console.log('⚠️ [AUTH] Supabase session signed out - limpando tokens Finax');
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(USER_KEY);
+          localStorage.removeItem(REFRESH_TOKEN_KEY);
+          setUser(null);
         }
       }
     );
