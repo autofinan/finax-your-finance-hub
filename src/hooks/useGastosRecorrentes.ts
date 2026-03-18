@@ -21,6 +21,7 @@ export function useGastosRecorrentes(usuarioIdProp?: string) {
       let query = supabase
         .from('gastos_recorrentes')
         .select('*')
+        .eq('ativo', true)
         .order('created_at', { ascending: false });
 
       if (usuarioId) {
