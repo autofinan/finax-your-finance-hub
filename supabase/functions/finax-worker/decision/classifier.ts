@@ -198,7 +198,7 @@ export function fastTrackExtract(message: string): FastTrackResult {
   );
   
   if (patternTextFirst) {
-    const description = patternTextFirst[1].trim();
+    let description = patternTextFirst[1].trim();
     const amount = parseFloat(patternTextFirst[2].replace(",", "."));
     const context = patternTextFirst[3]?.trim() || null;
     
@@ -222,6 +222,26 @@ export function fastTrackExtract(message: string): FastTrackResult {
       
       // Limpar descrição (remover termos de pagamento)
       slots.description = cleanDescription(description);
+      
+      // ========================================================================
+      // FIX: Se a descrição é um verbo comum (gastei, paguei, comprei), 
+      // o real item está no contexto. Ex: "gastei 50 no mercado pix"
+      // ========================================================================
+      const VERB_ONLY = ["gastei", "paguei", "comprei", "custou", "saiu", "foi", "deu", "peguei", "tomei", "comi", "bebi"];
+      const descNorm = (slots.description || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+      
+      if (VERB_ONLY.includes(descNorm) && context) {
+        // Extrair descrição real do contexto (removendo preposições e termos de pagamento)
+        let contextDesc = context
+          .replace(/\b(no|na|do|da|pelo|pela|via|com|para|pra|por|em|de)\b/gi, " ")
+          .trim();
+        contextDesc = cleanDescription(contextDesc);
+        
+        if (contextDesc && contextDesc.length >= 2) {
+          slots.description = contextDesc;
+          console.log(`⚡ [FAST-TRACK] Verbo "${descNorm}" detectado, descrição extraída do contexto: "${contextDesc}"`);
+        }
+      }
       
       console.log(`⚡ [FAST-TRACK] Padrão [texto][número]: desc="${slots.description}", amount=${amount}`);
       

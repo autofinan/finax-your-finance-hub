@@ -126,7 +126,9 @@ export async function registerExpense(
       : null
   );
 
-  const { data: transaction, error } = await supabase.from("transacoes").insert({
+  let transaction: { id: string } | null = null;
+  
+  const { data: txData, error } = await supabase.from("transacoes").insert({
     usuario_id: userId,
     valor: slots.amount,
     categoria: category,
@@ -146,21 +148,49 @@ export async function registerExpense(
   if (error) {
     console.error("❌ [EXPENSE] Erro:", error);
     
-    if (actionId) {
-      const { data: action } = await supabase
-        .from("actions")
-        .select("meta")
-        .eq("id", actionId)
-        .single();
+    // Handle duplicate idempotency_key gracefully (error 23505)
+    if (error.code === "23505" && error.message?.includes("idempotency_key")) {
+      console.log(`⚠️ [EXPENSE] Duplicate idempotency_key, retrying without it`);
       
-      const decisionId = action?.meta?.decision_id;
-      await markAsExecuted(decisionId, false);
+      const { data: retryTx, error: retryError } = await supabase.from("transacoes").insert({
+        usuario_id: userId,
+        valor: slots.amount,
+        categoria: category,
+        tipo: "saida",
+        descricao: slots.description || category,
+        data: dateISO,
+        data_transacao: dateISO,
+        hora_transacao: timeString,
+        origem: "whatsapp",
+        forma_pagamento: slots.payment_method,
+        status: "confirmada",
+        id_cartao: resolvedCardId,
+        context_id: activeContext?.id || null
+      }).select("id").single();
+      
+      if (retryError) {
+        console.error("❌ [EXPENSE] Retry also failed:", retryError);
+        if (actionId) {
+          const { data: action } = await supabase.from("actions").select("meta").eq("id", actionId).single();
+          await markAsExecuted(action?.meta?.decision_id, false);
+        }
+        return { success: false, message: "Ops, algo deu errado ao registrar 😕" };
+      }
+      
+      transaction = retryTx;
+    } else {
+      if (actionId) {
+        const { data: action } = await supabase.from("actions").select("meta").eq("id", actionId).single();
+        await markAsExecuted(action?.meta?.decision_id, false);
+      }
+      return { success: false, message: "Ops, algo deu errado ao registrar 😕" };
     }
-    
-    return {
-      success: false,
-      message: "Ops, algo deu errado ao registrar 😕"
-    };
+  } else {
+    transaction = txData;
+  }
+  
+  if (!transaction) {
+    return { success: false, message: "Ops, algo deu errado ao registrar 😕" };
   }
   
   if (actionId) {
@@ -230,13 +260,18 @@ export async function registerExpense(
   const _time = dateISO.substring(11, 16); // "15:33"
   const formattedDateTime = `${_d}/${_m}/${_y} às ${_time}`;
   
-  const paymentEmoji = getPaymentEmoji(slots.payment_method || "");
+  const catEmojis: Record<string, string> = {
+    alimentacao: "🍽️", mercado: "🛒", transporte: "🚗", moradia: "🏠",
+    lazer: "🎮", saude: "💊", educacao: "📚", outros: "📦"
+  };
+  const emoji = catEmojis[category] || "💸";
   
   console.log(`✅ [EXPENSE] Registrado: ${transaction.id}`);
   console.log(`📅 [EXPENSE] Salvo no banco: ${dateISO}`);
   console.log(`📅 [EXPENSE] Mostrado ao usuário: ${formattedDateTime}`);
   
-  const message = `✅ Gasto registrado!\n\n📝 ${slots.description || category}\n💰 R$ ${(slots.amount || 0).toFixed(2)}\n${paymentEmoji} ${slots.payment_method || "pix"}\n📅 ${formattedDateTime}`;
+  const valorFormatado = (slots.amount || 0).toFixed(2).replace(".", ",");
+  const message = `${emoji} *Gasto registrado!*\n\n💸 -R$ ${valorFormatado}\n📂 ${category}\n${slots.description ? `📝 ${slots.description}\n` : ""}💳 ${slots.payment_method || "pix"}\n📅 ${formattedDateTime}`;
 
   return {
     success: true,
