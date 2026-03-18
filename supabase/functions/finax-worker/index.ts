@@ -713,7 +713,9 @@ async function processarJob(job: any): Promise<void> {
       "ok", "okay", "blz", "beleza", "entendi", "entendido",
       "certo", "fechou", "combinado", "perfeito", "massa",
       "top", "show", "dahora", "legal", "ótimo", "otimo",
-      "maravilha", "excelente", "tranquilo", "suave"
+      "maravilha", "excelente", "tranquilo", "suave",
+      "oi", "ola", "olá", "opa", "eai", "e ai", "fala",
+      "bom dia", "boa tarde", "boa noite", "hey", "hi"
     ];
     
     function isAcknowledgement(text: string): boolean {
