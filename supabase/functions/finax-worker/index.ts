@@ -1116,7 +1116,11 @@ async function processarJob(job: any): Promise<void> {
       const correctionWords = ["errei", "desculpa", "era no", "era na", "foi no", "foi na", "nao foi", "não foi", "errado", "corrige", "corrigir"];
       const hasCorrectionWord = correctionWords.some(w => norm.includes(w));
       
-      if (paymentMentioned) {
+      // Bug 1 Fix: Não interceptar se a mensagem tem amount + description (é gasto novo)
+      const hasAmountAndDesc = decision?.slots?.amount && decision?.slots?.description;
+      const isOnlyPaymentCorrection = !hasAmountAndDesc;
+      
+      if (paymentMentioned && isOnlyPaymentCorrection) {
         const lastTx = await getLastTransaction(userId, 5);
         if (lastTx && (
           // Caso original: payment era unknown/outro

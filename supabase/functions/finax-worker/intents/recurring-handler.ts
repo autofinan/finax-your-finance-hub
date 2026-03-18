@@ -108,9 +108,23 @@ export async function tryRegisterRecurring(contract: Partial<RecurringContract>)
 // 🔄 REGISTRAR RECORRÊNCIA (FUNÇÃO PRINCIPAL)
 // ============================================================================
 
+export function refineRecurringDescription(raw: string): string {
+  if (!raw) return "";
+  return raw
+    .replace(/\b(todo[s]?\s*(mes|mês|dia|semana|ano)|mensal|semanal|anual|toda\s*semana|todo\s*ano)\b/gi, "")
+    .replace(/\b(pago|paga|gasto|gasta|pago\s*de|gasto\s*de|cobrado|cobrada)\b/gi, "")
+    .replace(/R\$\s*[\d,.]+/gi, "")
+    .replace(/\b\d+([,.]\d+)?\b/g, "")
+    .replace(/\bde\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, c => c.toUpperCase()) || raw;
+}
+
 export async function registerRecurring(userId: string, slots: ExtractedSlots, actionId?: string): Promise<{ success: boolean; message: string }> {
   const valor = slots.amount;
-  const descricao = slots.description || "";
+  const rawDescricao = slots.description || "";
+  const descricao = refineRecurringDescription(rawDescricao) || rawDescricao;
   const periodicity = (slots.periodicity || "monthly") as "monthly" | "weekly" | "yearly";
   const dayOfMonth = slots.day_of_month || new Date().getDate();
   
