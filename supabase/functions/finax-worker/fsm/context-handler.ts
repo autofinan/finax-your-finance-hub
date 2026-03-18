@@ -298,6 +298,41 @@ function fillPendingSlot(
   
   console.log(`📥 [FSM] Preenchendo slot "${pendingSlot}" para "${intent}"`);
   
+  // Bug 5 Fix: Rejeitar cortesias/greetings dentro da FSM
+  const GREETING_WORDS = ["oi", "ola", "opa", "eai", "bom dia", "boa tarde", "boa noite", "hey", "hi", "fala"];
+  if (GREETING_WORDS.some(w => normalized === w || normalized === w.replace(" ", ""))) {
+    return { handled: true, shouldContinue: false, message: "😊 Tô aqui! Responde a pergunta anterior 👆" };
+  }
+  
+  // Bug 2 Fix: Validação estrita para slot installments
+  if (pendingSlot === "installments") {
+    // Rejeitar se tem muitas palavras (provável nova intenção, não um número)
+    const words = normalized.split(/\s+/).filter(w => w.length > 0);
+    if (words.length > 3) {
+      console.log(`❌ [FSM] Mensagem muito longa para slot installments, rejeitando`);
+      return {
+        handled: true, shouldContinue: false,
+        message: "Quantas parcelas? Manda só o número (ex: 2, 6, 12) 🔢"
+      };
+    }
+    const num = parseInt(normalized.replace(/\D/g, ""), 10);
+    if (isNaN(num) || num < 2 || num > 72) {
+      const retryCount = incrementRetry(activeAction.id);
+      if (retryCount >= MAX_RETRIES) {
+        resetRetry(activeAction.id);
+        return { handled: true, shouldContinue: false, shouldCancel: true, cancelled: true, message: "Sem problema, vou liberar! Me chama quando quiser continuar 😊" };
+      }
+      return { handled: true, shouldContinue: false, message: "Quantas parcelas? Manda só o número (ex: 2, 6, 12) 🔢" };
+    }
+    resetRetry(activeAction.id);
+    return {
+      handled: true, shouldContinue: false,
+      filledSlot: "installments", slotValue: num,
+      updatedSlots: { ...activeAction.slots, installments: num },
+      readyToConfirm: true
+    };
+  }
+  
   // ========================================================================
   // 🔢 CASO ESPECIAL: Seleção de lista (selection)
   // ========================================================================

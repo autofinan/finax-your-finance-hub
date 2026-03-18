@@ -376,7 +376,8 @@ export async function registerExpenseInline(
   
   const emoji = categoria === "alimentacao" ? "🍽️" : categoria === "mercado" ? "🛒" : categoria === "transporte" ? "🚗" : "💸";
   
-  let message = `${emoji} *Gasto registrado!*\n\n💸 *-R$ ${valor.toFixed(2)}*\n📂 ${categoria}\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${formaPagamento}${cardInfo}\n📅 ${dataFormatada} às ${horaFormatada}${contextInfo}`;
+  const valorFormatado = valor.toFixed(2).replace(".", ",");
+  let message = `${emoji} *Gasto registrado!*\n\n💸 -R$ ${valorFormatado}\n📂 ${categoria}\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${formaPagamento}${cardInfo}\n📅 ${dataFormatada} às ${horaFormatada}${contextInfo}`;
   
   if (budgetAlert) {
     message += `\n\n${budgetAlert}`;

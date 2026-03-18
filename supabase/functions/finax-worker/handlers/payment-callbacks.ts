@@ -199,8 +199,26 @@ export async function handlePaymentCallbacks(
       
       if (paymentMethod === "credito") {
         const cards = await listCardsForUser(userId);
-        if (cards.length > 1) {
-          const cardButtons = cards.slice(0, 3).map((c) => ({
+        if (cards.length > 3) {
+          // Bug 6 Fix: Usar lista interativa para 4+ cartões
+          await updateAction(activeAction.id, { slots: updatedSlots, pending_slot: "card" });
+          await sendListMessage(
+            phoneNumber,
+            `🔄 ${updatedSlots.description || "Recorrente"} - R$ ${updatedSlots.amount?.toFixed(2)}/mês\n\nQual cartão?`,
+            "Ver cartões",
+            [{
+              title: "Seus cartões",
+              rows: cards.map((c: any) => ({
+                id: `rec_card_${c.id}`,
+                title: (c.nome || "Cartão").slice(0, 24),
+                description: `Disponível: R$ ${(c.limite_disponivel ?? 0).toFixed(2)}`
+              }))
+            }],
+            messageSource
+          );
+          return true;
+        } else if (cards.length > 1) {
+          const cardButtons = cards.map((c: any) => ({
             id: `rec_card_${c.id}`,
             title: (c.nome || "Cartão").slice(0, 20)
           }));

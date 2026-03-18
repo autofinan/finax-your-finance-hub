@@ -713,7 +713,9 @@ async function processarJob(job: any): Promise<void> {
       "ok", "okay", "blz", "beleza", "entendi", "entendido",
       "certo", "fechou", "combinado", "perfeito", "massa",
       "top", "show", "dahora", "legal", "ótimo", "otimo",
-      "maravilha", "excelente", "tranquilo", "suave"
+      "maravilha", "excelente", "tranquilo", "suave",
+      "oi", "ola", "olá", "opa", "eai", "e ai", "fala",
+      "bom dia", "boa tarde", "boa noite", "hey", "hi"
     ];
     
     function isAcknowledgement(text: string): boolean {
@@ -730,10 +732,10 @@ async function processarJob(job: any): Promise<void> {
     if (isAcknowledgement(payload.messageText || "")) {
       console.log(`🤝 [ACK] Mensagem de cortesia detectada: "${payload.messageText}"`);
       
-      // Se há action pendente, manter estado (não interromper coleta)
+      // Se há action pendente, responder com emoji e manter estado (não interromper coleta)
       if (activeAction && activeAction.pending_slot) {
-        console.log(`🤝 [ACK] Action pendente - mantendo estado, não respondendo`);
-        // Silêncio - apenas manter o fluxo
+        console.log(`🤝 [ACK] Action pendente - respondendo emoji e mantendo estado`);
+        await sendMessage(payload.phoneNumber, "😊 Tô aqui! Responde a pergunta anterior 👆", payload.messageSource);
         return;
       }
       
@@ -1114,7 +1116,11 @@ async function processarJob(job: any): Promise<void> {
       const correctionWords = ["errei", "desculpa", "era no", "era na", "foi no", "foi na", "nao foi", "não foi", "errado", "corrige", "corrigir"];
       const hasCorrectionWord = correctionWords.some(w => norm.includes(w));
       
-      if (paymentMentioned) {
+      // Bug 1 Fix: Não interceptar se a mensagem tem amount + description (é gasto novo)
+      const hasAmountAndDesc = decision?.slots?.amount && decision?.slots?.description;
+      const isOnlyPaymentCorrection = !hasAmountAndDesc;
+      
+      if (paymentMentioned && isOnlyPaymentCorrection) {
         const lastTx = await getLastTransaction(userId, 5);
         if (lastTx && (
           // Caso original: payment era unknown/outro
