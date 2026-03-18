@@ -147,6 +147,12 @@ export function useGastosRecorrentes(usuarioIdProp?: string) {
 
   const deleteGasto = async (id: string) => {
     try {
+      // Desvincular transações primeiro para evitar FK constraint
+      await supabase
+        .from('transacoes')
+        .update({ id_recorrente: null } as any)
+        .eq('id_recorrente', id);
+
       const { error, count } = await supabase
         .from('gastos_recorrentes')
         .delete({ count: 'exact' })
@@ -154,17 +160,19 @@ export function useGastosRecorrentes(usuarioIdProp?: string) {
 
       if (error) throw error;
 
-      // RLS may silently block delete (0 rows affected)
       if (count === 0) {
         console.warn('⚠️ Delete retornou 0 rows - tentando refresh de sessão...');
-        // Try refreshing the Supabase Auth session
         const { error: refreshError } = await supabase.auth.refreshSession();
         if (refreshError) {
-          console.error('❌ Refresh de sessão falhou:', refreshError);
           throw new Error('Sessão expirada. Faça login novamente.');
         }
 
-        // Retry delete after refresh
+        // Retry
+        await supabase
+          .from('transacoes')
+          .update({ id_recorrente: null } as any)
+          .eq('id_recorrente', id);
+
         const { error: retryError, count: retryCount } = await supabase
           .from('gastos_recorrentes')
           .delete({ count: 'exact' })
