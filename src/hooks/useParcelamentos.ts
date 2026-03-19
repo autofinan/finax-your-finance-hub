@@ -24,6 +24,7 @@ export function useParcelamentos(usuarioIdProp?: string) {
       let query = supabase
         .from('parcelamentos')
         .select('*')
+        .eq('ativa', true)
         .order('created_at', { ascending: false });
 
       if (usuarioId) {
