@@ -160,6 +160,32 @@ export function useParcelamentos(usuarioIdProp?: string) {
     }
   }, [usuarioId, loadingUsuarioId]);
 
+  // Realtime subscription para atualizações via WhatsApp
+  useEffect(() => {
+    if (!usuarioId) return;
+
+    const channel = supabase
+      .channel('parcelamentos_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'parcelamentos',
+          filter: `usuario_id=eq.${usuarioId}`,
+        },
+        () => {
+          console.log('🔄 [REALTIME] Parcelamentos atualizados');
+          fetchParcelamentos();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [usuarioId]);
+
   return {
     parcelamentos,
     parcelasAbertas,

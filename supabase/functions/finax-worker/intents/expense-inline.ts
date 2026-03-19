@@ -303,8 +303,10 @@ export async function registerExpenseInline(
   }
   
   // 💳 ATUALIZAR LIMITE DO CARTÃO
+  // ✅ FIX P8: Se fatura_id já existe, o credit-flow já processou o limite. Não deduzir novamente.
+  const jaProcessadoPeloCreditFlow = !!(slots.fatura_id);
   let cardInfo = "";
-  if (formaPagamento === "credito" && cardId) {
+  if (formaPagamento === "credito" && cardId && !jaProcessadoPeloCreditFlow) {
     const { data: card } = await supabase
       .from("cartoes_credito")
       .select("limite_disponivel, nome")
@@ -319,8 +321,19 @@ export async function registerExpenseInline(
         .update({ limite_disponivel: novoLimite })
         .eq("id", cardId);
       
-      cardInfo = `\n💳 ${card.nome || cardName} (disponível: R$ ${novoLimite.toFixed(2)})`;
+      cardInfo = `\n💳 ${card.nome || cardName} (disponível: R$ ${novoLimite.toFixed(2).replace(".", ",")})`;
     }
+  } else if (formaPagamento === "credito" && cardId && jaProcessadoPeloCreditFlow) {
+    // Já processado: apenas buscar info do cartão para a mensagem
+    const { data: card } = await supabase
+      .from("cartoes_credito")
+      .select("limite_disponivel, nome")
+      .eq("id", cardId)
+      .single();
+    if (card) {
+      cardInfo = `\n💳 ${card.nome || cardName} (disponível: R$ ${(card.limite_disponivel ?? 0).toFixed(2).replace(".", ",")})`;
+    }
+    console.log(`💳 [EXPENSE] Limite já deduzido pelo credit-flow, pulando double-deduction`);
   } else if (cardName) {
     cardInfo = `\n💳 ${cardName}`;
   }
