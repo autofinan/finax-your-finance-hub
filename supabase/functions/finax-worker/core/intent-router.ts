@@ -357,6 +357,11 @@ export async function routeIntent(
     if (decision.actionType === "expense") {
       const slots = decision.slots;
       
+      // ✅ FIX P2: Passar texto original para que expense-inline possa re-extrair descrição (áudio)
+      if (!slots._raw_text && conteudoProcessado) {
+        slots._raw_text = conteudoProcessado;
+      }
+      
       // ✅ SAFETY GUARD: Log slots recebidos para diagnóstico
       console.log(`💸 [EXPENSE-HANDLER] Slots recebidos: ${JSON.stringify(slots)}`);
       
