@@ -790,6 +790,46 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       decision.slots = slots;
       const missing = getMissingSlots("recurring", slots);
       
+      // ✅ FIX P3: Se payment_method é crédito, verificar cartão ANTES de executar
+      if (hasAllRequiredSlots("recurring", slots) && 
+          (slots.payment_method === "credito" || slots.payment_method === "crédito") && 
+          !slots.card_id) {
+        const cards = await listCardsForUser(userId);
+        if (cards.length === 0) {
+          // Sem cartões → registrar sem cartão
+          console.log(`🔄 [RECURRING] Crédito sem cartões cadastrados, registrando sem vínculo`);
+        } else if (cards.length === 1) {
+          slots.card_id = cards[0].id;
+          slots.card = cards[0].nome;
+          console.log(`🔄 [RECURRING] Cartão único vinculado: ${cards[0].nome}`);
+        } else {
+          // Múltiplos cartões → perguntar qual
+          if (activeAction?.intent === "recurring") {
+            await updateAction(activeAction.id, { slots, pending_slot: "card_id" });
+          } else {
+            await createAction(userId, "recurring", "recurring", slots, "card_id", payload.messageId);
+          }
+          
+          if (cards.length <= 3) {
+            await sendButtons(payload.phoneNumber,
+              `🔄 ${slots.description || "Recorrente"} - R$ ${Number(slots.amount).toFixed(2).replace(".", ",")}/mês\n\n💳 Qual cartão?`,
+              cards.map(c => ({ id: `rec_card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) })),
+              payload.messageSource);
+          } else {
+            await sendListMessage(payload.phoneNumber,
+              `🔄 ${slots.description || "Recorrente"} - R$ ${Number(slots.amount).toFixed(2).replace(".", ",")}/mês\n\n💳 Qual cartão?`,
+              "Ver cartões",
+              [{ title: "Seus cartões", rows: cards.map(c => ({
+                id: `rec_card_${c.id}`,
+                title: (c.nome || "Cartão").slice(0, 24),
+                description: `Disponível: R$ ${(c.limite_disponivel ?? 0).toFixed(2)}`
+              }))}],
+              payload.messageSource);
+          }
+          return;
+        }
+      }
+      
       // ✅ EXECUÇÃO DIRETA: tem amount e description
       if (hasAllRequiredSlots("recurring", slots)) {
         console.log(`🔄 [RECURRING] Execução direta: R$ ${slots.amount} - ${slots.description}`);

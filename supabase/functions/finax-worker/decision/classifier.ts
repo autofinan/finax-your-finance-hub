@@ -227,7 +227,7 @@ export function fastTrackExtract(message: string): FastTrackResult {
       // FIX: Se a descrição é um verbo comum (gastei, paguei, comprei), 
       // o real item está no contexto. Ex: "gastei 50 no mercado pix"
       // ========================================================================
-      const VERB_ONLY = ["gastei", "paguei", "comprei", "custou", "saiu", "foi", "deu", "peguei", "tomei", "comi", "bebi"];
+      const VERB_ONLY = ["gastei", "paguei", "comprei", "custou", "saiu", "foi", "deu", "peguei", "tomei", "comi", "bebi", "recebi", "ganhei", "entrou", "pingou", "mandaram", "caiu", "depositaram", "transferiram"];
       const descNorm = (slots.description || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
       
       if (VERB_ONLY.includes(descNorm) && context) {

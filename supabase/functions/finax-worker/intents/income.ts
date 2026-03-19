@@ -104,9 +104,14 @@ export async function registerIncome(
   
   console.log(`✅ [INCOME] Registrado: ${tx.id}`);
   
+  // ✅ FIX P9: Formato alinhado com expense (vírgula decimal, categoria, emoji)
+  const valorFormatado = valor.toFixed(2).replace(".", ",");
+  const descDisplay = descricao || "Entrada";
+  const sourceDisplay = source || "outro";
+  
   return {
     success: true,
-    message: `💰 *Entrada registrada!*\n\n✅ *+R$ ${valor.toFixed(2)}*\n${descricao ? `📝 ${descricao}\n` : ""}💳 ${source}\n📅 ${dataFormatada} às ${horaFormatada}`,
+    message: `💰 *Entrada registrada!*\n\n✅ +R$ ${valorFormatado}\n📂 entrada\n📝 ${descDisplay}\n💳 ${sourceDisplay}\n📅 ${dataFormatada} às ${horaFormatada}`,
     transactionId: tx.id
   };
 }
