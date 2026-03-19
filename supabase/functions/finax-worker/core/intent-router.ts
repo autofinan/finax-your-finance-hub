@@ -290,6 +290,25 @@ export async function routeIntent(
     }
     if (decision.actionType === "income") {
       const slots = decision.slots;
+      
+      // ✅ FIX P1: Se description é verbo, extrair substantivo real do texto
+      const INCOME_VERBS = ["recebi", "ganhei", "entrou", "pingou", "mandaram", "caiu", "depositaram", "transferiram"];
+      if (!slots.description || INCOME_VERBS.includes((slots.description || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim())) {
+        const incomeMatch = conteudoProcessado.match(/(?:recebi|ganhei|entrou|caiu|pingou|mandaram|depositaram|transferiram)\s+[\d.,]+\s+(?:de\s+)?(.+)/i);
+        if (incomeMatch && incomeMatch[1]) {
+          let incDesc = incomeMatch[1].trim()
+            .replace(/\b(de|do|da|no|na|pelo|pela|via|por)\b/gi, "")
+            .replace(/\s+/g, " ").trim();
+          if (incDesc.length >= 2) {
+            slots.description = incDesc.charAt(0).toUpperCase() + incDesc.slice(1);
+            console.log(`💰 [INCOME] Descrição corrigida de verbo para: "${slots.description}"`);
+          }
+        }
+        if (!slots.description || INCOME_VERBS.includes((slots.description || "").toLowerCase())) {
+          slots.description = "Entrada";
+        }
+      }
+      
       const missing = getMissingSlots("income", slots);
       
       // ✅ TODOS OS SLOTS → EXECUTAR DIRETO (texto claro não precisa confirmação)
