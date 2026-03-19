@@ -170,6 +170,16 @@ export async function registerExpenseInline(
   
   let descricao = slots.description || "";
   
+  // ✅ FIX P2: Se descrição vazia mas temos texto original (áudio), re-extrair
+  if (!descricao && slots._raw_text) {
+    const raw = String(slots._raw_text);
+    const descMatch = raw.match(/(?:no|na|em)\s+([a-záéíóúâêîôûãõç\s]+?)(?:\s+pix|\s+debito|\s+credito|\s+dinheiro|\s+cartao|$)/i);
+    if (descMatch && descMatch[1].trim().length >= 2) {
+      descricao = descMatch[1].trim();
+      console.log(`🔧 [AUDIO-FIX] Re-extraída descrição do áudio: "${descricao}"`);
+    }
+  }
+  
   // 🧹 LIMPAR DESCRIÇÃO: extrair apenas o item/serviço
   descricao = cleanDescriptionSmart(descricao);
   
@@ -293,8 +303,10 @@ export async function registerExpenseInline(
   }
   
   // 💳 ATUALIZAR LIMITE DO CARTÃO
+  // ✅ FIX P8: Se fatura_id já existe, o credit-flow já processou o limite. Não deduzir novamente.
+  const jaProcessadoPeloCreditFlow = !!(slots.fatura_id);
   let cardInfo = "";
-  if (formaPagamento === "credito" && cardId) {
+  if (formaPagamento === "credito" && cardId && !jaProcessadoPeloCreditFlow) {
     const { data: card } = await supabase
       .from("cartoes_credito")
       .select("limite_disponivel, nome")
@@ -309,8 +321,19 @@ export async function registerExpenseInline(
         .update({ limite_disponivel: novoLimite })
         .eq("id", cardId);
       
-      cardInfo = `\n💳 ${card.nome || cardName} (disponível: R$ ${novoLimite.toFixed(2)})`;
+      cardInfo = `\n💳 ${card.nome || cardName} (disponível: R$ ${novoLimite.toFixed(2).replace(".", ",")})`;
     }
+  } else if (formaPagamento === "credito" && cardId && jaProcessadoPeloCreditFlow) {
+    // Já processado: apenas buscar info do cartão para a mensagem
+    const { data: card } = await supabase
+      .from("cartoes_credito")
+      .select("limite_disponivel, nome")
+      .eq("id", cardId)
+      .single();
+    if (card) {
+      cardInfo = `\n💳 ${card.nome || cardName} (disponível: R$ ${(card.limite_disponivel ?? 0).toFixed(2).replace(".", ",")})`;
+    }
+    console.log(`💳 [EXPENSE] Limite já deduzido pelo credit-flow, pulando double-deduction`);
   } else if (cardName) {
     cardInfo = `\n💳 ${cardName}`;
   }

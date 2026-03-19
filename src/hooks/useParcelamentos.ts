@@ -24,6 +24,7 @@ export function useParcelamentos(usuarioIdProp?: string) {
       let query = supabase
         .from('parcelamentos')
         .select('*')
+        .eq('ativa', true)
         .order('created_at', { ascending: false });
 
       if (usuarioId) {
@@ -158,6 +159,32 @@ export function useParcelamentos(usuarioIdProp?: string) {
       fetchParcelamentos();
     }
   }, [usuarioId, loadingUsuarioId]);
+
+  // Realtime subscription para atualizações via WhatsApp
+  useEffect(() => {
+    if (!usuarioId) return;
+
+    const channel = supabase
+      .channel('parcelamentos_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'parcelamentos',
+          filter: `usuario_id=eq.${usuarioId}`,
+        },
+        () => {
+          console.log('🔄 [REALTIME] Parcelamentos atualizados');
+          fetchParcelamentos();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [usuarioId]);
 
   return {
     parcelamentos,

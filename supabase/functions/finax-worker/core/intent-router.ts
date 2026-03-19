@@ -290,6 +290,25 @@ export async function routeIntent(
     }
     if (decision.actionType === "income") {
       const slots = decision.slots;
+      
+      // ✅ FIX P1: Se description é verbo, extrair substantivo real do texto
+      const INCOME_VERBS = ["recebi", "ganhei", "entrou", "pingou", "mandaram", "caiu", "depositaram", "transferiram"];
+      if (!slots.description || INCOME_VERBS.includes((slots.description || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim())) {
+        const incomeMatch = conteudoProcessado.match(/(?:recebi|ganhei|entrou|caiu|pingou|mandaram|depositaram|transferiram)\s+[\d.,]+\s+(?:de\s+)?(.+)/i);
+        if (incomeMatch && incomeMatch[1]) {
+          let incDesc = incomeMatch[1].trim()
+            .replace(/\b(de|do|da|no|na|pelo|pela|via|por)\b/gi, "")
+            .replace(/\s+/g, " ").trim();
+          if (incDesc.length >= 2) {
+            slots.description = incDesc.charAt(0).toUpperCase() + incDesc.slice(1);
+            console.log(`💰 [INCOME] Descrição corrigida de verbo para: "${slots.description}"`);
+          }
+        }
+        if (!slots.description || INCOME_VERBS.includes((slots.description || "").toLowerCase())) {
+          slots.description = "Entrada";
+        }
+      }
+      
       const missing = getMissingSlots("income", slots);
       
       // ✅ TODOS OS SLOTS → EXECUTAR DIRETO (texto claro não precisa confirmação)
@@ -337,6 +356,11 @@ export async function routeIntent(
     // ========================================================================
     if (decision.actionType === "expense") {
       const slots = decision.slots;
+      
+      // ✅ FIX P2: Passar texto original para que expense-inline possa re-extrair descrição (áudio)
+      if (!slots._raw_text && conteudoProcessado) {
+        slots._raw_text = conteudoProcessado;
+      }
       
       // ✅ SAFETY GUARD: Log slots recebidos para diagnóstico
       console.log(`💸 [EXPENSE-HANDLER] Slots recebidos: ${JSON.stringify(slots)}`);
@@ -771,6 +795,46 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       decision.slots = slots;
       const missing = getMissingSlots("recurring", slots);
       
+      // ✅ FIX P3: Se payment_method é crédito, verificar cartão ANTES de executar
+      if (hasAllRequiredSlots("recurring", slots) && 
+          (slots.payment_method === "credito" || slots.payment_method === "crédito") && 
+          !slots.card_id) {
+        const cards = await listCardsForUser(userId);
+        if (cards.length === 0) {
+          // Sem cartões → registrar sem cartão
+          console.log(`🔄 [RECURRING] Crédito sem cartões cadastrados, registrando sem vínculo`);
+        } else if (cards.length === 1) {
+          slots.card_id = cards[0].id;
+          slots.card = cards[0].nome;
+          console.log(`🔄 [RECURRING] Cartão único vinculado: ${cards[0].nome}`);
+        } else {
+          // Múltiplos cartões → perguntar qual
+          if (activeAction?.intent === "recurring") {
+            await updateAction(activeAction.id, { slots, pending_slot: "card_id" });
+          } else {
+            await createAction(userId, "recurring", "recurring", slots, "card_id", payload.messageId);
+          }
+          
+          if (cards.length <= 3) {
+            await sendButtons(payload.phoneNumber,
+              `🔄 ${slots.description || "Recorrente"} - R$ ${Number(slots.amount).toFixed(2).replace(".", ",")}/mês\n\n💳 Qual cartão?`,
+              cards.map(c => ({ id: `rec_card_${c.id}`, title: (c.nome || "Cartão").slice(0, 20) })),
+              payload.messageSource);
+          } else {
+            await sendListMessage(payload.phoneNumber,
+              `🔄 ${slots.description || "Recorrente"} - R$ ${Number(slots.amount).toFixed(2).replace(".", ",")}/mês\n\n💳 Qual cartão?`,
+              "Ver cartões",
+              [{ title: "Seus cartões", rows: cards.map(c => ({
+                id: `rec_card_${c.id}`,
+                title: (c.nome || "Cartão").slice(0, 24),
+                description: `Disponível: R$ ${(c.limite_disponivel ?? 0).toFixed(2)}`
+              }))}],
+              payload.messageSource);
+          }
+          return;
+        }
+      }
+      
       // ✅ EXECUÇÃO DIRETA: tem amount e description
       if (hasAllRequiredSlots("recurring", slots)) {
         console.log(`🔄 [RECURRING] Execução direta: R$ ${slots.amount} - ${slots.description}`);
@@ -827,7 +891,25 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         await import("../intents/installment.ts");
       
       // ========================================================================
-      // STEP 0: Se não tem payment_method, perguntar boleto ou cartão
+      // STEP 0: Se não tem installments (nº de parcelas), perguntar PRIMEIRO
+      // ========================================================================
+      if (!slots.installments || isNaN(Number(slots.installments)) || Number(slots.installments) < 2) {
+        if (activeAction?.intent === "installment") {
+          await updateAction(activeAction.id, { slots, pending_slot: "installments" });
+        } else {
+          await createAction(userId, "installment", "installment", slots, "installments", payload.messageId);
+        }
+        
+        const valorDisplay = slots.amount ? `💰 R$ ${Number(slots.amount).toFixed(2).replace(".", ",")}\n📦 ${slots.description || "Parcelamento"}\n\n` : "";
+        await sendMessage(payload.phoneNumber, 
+          `${valorDisplay}Em quantas vezes? (ex: 3x, 12x)`,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ========================================================================
+      // STEP 1: Se não tem payment_method, perguntar boleto ou cartão
       // ========================================================================
       if (!slots.payment_method && !slots.card && !slots.card_id) {
         // Não especificou como pagou → perguntar com botões
