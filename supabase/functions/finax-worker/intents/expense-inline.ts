@@ -170,6 +170,16 @@ export async function registerExpenseInline(
   
   let descricao = slots.description || "";
   
+  // ✅ FIX P2: Se descrição vazia mas temos texto original (áudio), re-extrair
+  if (!descricao && slots._raw_text) {
+    const raw = String(slots._raw_text);
+    const descMatch = raw.match(/(?:no|na|em)\s+([a-záéíóúâêîôûãõç\s]+?)(?:\s+pix|\s+debito|\s+credito|\s+dinheiro|\s+cartao|$)/i);
+    if (descMatch && descMatch[1].trim().length >= 2) {
+      descricao = descMatch[1].trim();
+      console.log(`🔧 [AUDIO-FIX] Re-extraída descrição do áudio: "${descricao}"`);
+    }
+  }
+  
   // 🧹 LIMPAR DESCRIÇÃO: extrair apenas o item/serviço
   descricao = cleanDescriptionSmart(descricao);
   
