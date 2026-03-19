@@ -50,7 +50,7 @@ export function detectQueryScope(normalized: string): string {
   if (normalized.includes("pendente") || normalized.includes("pendentes")) return "pending";
   if (normalized.includes("categoria") || normalized.includes("categorias")) return "category";
   if (normalized.includes("recebi") || normalized.includes("entrada") || normalized.includes("entrou")) return "income";
-  if (normalized.includes("recorrente") || normalized.includes("assinatura")) return "recurring";
+  if (normalized.includes("recorrente") || normalized.includes("recorrencia") || normalized.includes("recorrencias") || normalized.includes("assinatura") || normalized.includes("assinaturas") || normalized.includes("fixos") || normalized.includes("gastos fixos") || normalized.includes("gastos mensais")) return "recurring";
   if (normalized.includes("parcelamento") || normalized.includes("parcela") || normalized.includes("parcelado")) return "installments";
   if (normalized.includes("meta") || normalized.includes("metas") || normalized.includes("poupanca")) return "goals";
   if (normalized.includes("gastei") || normalized.includes("gasto")) return "expenses";

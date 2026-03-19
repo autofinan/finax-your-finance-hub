@@ -59,8 +59,10 @@ export async function handleCancelRouting(
   for (const pattern of cancelPatterns) {
     const matchResult = conteudoProcessado.match(pattern);
     if (matchResult && matchResult[1]) {
+      // Normalizar removendo acentos ANTES de limpar stopwords
       searchTerm = matchResult[1]
         .trim()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
         .replace(/[?.!,]+$/g, "")
         .replace(/\b(a|o|os|as|meu|minha|esse|essa|isso|isto|este|esta|aquele|aquela|recorrencia|recorrente|assinatura|gasto|despesa|ultimo|ultima)\b/gi, " ")
         .replace(/\s+/g, " ")

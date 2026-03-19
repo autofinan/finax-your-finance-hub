@@ -827,7 +827,25 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
         await import("../intents/installment.ts");
       
       // ========================================================================
-      // STEP 0: Se não tem payment_method, perguntar boleto ou cartão
+      // STEP 0: Se não tem installments (nº de parcelas), perguntar PRIMEIRO
+      // ========================================================================
+      if (!slots.installments || isNaN(Number(slots.installments)) || Number(slots.installments) < 2) {
+        if (activeAction?.intent === "installment") {
+          await updateAction(activeAction.id, { slots, pending_slot: "installments" });
+        } else {
+          await createAction(userId, "installment", "installment", slots, "installments", payload.messageId);
+        }
+        
+        const valorDisplay = slots.amount ? `💰 R$ ${Number(slots.amount).toFixed(2).replace(".", ",")}\n📦 ${slots.description || "Parcelamento"}\n\n` : "";
+        await sendMessage(payload.phoneNumber, 
+          `${valorDisplay}Em quantas vezes? (ex: 3x, 12x)`,
+          payload.messageSource
+        );
+        return;
+      }
+      
+      // ========================================================================
+      // STEP 1: Se não tem payment_method, perguntar boleto ou cartão
       // ========================================================================
       if (!slots.payment_method && !slots.card && !slots.card_id) {
         // Não especificou como pagou → perguntar com botões
