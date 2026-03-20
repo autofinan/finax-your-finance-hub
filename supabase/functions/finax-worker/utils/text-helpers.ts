@@ -42,6 +42,10 @@ export function parseNumericValue(text: string): number | null {
 // ============================================================================
 
 export function detectQueryScope(normalized: string): string {
+  // Contexto de viagem/evento
+  if ((normalized.includes("viagem") || normalized.includes("evento") || normalized.includes("contexto")) &&
+      (normalized.includes("gastei") || normalized.includes("gasto") || normalized.includes("gastos") || normalized.includes("quanto"))) return "context";
+  
   // Relatórios
   if ((normalized.includes("relatorio") || normalized.includes("report")) && 
       (normalized.includes("semanal") || normalized.includes("semana"))) return "weekly_report";
