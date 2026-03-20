@@ -486,8 +486,47 @@ export async function handleQueryRouting(
         }
         return;
       }
-      // Continua para fallback checks
-      break;
+      
+      // ✅ FIX: Resumo mensal — mostrar entradas/saídas/saldo
+      console.log(`📊 [QUERY] Summary mensal → getMonthlySummary`);
+      const { getMonthlySummary } = await import("./query.ts");
+      const summaryText = await getMonthlySummary(userId);
+      await sendMessage(phoneNumber, summaryText, messageSource);
+      return;
+    }
+
+    // ✅ NOVO: Handler para "contas a pagar"
+    case "bills": {
+      console.log(`📊 [QUERY] Roteando para: BILLS`);
+      const { listBills } = await import("./bills.ts");
+      const billsResult = await listBills(userId);
+      await sendMessage(phoneNumber, billsResult, messageSource);
+      return;
+    }
+
+    // ✅ NOVO: Handler para "relatório" (mensal com IA)
+    case "report": {
+      console.log(`📊 [QUERY] Roteando para: REPORT (IA)`);
+      const { gerarRelatorioMensalIA } = await import("./reports-handler.ts");
+      
+      // Buscar dados do mês
+      const { getMonthlySummaryData } = await import("./query.ts");
+      const { getExpensesByCategoryData: getCatData } = await import("./query.ts");
+      
+      const summaryData = await getMonthlySummaryData(userId);
+      const catData = await getCatData(userId);
+      
+      const reportData = {
+        entradas: summaryData.totalIncome,
+        saidas: summaryData.totalExpense,
+        saldo: summaryData.balance,
+        transacoes: summaryData.transactionCount,
+        categorias: catData.categories.map(c => ({ nome: c.name, total: c.total }))
+      };
+      
+      const textoReport = await gerarRelatorioMensalIA(reportData, nomeUsuario);
+      await sendMessage(phoneNumber, textoReport, messageSource);
+      return;
     }
 
     default:
