@@ -57,6 +57,53 @@ REGRAS:
 }
 
 // ============================================================================
+// 📊 GERAR RELATÓRIO MENSAL COM IA
+// ============================================================================
+
+export async function gerarRelatorioMensalIA(dados: any, nomeUsuario: string | null): Promise<string> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Você é o Finax, assistente financeiro via WhatsApp.
+Escreva um RELATÓRIO MENSAL analítico e amigável.
+
+REGRAS:
+- Use APENAS os números fornecidos, não invente dados
+- Máximo 15 linhas
+- Comece com "📊 *Relatório Mensal*"
+- Mostre: Entradas, Saídas, Saldo
+- Analise as top 3 categorias de gasto
+- Dê 1-2 dicas práticas baseadas nos dados reais
+- Use 3-4 emojis relevantes
+- Português brasileiro informal
+- Valores em formato R$ X.XXX,XX`
+          },
+          {
+            role: "user",
+            content: `Relatório mensal para ${nomeUsuario || "Usuário"}:\n${JSON.stringify(dados, null, 2)}`
+          }
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "📊 Não foi possível gerar o relatório mensal.";
+  } catch (error) {
+    console.error("Erro ao gerar relatório mensal IA:", error);
+    return "📊 Erro ao gerar relatório mensal.";
+  }
+}
+
+// ============================================================================
 // 📊 VERIFICAR E ENVIAR RELATÓRIOS PENDENTES
 // ============================================================================
 
