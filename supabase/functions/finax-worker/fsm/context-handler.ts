@@ -626,8 +626,9 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
     case "card_name":
     case "bill_name":
     case "card":
+    case "nome":
       if (rawMessage.trim().length > 0) {
-        if (slotType === "card_name" || slotType === "bill_name") {
+        if (slotType === "card_name" || slotType === "bill_name" || slotType === "nome") {
           const cleaned = rawMessage.replace(/\d+/g, "").trim();
           return cleaned.length > 0 ? cleaned : rawMessage.trim();
         }
