@@ -572,6 +572,7 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
     case "value":
     case "limit":
     case "estimated_value":
+    case "saldo_devedor":
       const numMatch = rawMessage.match(/(\d+[.,]?\d*)/);
       if (numMatch) {
         return parseFloat(numMatch[1].replace(",", "."));
