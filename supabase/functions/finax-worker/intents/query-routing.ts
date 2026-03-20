@@ -109,6 +109,67 @@ export async function handleQueryRouting(
 
       const { executeDynamicQuery } = await import("../utils/dynamic-query.ts");
 
+      // ✅ FIX: Detectar categoria do texto se não veio nos slots
+      if (!slots.category) {
+        for (const cat of KNOWN_CATEGORIES) {
+          const catNorm = cat.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          if (normalized.includes(catNorm)) {
+            slots.category = catNorm;
+            console.log(`📊 [QUERY] Detectou categoria no texto: ${catNorm}`);
+            break;
+          }
+        }
+      }
+
+      // ✅ FIX: Detectar cartão do usuário no texto
+      if (!slots.card_id) {
+        const { data: userCardsExpense } = await supabase
+          .from("cartoes_credito")
+          .select("id, nome, limite_disponivel, limite_total")
+          .eq("usuario_id", userId);
+        
+        for (const card of (userCardsExpense || [])) {
+          if (card.nome && normalized.includes(normalizeText(card.nome))) {
+            slots.card_id = card.id;
+            console.log(`📊 [QUERY] Detectou cartão no texto: ${card.nome}`);
+            
+            // Rotear direto para gastos do cartão
+            const inicioMesCard = new Date();
+            inicioMesCard.setDate(1);
+            inicioMesCard.setHours(0, 0, 0, 0);
+            
+            const { data: gastosCard } = await supabase
+              .from("transacoes")
+              .select("valor, descricao, data")
+              .eq("usuario_id", userId)
+              .eq("cartao_id", card.id)
+              .eq("tipo", "saida")
+              .gte("data", inicioMesCard.toISOString())
+              .eq("status", "confirmada")
+              .order("data", { ascending: false })
+              .limit(1000);
+            
+            if (!gastosCard || gastosCard.length === 0) {
+              await sendMessage(phoneNumber,
+                `💳 *${card.nome}*\n\nNenhum gasto este mês.\n\n🟢 Disponível: R$ ${(card.limite_disponivel ?? 0).toFixed(2)}`,
+                messageSource);
+              return;
+            }
+            
+            const totalCard = gastosCard.reduce((sum: number, g: any) => sum + Number(g.valor), 0);
+            const listaCard = gastosCard.slice(0, 10).map((g: any) => {
+              const dataStr = formatBrasiliaDate(g.data);
+              return `💸 R$ ${Number(g.valor).toFixed(2)} - ${g.descricao || "Gasto"} (${dataStr})`;
+            }).join("\n");
+            
+            await sendMessage(phoneNumber,
+              `💳 *Gastos no ${card.nome}*\n\n${listaCard}\n\n💸 Total: R$ ${totalCard.toFixed(2)}\n🟢 Disponível: R$ ${(card.limite_disponivel ?? 0).toFixed(2)}`,
+              messageSource);
+            return;
+          }
+        }
+      }
+
       const expenseQueryParams = {
         userId,
         query_scope: "expenses" as const,
