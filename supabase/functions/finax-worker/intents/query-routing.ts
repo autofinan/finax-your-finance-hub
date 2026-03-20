@@ -529,6 +529,14 @@ export async function handleQueryRouting(
       return;
     }
 
+    // ✅ NOVO: Handler para gastos por contexto (viagem/evento)
+    case "context": {
+      console.log(`📊 [QUERY] Roteando para: CONTEXT`);
+      const result = await queryContextExpenses(userId, normalized);
+      await sendMessage(phoneNumber, result, messageSource);
+      return;
+    }
+
     default:
       break;
   }

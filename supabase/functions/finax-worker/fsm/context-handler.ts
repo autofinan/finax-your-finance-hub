@@ -304,6 +304,18 @@ function fillPendingSlot(
     return { handled: true, shouldContinue: false, message: "😊 Tô aqui! Responde a pergunta anterior 👆" };
   }
   
+  // Bug 6b Fix: Slot pivot — se pending_slot é "amount" mas a mensagem tem
+  // TANTO um número QUANTO um texto novo (description), é um novo gasto → pivot
+  if (pendingSlot === "amount" && (intent === "expense" || intent === "income")) {
+    const hasNumber = /\d+/.test(rawMessage);
+    const words = rawMessage.trim().split(/\s+/).filter((w: string) => !/^\d+[.,]?\d*$/.test(w) && w.length > 2);
+    const hasNewDescription = words.length >= 1;
+    if (hasNumber && hasNewDescription) {
+      console.log(`🔄 [FSM] Pivot detectado: nova mensagem completa "${rawMessage}" durante coleta de amount`);
+      return { handled: false, shouldContinue: true, shouldCancel: true, cancelled: false };
+    }
+  }
+
   // Bug 2 Fix: Validação estrita para slot installments
   if (pendingSlot === "installments") {
     // Rejeitar se tem muitas palavras (provável nova intenção, não um número)
@@ -560,6 +572,7 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
     case "value":
     case "limit":
     case "estimated_value":
+    case "saldo_devedor":
       const numMatch = rawMessage.match(/(\d+[.,]?\d*)/);
       if (numMatch) {
         return parseFloat(numMatch[1].replace(",", "."));
@@ -613,8 +626,9 @@ function extractSlotValue(rawMessage: string, normalized: string, slotType: stri
     case "card_name":
     case "bill_name":
     case "card":
+    case "nome":
       if (rawMessage.trim().length > 0) {
-        if (slotType === "card_name" || slotType === "bill_name") {
+        if (slotType === "card_name" || slotType === "bill_name" || slotType === "nome") {
           const cleaned = rawMessage.replace(/\d+/g, "").trim();
           return cleaned.length > 0 ? cleaned : rawMessage.trim();
         }

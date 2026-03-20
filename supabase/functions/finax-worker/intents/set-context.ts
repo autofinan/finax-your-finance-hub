@@ -17,7 +17,12 @@ export async function handleSetContext(
 ): Promise<void> {
   // Verificar se é encerramento de contexto
   const normalized = normalizeText(conteudoProcessado);
-  if (normalized.includes("terminei") || normalized.includes("fim do") || normalized.includes("acabou") || normalized.includes("encerr")) {
+  const CLOSE_WORDS = [
+    "terminei", "fim do", "fim da", "acabou", "encerr",
+    "voltei", "cheguei", "retornei", "sai da", "sai do",
+    "finalizei", "finalizar", "concluí", "concluir"
+  ];
+  if (CLOSE_WORDS.some(w => normalized.includes(w))) {
     const result = await closeUserContext(userId);
     await sendMessage(phoneNumber, result.message, messageSource);
     return;

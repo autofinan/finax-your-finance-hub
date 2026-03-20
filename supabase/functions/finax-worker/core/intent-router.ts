@@ -1115,8 +1115,33 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
     // ========================================================================
     if (decision.actionType === "debt") {
       console.log(`💳 [DEBT] Registrando dívida: ${JSON.stringify(decision.slots)}`);
+      let { nome, saldo_devedor, tipo } = decision.slots as any;
+      
+      // Extrair slots do texto se a IA não preencheu
+      if (!saldo_devedor) {
+        const valMatch = conteudoProcessado.match(/(\d+[.,]?\d*)/);
+        if (valMatch) saldo_devedor = parseBrazilianAmount(valMatch[1]);
+      }
+      if (!nome) {
+        const nomeMatch = conteudoProcessado.match(/(?:no|na|do|da|de)\s+(\w[\w\s]*?)(?:\s+de\s+\d|\s*$)/i);
+        if (nomeMatch) nome = nomeMatch[1].trim();
+      }
+      
+      const debtSlots = { ...decision.slots, nome, saldo_devedor, tipo: tipo || "cartao" };
+      
+      if (!nome || !saldo_devedor) {
+        // Criar action para coletar via FSM
+        const pendingSlot = !saldo_devedor ? "saldo_devedor" : "nome";
+        const prompt = !saldo_devedor 
+          ? "Qual o saldo devedor? 💰 (ex: 5000)" 
+          : "Qual o nome da dívida? (ex: Nubank, Bradesco...)";
+        await createAction(userId, "debt", "debt", debtSlots, pendingSlot, payload.messageId);
+        await sendMessage(payload.phoneNumber, prompt, payload.messageSource);
+        return;
+      }
+      
       const { registerDebt } = await import("../intents/debt-handler.ts");
-      const result = await registerDebt(userId, decision.slots);
+      const result = await registerDebt(userId, debtSlots);
       await sendMessage(payload.phoneNumber, result.message, payload.messageSource);
       return;
     }
