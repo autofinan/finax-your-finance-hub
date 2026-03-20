@@ -304,6 +304,18 @@ function fillPendingSlot(
     return { handled: true, shouldContinue: false, message: "😊 Tô aqui! Responde a pergunta anterior 👆" };
   }
   
+  // Bug 6b Fix: Slot pivot — se pending_slot é "amount" mas a mensagem tem
+  // TANTO um número QUANTO um texto novo (description), é um novo gasto → pivot
+  if (pendingSlot === "amount" && (intent === "expense" || intent === "income")) {
+    const hasNumber = /\d+/.test(rawMessage);
+    const words = rawMessage.trim().split(/\s+/).filter((w: string) => !/^\d+[.,]?\d*$/.test(w) && w.length > 2);
+    const hasNewDescription = words.length >= 1;
+    if (hasNumber && hasNewDescription) {
+      console.log(`🔄 [FSM] Pivot detectado: nova mensagem completa "${rawMessage}" durante coleta de amount`);
+      return { handled: false, shouldContinue: true, shouldCancel: true, cancelled: false };
+    }
+  }
+
   // Bug 2 Fix: Validação estrita para slot installments
   if (pendingSlot === "installments") {
     // Rejeitar se tem muitas palavras (provável nova intenção, não um número)
