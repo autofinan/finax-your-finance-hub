@@ -576,7 +576,7 @@ export async function handleQueryRouting(
   }
 
   // Query por CARTÃO específico
-  const cardMatch = normalized.match(/(?:gastei|quanto)\s+(?:no|na|do|da)\s+(\w+)/);
+  const cardMatch = normalized.match(/(?:gastei|quanto|gasto|gastos|usei)\s+(?:o que\s+)?(?:no|na|do|da|com o|com a|com)\s+(\w+)/);
   if (cardMatch && cardMatch[1]) {
     const cardName = cardMatch[1];
     console.log(`📊 [QUERY] Query de gastos no cartão: "${cardName}"`);
