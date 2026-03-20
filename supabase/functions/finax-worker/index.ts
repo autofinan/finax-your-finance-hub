@@ -1027,6 +1027,13 @@ async function processarJob(job: any): Promise<void> {
     }
     
     // ========================================================================
+    // 🆘 HELP CONTEXT REDIRECT: Se última interação foi "ajuda", redirecionar
+    // follow-up para o handler de controle em vez da IA
+    // ========================================================================
+    const helpCheckCtx = await getConversationContext(userId);
+    const isHelpFollowUp = helpCheckCtx?.lastIntent === "help" || helpCheckCtx?.currentTopic === "help";
+    
+    // ========================================================================
     // 🧠 DECISION ENGINE PRIMEIRO - CLASSIFICAÇÃO UNIFICADA
     // ========================================================================
     // REGRA ABSOLUTA: A IA analisa a mensagem PRIMEIRO, antes de qualquer
