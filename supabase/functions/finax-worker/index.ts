@@ -965,7 +965,7 @@ async function processarJob(job: any): Promise<void> {
     // registrar separado ou junto, ANTES de classificar.
     // ========================================================================
     // ========================================================================
-    // 🛡️ GUARDS: Proteger parcelamentos, cartões e contas de detectMultipleExpenses
+    // 🛡️ GUARDS: Proteger parcelamentos, cartões, contas e simulações de detectMultipleExpenses
     // ========================================================================
     const INSTALLMENT_PATTERN = /\d+\s*(x|vezes|parcelas?)\s*(de\s*\d+)?/i;
     const CARD_PATTERN = /(adicionar|registrar|cadastrar|novo|meu)\s*cart[aã]o/i;
@@ -974,11 +974,16 @@ async function processarJob(job: any): Promise<void> {
     // 📅 Guard de data: se tem data explícita/relativa → é UM gasto, não multi
     const DATE_PATTERN = /\b\d{1,2}\/\d{1,2}\b|\bdia\s+\d{1,2}\b|\bontem\b|\banteontem\b|\bantes\s+de\s+ontem\b/i;
     
+    // Bug 2 Fix: Guard de simulação de dívidas
+    const normalizedForMulti = normalizeText(conteudoProcessado);
+    const SIMULATION_PATTERN = normalizedForMulti.includes("simular") || normalizedForMulti.includes("quitacao") || normalizedForMulti.includes("quitação");
+    
     const shouldSkipMultiDetection = 
       INSTALLMENT_PATTERN.test(conteudoProcessado) ||
       CARD_PATTERN.test(conteudoProcessado) ||
       BILL_PATTERN.test(conteudoProcessado) ||
-      DATE_PATTERN.test(conteudoProcessado);
+      DATE_PATTERN.test(conteudoProcessado) ||
+      SIMULATION_PATTERN;
     
     if (payload.messageType === "text" && !activeAction && !shouldSkipMultiDetection) {
       const multipleExpenses = detectMultipleExpenses(conteudoProcessado);
