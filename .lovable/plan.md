@@ -1,288 +1,192 @@
 
 
-# Plano: Corrigir Consultas, Metas e Roteamento do WhatsApp
+# Plano: Correcao de Bugs dos Testes de Regressao (Lote 3)
 
-## Diagnostico Raiz
-
-Ha um problema **sistematico**: quase todas as queries caem no fallback que mostra "Gastos do Mes" porque o roteamento esta quebrado em multiplos pontos.
+## Bugs Identificados (8 problemas)
 
 ---
 
-## Problema 1 — DUAS funcoes `detectQueryScope` (CRITICO)
+## Bug 1 — Divida: "tenho uma divida de 5000 no cartao" nao extrai slots
 
-**Causa raiz de QUASE TODOS os bugs de query.**
+**Arquivo:** `supabase/functions/finax-worker/core/intent-router.ts` (linha 1116)
 
-Existem duas versoes da funcao `detectQueryScope`:
-- `utils/text-helpers.ts` (linha 44) — foi atualizada com "recorrencia", "gastos fixos", etc.
-- `utils/helpers.ts` (linha 27) — versao ANTIGA, sem essas atualizacoes
+**Causa:** A IA classifica como `debt` mas nao extrai `nome` e `saldo_devedor` nos slots (sao campos em portugues no `types.ts`). O `registerDebt` exige ambos e retorna "Preciso do nome e saldo devedor". A segunda mensagem "cartao nubank 5000" cai no fallback porque nao ha FSM/action criada para coletar slots pendentes de debt.
 
-O arquivo `intents/query-routing.ts` **importa de `helpers.ts`** (linha 6), nao de `text-helpers.ts`. Entao todas as correcoes feitas em sprints anteriores nunca tiveram efeito.
-
-**Fix:** Em `utils/helpers.ts`, substituir a funcao `detectQueryScope` pela versao atualizada de `text-helpers.ts`, e ADICIONAR os escopos que faltam:
+**Fix:** No intent-router, quando `debt` chega sem slots completos:
+1. Tentar extrair `nome` e `saldo_devedor` do `conteudoProcessado` (regex: valor numerico = saldo, texto restante = nome)
+2. Se ainda faltar, criar action com `pending_slot` para coletar via FSM
+3. Adicionar case "debt" no FSM router para coletar slots pendentes
 
 ```typescript
-export function detectQueryScope(normalized: string): string {
-  // Relatórios
-  if ((normalized.includes("relatorio") || normalized.includes("report")) && 
-      (normalized.includes("semanal") || normalized.includes("semana"))) return "weekly_report";
-  if (normalized.includes("relatorio") || normalized.includes("report")) return "report";
+// intent-router.ts - debt handler
+if (decision.actionType === "debt") {
+  let { nome, saldo_devedor, tipo } = decision.slots;
   
-  // Faturas
-  if (normalized.includes("fatura") && (normalized.includes("detalh") || normalized.includes("tem na") || normalized.includes("abrir") || normalized.includes("ver"))) return "invoice_detail";
-  if (normalized.includes("detalh") && normalized.includes("fatura")) return "invoice_detail";
-  if (normalized.includes("fatura") && (normalized.includes("futur") || normalized.includes("proximo"))) return "invoice_future";
-  if (normalized.includes("fatura")) return "invoice_detail";
+  // Extrair do texto se slots vazios
+  if (!saldo_devedor) {
+    const match = conteudoProcessado.match(/(\d+[.,]?\d*)/);
+    if (match) saldo_devedor = parseBrazilianAmount(match[1]);
+  }
+  if (!nome) {
+    // "tenho uma divida de 5000 no cartao" → nome = "cartao"
+    const nomeMatch = conteudoProcessado.match(/(?:no|na|do|da|de)\s+(\w+)\s*$/i);
+    if (nomeMatch) nome = nomeMatch[1];
+  }
   
-  // Cartões
-  if (normalized.includes("cartao") || normalized.includes("cartoes") || normalized.includes("limite")) return "cards";
-  
-  // Contas a pagar
-  if (normalized.includes("conta") && normalized.includes("pagar")) return "bills";
-  if (normalized.includes("contas") && !normalized.includes("gastei")) return "bills";
-  
-  // Orçamentos  
-  if (normalized.includes("orcamento") || normalized.includes("orcamentos") || 
-      normalized.includes("limite mensal") || normalized.includes("budget")) return "budgets";
-  
-  // Recorrentes
-  if (normalized.includes("recorrente") || normalized.includes("recorrencia") || 
-      normalized.includes("recorrencias") || normalized.includes("assinatura") || 
-      normalized.includes("assinaturas") || normalized.includes("fixos") || 
-      normalized.includes("gastos fixos") || normalized.includes("gastos mensais")) return "recurring";
-  
-  // Parcelamentos
-  if (normalized.includes("parcelamento") || normalized.includes("parcela") || 
-      normalized.includes("parcelado")) return "installments";
-  
-  // Metas
-  if (normalized.includes("meta") || normalized.includes("metas") || 
-      normalized.includes("poupanca")) return "goals";
-  
-  // Pendentes
-  if (normalized.includes("pendente") || normalized.includes("pendentes")) return "pending";
-  
-  // Categorias
-  if (normalized.includes("categoria") || normalized.includes("categorias")) return "category";
-  
-  // Entradas
-  if (normalized.includes("recebi") || normalized.includes("entrada") || 
-      normalized.includes("entrou")) return "income";
-  
-  // Gastos
-  if (normalized.includes("gastei") || normalized.includes("gasto") || 
-      normalized.includes("gastos")) return "expenses";
-  
-  return "summary";
+  if (!nome || !saldo_devedor) {
+    await createAction(userId, "debt", "debt", { ...decision.slots, nome, saldo_devedor }, 
+      !saldo_devedor ? "saldo_devedor" : "nome", payload.messageId);
+    await sendMessage(payload.phoneNumber, 
+      !saldo_devedor ? "Qual o saldo devedor? 💰" : "Qual o nome da divida? (ex: Nubank, Bradesco...)",
+      payload.messageSource);
+    return;
+  }
+  // ... executar registerDebt
 }
 ```
 
-**Tambem atualizar `text-helpers.ts`** com os mesmos termos para manter sincronizado.
+---
+
+## Bug 2 — "simular quitacao receita 3000 gastos 2000" vira multiplos gastos
+
+**Arquivo:** `supabase/functions/finax-worker/index.ts` (detector de multiplos gastos)
+
+**Causa:** O detector de multiplos gastos roda ANTES do intent router e encontra 2 numeros na mensagem (3000 e 2000), interpretando como "Vi 2 gastos". Mas "simular quitacao" deveria ser classificado como `simulate_debts` ANTES.
+
+**Fix:** No index.ts, o bloco de deteccao de multiplos gastos precisa de uma guarda:
+```typescript
+// Antes de detectar multiplos gastos, verificar se e simulate_debts
+const normalizedCheck = normalizeText(conteudoProcessado);
+const isSimulation = normalizedCheck.includes("simular") || normalizedCheck.includes("quitacao");
+if (!isSimulation) {
+  // ... logica de multiplos gastos
+}
+```
 
 ---
 
-## Problema 2 — Caso `summary` nao renderiza resumo
+## Bug 3 — "voltei da viagem" cria NOVO contexto em vez de fechar
 
-**Arquivo:** `intents/query-routing.ts` (linha 413-430)
+**Arquivo:** `supabase/functions/finax-worker/intents/set-context.ts` (linha 20)
 
-**Problema:** O case `summary` so trata `timeRange === "week"` e depois faz `break`, caindo no fallback que mostra lista de gastos.
+**Causa:** A verificacao de encerramento usa `normalized.includes("terminei") || normalized.includes("fim do") || normalized.includes("acabou") || normalized.includes("encerr")`. "voltei" nao esta na lista.
 
-**Fix:** Adicionar handler para summary mensal ANTES do break:
-
+**Fix:** Adicionar "voltei", "cheguei", "retornei", "saí":
 ```typescript
-case "summary": {
-  if (timeRange === "week" || ...) { /* weekly report (já existe) */ }
-  
-  // ✅ RESUMO MENSAL (novo)
-  const { getMonthlySummary } = await import("./query.ts");
-  const summaryText = await getMonthlySummary(userId);
-  await sendMessage(phoneNumber, summaryText, messageSource);
+if (normalized.includes("terminei") || normalized.includes("fim do") || 
+    normalized.includes("acabou") || normalized.includes("encerr") ||
+    normalized.includes("voltei") || normalized.includes("cheguei") || 
+    normalized.includes("retornei") || normalized.includes("sai da") ||
+    normalized.includes("fim da")) {
+```
+
+---
+
+## Bug 4 — "gastos na viagem?" retorna gastos do mes (nao filtra por contexto)
+
+**Arquivo:** `supabase/functions/finax-worker/intents/query-routing.ts`
+
+**Causa:** O detectQueryScope nao tem scope para "contexto/viagem/evento". A IA classifica como `query` generico e retorna gastos do mes.
+
+**Fix:** Adicionar scope "context" no detectQueryScope:
+```typescript
+if (normalized.includes("viagem") || normalized.includes("evento") || 
+    normalized.includes("contexto")) return "context";
+```
+
+E adicionar case no query-routing:
+```typescript
+case "context": {
+  const { queryContextExpenses } = await import("./card-queries.ts");
+  const result = await queryContextExpenses(userId, normalized);
+  await sendMessage(phoneNumber, result, messageSource);
   return;
 }
 ```
 
 ---
 
-## Problema 3 — Novos cases no switch de query-routing
+## Bug 5 — "ajuda" → "parcelamentos" nao funciona
 
-**Arquivo:** `intents/query-routing.ts`
+**Arquivo:** `supabase/functions/finax-worker/intents/control.ts` (linha 133 - `_getHelpFollowUp`)
 
-Adicionar handlers para os novos scopes:
+**Causa:** A regex e `/\b(parcel|parcela)\b/i` mas "parcelamentos" contem "parcel" como substring, porem `\b` nao bate porque "parcel" e seguido de "a" sem word boundary. Na verdade `\b(parcel)` DEVE funcionar... O problema real: quando o usuario diz "parcelamentos" apos "ajuda", a mensagem e interceptada pela IA como `query` (scope installments) antes de chegar ao control handler.
 
-### `case "bills":`
+**Fix:** No index.ts, verificar o `helpCtx.lastIntent === "help"` ANTES do decision engine para redirecionar ao control handler:
 ```typescript
-const { listBills } = await import("./bills.ts");
-const billsResult = await listBills(userId);
-await sendMessage(phoneNumber, billsResult, messageSource);
-return;
-```
-
-### `case "report":`
-Usar `fn_relatorio_mensal` + IA para gerar texto analitico:
-```typescript
-const { data: relatorio } = await supabase.rpc("fn_relatorio_mensal", { p_usuario_id: userId });
-if (relatorio) {
-  const textoReport = await gerarRelatorioMensalIA(relatorio, nomeUsuario);
-  await sendMessage(phoneNumber, textoReport, messageSource);
-} else {
-  await sendMessage(phoneNumber, "📊 Sem dados para gerar relatório.", messageSource);
-}
-return;
-```
-
-A funcao `gerarRelatorioMensalIA` sera criada em `reports-handler.ts`, usando Gemini para interpretar os dados e gerar texto com recomendacoes.
-
----
-
-## Problema 4 — Query por cartao nao funciona
-
-**Arquivo:** `intents/query-routing.ts` (linha 479)
-
-**Problema:** Regex `(?:gastei|quanto)\s+(?:no|na|do|da)\s+(\w+)` nao captura "Gastei o que com o inter?"
-
-**Fix:** Expandir regex e tambem detectar card_id na IA:
-
-```typescript
-const cardMatch = normalized.match(
-  /(?:gastei|quanto|gasto|gastos|usei)\s+(?:o que\s+)?(?:no|na|do|da|com o|com a|com)\s+(\w+)/
-);
-```
-
-E adicionar deteccao de nome de cartao do usuario:
-
-```typescript
-// Antes do regex, verificar se algum cartão do usuário está no texto
-const { data: userCards } = await supabase
-  .from("cartoes_credito")
-  .select("id, nome, limite_disponivel, limite_total")
-  .eq("usuario_id", userId);
-  
-for (const card of (userCards || [])) {
-  if (card.nome && normalized.includes(normalizeText(card.nome))) {
-    // Rotear para gastos deste cartão
-    // ... (mesma lógica do bloco existente)
-    return;
-  }
+// Antes do decision engine
+const helpCtx = await getConversationContext(userId);
+if (helpCtx?.lastIntent === "help") {
+  // Forcar roteamento para control
+  decision = { actionType: "control", confidence: 1, slots: {} };
 }
 ```
 
 ---
 
-## Problema 5 — Goal FSM mostra "Qual o goal_name?"
+## Bug 6 — "lanche" (palavra solta) dispara coleta de gasto em vez de perguntar
 
-**Arquivos:** `decision/types.ts` (linha 152) vs `ui/slot-prompts.ts` (linha 33)
+**Arquivo:** `supabase/functions/finax-worker/decision/classifier.ts`
 
-**Problema:** Ha dois contratos CONFLITANTES:
-- `types.ts`: `goal: { required: ["goal_name", "target_amount"] }`
-- `slot-prompts.ts`: `goal: { required: ["amount", "description"] }`
+**Causa:** O Fast-Track detecta "lanche" como texto sem numero e a IA classifica como expense sem amount. O FSM cria action e pergunta valor. Mas o esperado seria perguntar "gasto ou consulta?".
 
-O intent-router usa `amount` e `description` (correto), mas se o FSM pegar os slots de `types.ts`, mostra "Qual o goal_name?" (raw).
-
-**Fix:** Alinhar `types.ts` com `slot-prompts.ts`:
-```typescript
-// types.ts - MUDAR:
-goal: { required: ["amount", "description"], optional: ["deadline", "category"] },
-```
-
-E atualizar SLOT_PROMPTS em types.ts:
-```typescript
-// Remover goal_name e target_amount, substituir por:
-amount: { text: "Qual o valor da meta? 💰" },
-description: { text: "Qual o nome da meta? (ex: Viagem, Carro...)" },
-```
+**Fix:** Este e um trade-off de UX. Na pratica, palavras soltas sem valor sao QUASE SEMPRE gastos que o usuario quer registrar (ele vai informar o valor depois). O comportamento atual (perguntar valor) e ACEITAVEL. O problema real e o Bug 6b abaixo.
 
 ---
 
-## Problema 6 — "adicione 300 na meta de trafego" cria nova meta
+## Bug 6b — Slot pivot: "acai 20 dinheiro" durante coleta de "lanche" ignora o lanche
 
-**Arquivo:** `core/intent-router.ts` (linha 1266)
+**Arquivo:** `supabase/functions/finax-worker/fsm/context-handler.ts`
 
-**Problema:** `ADD_INDICATORS` nao inclui "adicione" e "adiciona" (conjugacoes imperativas). Alem disso, o Fast-Track extrai "Adicione" como description em vez de "trafego".
+**Causa:** Quando o FSM tem action pendente de expense com `pending_slot: amount`, e o usuario manda "acai 20 dinheiro" (mensagem completa com novo gasto), o FSM deveria detectar subject_change e pivotar. Mas em vez disso, extrai "20" como amount do "lanche" original e ignora "acai".
 
-**Fix 1:** Expandir ADD_INDICATORS:
+**Fix:** No context-handler, quando `pending_slot === "amount"` e a mensagem contem TANTO numero QUANTO texto novo (description), tratar como pivot:
 ```typescript
-const ADD_INDICATORS = ["tenho", "guardei", "juntei", "adicionei", "depositar", 
-  "depositei", "adicionar", "acrescentar", "coloquei", "poupei", "economizei",
-  "adicione", "adiciona", "coloca", "coloque", "bota", "bote", "põe", "poe"];
-```
-
-**Fix 2:** Quando o description e um verbo de ADD_INDICATOR, extrair o nome real da meta do texto:
-```typescript
-if (isAddIntent) {
-  // Extrair nome real da meta: "adicione 300 na meta de trafego" → "trafego"
-  const metaMatch = conteudoProcessado.match(/(?:meta|meta de|na meta|pra|para)\s+(.+)/i);
-  if (metaMatch) {
-    slots.description = metaMatch[1].trim();
-  }
+if (pendingSlot === "amount" && hasNewDescription) {
+  // Cancelar action atual e reprocessar como novo gasto
+  await cancelAction(activeAction.id);
+  return { handled: false, shouldContinue: true };
 }
 ```
 
 ---
 
-## Problema 7 — "gastos de alimentação dessa semana" falha
+## Bug 7 — Mensagens simultaneas (<2s) causam conflito de actions
 
-**Problema:** A query com categoria + semana cai no handler `expenses` que usa `executeDynamicQuery`. Mas `time_range` e "week" e `category` nao esta sendo passada. A IA nao extrai `category` e `time_range` como slots.
+**Causa:** Duas mensagens chegam quase simultaneas. A primeira cria action. A segunda chega antes da primeira terminar e cria outra action ou interfere. O message-queue deveria serializar mas nao esta funcionando corretamente.
 
-**Fix:** No case `expenses` do query-routing, antes de chamar `executeDynamicQuery`, detectar categoria do texto:
-
-```typescript
-if (!slots.category) {
-  for (const cat of KNOWN_CATEGORIES) {
-    const catNorm = cat.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    if (normalized.includes(catNorm)) {
-      slots.category = catNorm;
-      break;
-    }
-  }
-}
-```
-
-Este codigo ja existe nas linhas 52-62, mas so para `detalhe`. Precisa expandir para qualquer query de expenses.
+**Fix:** Verificar que o `queueMessage` esta respeitando a fila e processando sequencialmente. Este e um problema de concorrencia que requer lock otimista na tabela actions.
 
 ---
 
-## Problema 8 — Fatura: resposta ao detalhe nao funciona
+## Bug 8 — "quero economizar para investir" cria meta em vez de chat
 
-**Problema:** Apos listar faturas, o usuario responde "sicredi credito" mas o bot nao entende como selecao de fatura.
+**Causa:** A IA detecta "economizar" como goal intent. Mas o contexto e conversacional (usuario disse "to gastando muito?" → bot respondeu analise → usuario faz follow-up). Deveria ir para chat.
 
-**Fix:** No FSM context-handler, quando ha action pendente de tipo "invoice_selection" ou quando o contexto anterior era `invoice_detail`, tratar a resposta como nome de cartao e rotear para `getInvoiceDetail`.
+**Fix:** No AI engine, follow-ups conversacionais (sem valor numerico, sem indicador de acao) devem ser roteados para `chat`, nao `goal`. Verificar se o conversation_context indica topico "chat" e manter.
 
 ---
 
-## Resumo de Arquivos Modificados
+## Resumo de Arquivos
 
 | Arquivo | Mudanca |
 |---------|---------|
-| `utils/helpers.ts` | Reescrever `detectQueryScope` com TODOS os scopes |
-| `utils/text-helpers.ts` | Sincronizar com helpers.ts |
-| `intents/query-routing.ts` | Adicionar cases: bills, report, summary mensal. Expandir regex de cartao. Detectar categoria em expenses |
-| `intents/reports-handler.ts` | Criar `gerarRelatorioMensalIA` usando Gemini |
-| `decision/types.ts` | Alinhar goal slots com slot-prompts.ts |
-| `core/intent-router.ts` | Expandir ADD_INDICATORS + extrair nome real da meta |
-
-## Ordem de Implementacao
-
-1. `helpers.ts` — detectQueryScope (resolve 70% dos bugs de uma vez)
-2. `query-routing.ts` — summary + bills + report + card regex
-3. `types.ts` — goal slots
-4. `intent-router.ts` — ADD_INDICATORS + meta name extraction
-5. `reports-handler.ts` — relatorio mensal IA
-6. Deploy finax-worker
+| `core/intent-router.ts` | Debt handler com FSM + extrair slots do texto |
+| `index.ts` | Guard no detector de multiplos gastos + help context redirect |
+| `intents/set-context.ts` | Expandir palavras de encerramento |
+| `utils/helpers.ts` e `text-helpers.ts` | Adicionar scope "context" |
+| `intents/query-routing.ts` | Adicionar case "context" |
+| `intents/control.ts` | Nenhuma mudanca (fix esta no index.ts) |
 
 ## Testes
 
 | # | Entrada | Esperado |
 |---|---------|----------|
-| 1 | "minhas recorrências" | Lista gastos recorrentes ativos |
-| 2 | "gastei o que com o inter?" | Gastos filtrados pelo cartao Inter |
-| 3 | "resumo" | Entradas/Saidas/Saldo do mes |
-| 4 | "quanto gastei esse mes?" | Entradas/Saidas/Saldo do mes |
-| 5 | "gastos de alimentação dessa semana" | Gastos da categoria alimentacao na semana |
-| 6 | "relatório" | Relatorio mensal com analise IA |
-| 7 | "contas a pagar" | Lista de contas/faturas cadastradas |
-| 8 | "quais orcamentos tenho?" | Lista de orcamentos ativos |
-| 9 | "criar meta de 200 pra roupa" | Cria meta corretamente, sem "Qual o goal_name?" |
-| 10 | "adicione 300 na meta de trafego" | Adiciona 300 a meta existente "trafego pago" |
-| 11 | "minhas faturas" → "sicredi" | Mostra detalhe da fatura Sicredi |
-| 12 | "minhas parcelas" | Lista parcelamentos ativos |
-| 13 | "gastos dessa semana" | Gastos da semana com periodo visivel |
+| 1 | "tenho uma divida de 5000 no cartao" | Pergunta nome ou registra |
+| 2 | "simular quitacao receita 3000 gastos 2000" | Simula, NAO cria multiplos gastos |
+| 3 | "voltei da viagem" | FECHA contexto ativo |
+| 4 | "quanto gastei na viagem?" | Gastos filtrados pelo contexto |
+| 5 | "ajuda" → "parcelamentos" | Tutorial de parcelamentos |
+| 6 | "acai 20 dinheiro" (durante coleta de outro gasto) | Registra acai, nao o gasto anterior |
+| 7 | "quero economizar para investir" (apos conversa) | Chat contextual, nao cria meta |
 
