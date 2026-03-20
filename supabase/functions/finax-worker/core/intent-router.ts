@@ -1263,8 +1263,21 @@ if (decision.actionType === "expense" && decision.slots.suggest_bill_after) {
       
       // ✅ FIX WA-2: Detectar intenção de ADICIONAR a meta existente
       // Palavras que indicam "já tenho X guardado" ou "adicionar X à meta"
-      const ADD_INDICATORS = ["tenho", "guardei", "juntei", "adicionei", "depositar", "depositei", "adicionar", "acrescentar", "coloquei", "poupei", "economizei"];
+      const ADD_INDICATORS = ["tenho", "guardei", "juntei", "adicionei", "depositar", "depositei", "adicionar", "acrescentar", "coloquei", "poupei", "economizei", "adicione", "adiciona", "coloca", "coloque", "bota", "bote", "poe"];
       const isAddIntent = ADD_INDICATORS.some(w => normalized.includes(w));
+      
+      // ✅ FIX: Se isAddIntent e description é um verbo, extrair nome real da meta do texto
+      if (isAddIntent && slots.description) {
+        const descNorm = normalizeText(slots.description);
+        if (ADD_INDICATORS.includes(descNorm) || ["adicione", "adiciona", "coloca", "coloque"].includes(descNorm)) {
+          const metaMatch = conteudoProcessado.match(/(?:meta\s+de\s+|na\s+meta\s+(?:de\s+)?|pra\s+|para\s+)(.+)/i);
+          if (metaMatch) {
+            slots.description = metaMatch[1].trim();
+          } else {
+            slots.description = undefined; // Force FSM to ask
+          }
+        }
+      }
       
       if (isAddIntent && slots.amount && slots.description) {
         // Verificar se já existe meta com nome similar
