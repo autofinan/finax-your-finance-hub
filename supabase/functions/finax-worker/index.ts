@@ -1091,6 +1091,13 @@ async function processarJob(job: any): Promise<void> {
       }
     });
     
+    // Bug 5 Fix: Se help follow-up, forçar roteamento para control
+    if (isHelpFollowUp && decision.actionType !== "control" && decision.confidence < 0.95) {
+      console.log(`🆘 [HELP] Follow-up de ajuda detectado → forçando control`);
+      decision.actionType = "control";
+      decision.confidence = 1;
+    }
+    
     // ========================================================================
     // 📝 FIX #4: LOG DE ERROS — Salvar decisões fracas para análise
     // ========================================================================
